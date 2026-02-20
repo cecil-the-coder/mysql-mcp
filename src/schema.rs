@@ -199,78 +199,51 @@ impl SchemaIntrospector {
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-
-    fn mysql_url() -> Option<String> {
-        let host = std::env::var("MYSQL_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-        let port = std::env::var("MYSQL_PORT").unwrap_or_else(|_| "3306".to_string());
-        let user = std::env::var("MYSQL_USER").unwrap_or_else(|_| "root".to_string());
-        let pass = std::env::var("MYSQL_PASS").unwrap_or_default();
-        let db = std::env::var("MYSQL_DB").unwrap_or_else(|_| "testdb".to_string());
-
-        use std::time::Duration;
-        use std::net::TcpStream;
-        let addr = format!("{}:{}", host, port);
-        match TcpStream::connect_timeout(
-            &addr.parse::<std::net::SocketAddr>().ok()?,
-            Duration::from_secs(2),
-        ) {
-            Ok(_) => Some(format!("mysql://{}:{}@{}:{}/{}", user, pass, host, port, db)),
-            Err(_) => None,
-        }
-    }
+    use crate::test_helpers::setup_test_db;
 
     // mysql-mcp-t7a: list tables returns results
     #[tokio::test]
     async fn test_list_tables_returns_results() {
-        let Some(url) = mysql_url() else {
-            eprintln!("Skipping: MySQL not available");
-            return;
-        };
-        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
-        let pool = Arc::new(pool);
+        let test_db = setup_test_db().await;
+        let pool = Arc::new(test_db.pool.clone());
         let introspector = SchemaIntrospector::new(pool, 60);
-        let tables = introspector.list_tables(None).await;
+        let db = test_db.config.connection.database.as_deref();
+        let tables = introspector.list_tables(db).await;
         assert!(tables.is_ok());
     }
 
     // mysql-mcp-63f: schema cache TTL=0 disables caching
     #[tokio::test]
     async fn test_schema_cache_ttl_zero_disables_cache() {
-        let Some(url) = mysql_url() else {
-            eprintln!("Skipping: MySQL not available");
-            return;
-        };
-        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
-        let pool = Arc::new(pool);
+        let test_db = setup_test_db().await;
+        let pool = Arc::new(test_db.pool.clone());
+        let db = test_db.config.connection.database.as_deref();
         // TTL=0 means instant expiry; should always re-fetch
         let introspector = SchemaIntrospector::new(pool, 0);
-        let tables1 = introspector.list_tables(None).await.unwrap();
-        let tables2 = introspector.list_tables(None).await.unwrap();
-        // Both should succeed (re-fetching works correctly)
+        let tables1 = introspector.list_tables(db).await.unwrap();
+        let tables2 = introspector.list_tables(db).await.unwrap();
         assert_eq!(tables1.len(), tables2.len());
     }
 
     // mysql-mcp-1au: get columns for a known table
     #[tokio::test]
     async fn test_get_columns_for_table() {
-        let Some(url) = mysql_url() else {
-            eprintln!("Skipping: MySQL not available");
-            return;
-        };
-        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
-        // Create a table so we have something to introspect
+        let test_db = setup_test_db().await;
+        let pool = &test_db.pool;
+        let db = test_db.config.connection.database.as_deref();
+
         sqlx::query("CREATE TABLE IF NOT EXISTS test_schema_cols (id INT PRIMARY KEY, name VARCHAR(100))")
-            .execute(&pool)
+            .execute(pool)
             .await
             .unwrap();
-        let pool = Arc::new(pool);
-        let introspector = SchemaIntrospector::new(pool.clone(), 60);
-        let db = std::env::var("MYSQL_DB").unwrap_or_else(|_| "testdb".to_string());
-        let columns = introspector.get_columns("test_schema_cols", Some(&db)).await;
+
+        let arc_pool = Arc::new(pool.clone());
+        let introspector = SchemaIntrospector::new(arc_pool.clone(), 60);
+        let columns = introspector.get_columns("test_schema_cols", db).await;
         assert!(columns.is_ok());
-        // Cleanup
+
         sqlx::query("DROP TABLE IF EXISTS test_schema_cols")
-            .execute(pool.as_ref())
+            .execute(arc_pool.as_ref())
             .await
             .ok();
     }

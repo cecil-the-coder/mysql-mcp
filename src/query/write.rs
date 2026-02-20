@@ -47,84 +47,50 @@ pub async fn execute_ddl_query(pool: &MySqlPool, sql: &str) -> Result<WriteResul
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-
-    fn mysql_url() -> Option<String> {
-        let host = std::env::var("MYSQL_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-        let port = std::env::var("MYSQL_PORT").unwrap_or_else(|_| "3306".to_string());
-        let user = std::env::var("MYSQL_USER").unwrap_or_else(|_| "root".to_string());
-        let pass = std::env::var("MYSQL_PASS").unwrap_or_default();
-        let db = std::env::var("MYSQL_DB").unwrap_or_else(|_| "testdb".to_string());
-
-        use std::time::Duration;
-        use std::net::TcpStream;
-        let addr = format!("{}:{}", host, port);
-        match TcpStream::connect_timeout(
-            &addr.parse::<std::net::SocketAddr>().ok()?,
-            Duration::from_secs(2),
-        ) {
-            Ok(_) => Some(format!("mysql://{}:{}@{}:{}/{}", user, pass, host, port, db)),
-            Err(_) => None,
-        }
-    }
+    use crate::test_helpers::setup_test_db;
 
     #[tokio::test]
     async fn test_insert_and_rollback() {
-        let Some(url) = mysql_url() else {
-            eprintln!("Skipping: MySQL not available");
-            return;
-        };
-        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
+        let test_db = setup_test_db().await;
+        let pool = &test_db.pool;
 
-        // Setup
         sqlx::query("CREATE TABLE IF NOT EXISTS test_write_ops (id INT AUTO_INCREMENT PRIMARY KEY, val VARCHAR(50))")
-            .execute(&pool)
+            .execute(pool)
             .await
             .unwrap();
 
-        // Insert
-        let result = execute_write_query(&pool, "INSERT INTO test_write_ops (val) VALUES ('hello')").await;
+        let result = execute_write_query(pool, "INSERT INTO test_write_ops (val) VALUES ('hello')").await;
         assert!(result.is_ok());
         let result = result.unwrap();
         assert_eq!(result.rows_affected, 1);
         assert!(result.last_insert_id.is_some());
 
-        // Update
-        let update_result = execute_write_query(&pool, "UPDATE test_write_ops SET val='world' WHERE val='hello'").await;
+        let update_result = execute_write_query(pool, "UPDATE test_write_ops SET val='world' WHERE val='hello'").await;
         assert!(update_result.is_ok());
         assert_eq!(update_result.unwrap().rows_affected, 1);
 
-        // Delete
-        let delete_result = execute_write_query(&pool, "DELETE FROM test_write_ops WHERE val='world'").await;
+        let delete_result = execute_write_query(pool, "DELETE FROM test_write_ops WHERE val='world'").await;
         assert!(delete_result.is_ok());
 
-        // Cleanup
-        sqlx::query("DROP TABLE IF EXISTS test_write_ops").execute(&pool).await.ok();
+        sqlx::query("DROP TABLE IF EXISTS test_write_ops").execute(pool).await.ok();
     }
 
     #[tokio::test]
     async fn test_ddl_create_and_drop() {
-        let Some(url) = mysql_url() else {
-            eprintln!("Skipping: MySQL not available");
-            return;
-        };
-        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
+        let test_db = setup_test_db().await;
+        let pool = &test_db.pool;
 
-        let result = execute_ddl_query(&pool, "CREATE TABLE IF NOT EXISTS test_ddl_temp (id INT)").await;
+        let result = execute_ddl_query(pool, "CREATE TABLE IF NOT EXISTS test_ddl_temp (id INT)").await;
         assert!(result.is_ok());
 
-        let drop_result = execute_ddl_query(&pool, "DROP TABLE IF EXISTS test_ddl_temp").await;
+        let drop_result = execute_ddl_query(pool, "DROP TABLE IF EXISTS test_ddl_temp").await;
         assert!(drop_result.is_ok());
     }
 
     #[tokio::test]
     async fn test_invalid_sql_returns_error() {
-        let Some(url) = mysql_url() else {
-            eprintln!("Skipping: MySQL not available");
-            return;
-        };
-        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
-
-        let result = execute_write_query(&pool, "INSERT INTO nonexistent_table_xyz VALUES (1)").await;
+        let test_db = setup_test_db().await;
+        let result = execute_write_query(&test_db.pool, "INSERT INTO nonexistent_table_xyz VALUES (1)").await;
         assert!(result.is_err());
     }
 

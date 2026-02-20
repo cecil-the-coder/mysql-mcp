@@ -99,81 +99,41 @@ fn column_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col: &sqlx::mysql::My
 #[cfg(test)]
 mod integration_tests {
     use super::*;
-
-    fn mysql_url() -> Option<String> {
-        let host = std::env::var("MYSQL_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-        let port = std::env::var("MYSQL_PORT").unwrap_or_else(|_| "3306".to_string());
-        let user = std::env::var("MYSQL_USER").unwrap_or_else(|_| "root".to_string());
-        let pass = std::env::var("MYSQL_PASS").unwrap_or_default();
-        let db = std::env::var("MYSQL_DB").unwrap_or_else(|_| "testdb".to_string());
-
-        use std::time::Duration;
-        use std::net::TcpStream;
-        let addr = format!("{}:{}", host, port);
-        match TcpStream::connect_timeout(
-            &addr.parse::<std::net::SocketAddr>().ok()?,
-            Duration::from_secs(2),
-        ) {
-            Ok(_) => Some(format!("mysql://{}:{}@{}:{}/{}", user, pass, host, port, db)),
-            Err(_) => None,
-        }
-    }
+    use crate::test_helpers::setup_test_db;
 
     #[tokio::test]
     async fn test_select_basic() {
-        let Some(url) = mysql_url() else {
-            eprintln!("Skipping: MySQL not available");
-            return;
-        };
-        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
-
-        let result = execute_read_query(&pool, "SELECT 1 AS one").await;
+        let test_db = setup_test_db().await;
+        let result = execute_read_query(&test_db.pool, "SELECT 1 AS one").await;
         assert!(result.is_ok(), "SELECT should succeed: {:?}", result.err());
-        let result = result.unwrap();
-        assert_eq!(result.row_count, 1);
+        assert_eq!(result.unwrap().row_count, 1);
     }
 
     #[tokio::test]
     async fn test_null_values() {
-        let Some(url) = mysql_url() else {
-            eprintln!("Skipping: MySQL not available");
-            return;
-        };
-        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
-        let result = execute_read_query(&pool, "SELECT NULL AS null_col").await.unwrap();
+        let test_db = setup_test_db().await;
+        let result = execute_read_query(&test_db.pool, "SELECT NULL AS null_col").await.unwrap();
         assert_eq!(result.rows[0]["null_col"], serde_json::Value::Null);
     }
 
     #[tokio::test]
     async fn test_empty_result_set() {
-        let Some(url) = mysql_url() else {
-            eprintln!("Skipping: MySQL not available");
-            return;
-        };
-        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
-        let result = execute_read_query(&pool, "SELECT 1 WHERE 1=0").await.unwrap();
+        let test_db = setup_test_db().await;
+        let result = execute_read_query(&test_db.pool, "SELECT 1 WHERE 1=0").await.unwrap();
         assert_eq!(result.row_count, 0);
     }
 
     #[tokio::test]
     async fn test_show_tables() {
-        let Some(url) = mysql_url() else {
-            eprintln!("Skipping: MySQL not available");
-            return;
-        };
-        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
-        let result = execute_read_query(&pool, "SHOW TABLES").await;
+        let test_db = setup_test_db().await;
+        let result = execute_read_query(&test_db.pool, "SHOW TABLES").await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execution_time_tracked() {
-        let Some(url) = mysql_url() else {
-            eprintln!("Skipping: MySQL not available");
-            return;
-        };
-        let pool = sqlx::MySqlPool::connect(&url).await.unwrap();
-        let result = execute_read_query(&pool, "SELECT 1").await.unwrap();
+        let test_db = setup_test_db().await;
+        let result = execute_read_query(&test_db.pool, "SELECT 1").await.unwrap();
         assert!(result.execution_time_ms < 5000);
     }
 }

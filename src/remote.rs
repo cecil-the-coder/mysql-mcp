@@ -80,51 +80,24 @@ async fn handle_mcp(
 
 #[cfg(test)]
 mod integration_tests {
-    fn mysql_available() -> bool {
-        let host = std::env::var("MYSQL_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-        let port = std::env::var("MYSQL_PORT").unwrap_or_else(|_| "3306".to_string());
-        let addr = format!("{}:{}", host, port);
-        if let Ok(addr) = addr.parse::<std::net::SocketAddr>() {
-            std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)).is_ok()
-        } else {
-            false
-        }
-    }
+    // These tests exercise auth logic only — no MySQL connection needed.
 
     #[tokio::test]
     async fn test_http_server_requires_auth() {
-        if !mysql_available() {
-            eprintln!("Skipping HTTP test: MySQL not available");
-            return;
-        }
-
-        // Start a test HTTP server on a random port
-        use tokio::net::TcpListener;
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener); // Release so our server can bind it
-
-        // This is a structural test - verifying the server compiles and the auth
-        // middleware pattern is correct. Full E2E HTTP testing requires running the server.
         let secret = "test-secret-key";
 
-        // Verify the Bearer token check logic directly
         let valid_header = format!("Bearer {}", secret);
         assert!(valid_header.starts_with("Bearer "));
         let extracted = &valid_header["Bearer ".len()..];
         assert_eq!(extracted, secret);
 
-        // Verify wrong token is rejected
         let wrong_header = "Bearer wrong-key";
         let extracted_wrong = &wrong_header["Bearer ".len()..];
         assert_ne!(extracted_wrong, secret);
-
-        let _ = port;
     }
 
     #[tokio::test]
     async fn test_http_missing_auth_rejected() {
-        // Test that missing Authorization header is caught
         let no_auth: Option<&str> = None;
         let result = match no_auth {
             Some(header) if header.starts_with("Bearer ") => true,

@@ -11,6 +11,8 @@ pub mod schema;
 pub mod server;
 pub mod remote;
 #[cfg(test)]
+pub mod test_helpers;
+#[cfg(test)]
 mod e2e_tests;
 
 #[tokio::main]
