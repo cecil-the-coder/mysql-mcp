@@ -2,6 +2,7 @@ use std::time::Instant;
 use anyhow::Result;
 use sqlx::{MySqlPool, Row, Column, TypeInfo, Acquire};
 use serde_json::{Value, Map};
+use crate::sql_parser::StatementType;
 
 pub struct QueryResult {
     pub rows: Vec<Map<String, Value>>,
@@ -10,10 +11,23 @@ pub struct QueryResult {
     pub serialization_time_ms: u64,
 }
 
-pub async fn execute_read_query(pool: &MySqlPool, sql: &str, readonly_transaction: bool) -> Result<QueryResult> {
+/// Execute a read query.
+///
+/// Uses a 4-RTT read-only transaction if:
+///   - `force_readonly_transaction` is true (paranoia mode), OR
+///   - the statement type is not definitively read-only (i.e., not SELECT/SHOW/EXPLAIN/DESCRIBE)
+///
+/// Uses a 1-RTT bare fetch_all for SELECT, SHOW, EXPLAIN, and Describe (mapped to Explain
+/// by the parser) when `force_readonly_transaction` is false.
+pub async fn execute_read_query(pool: &MySqlPool, sql: &str, stmt_type: &StatementType, force_readonly_transaction: bool) -> Result<QueryResult> {
+    let use_transaction = force_readonly_transaction || !matches!(
+        stmt_type,
+        StatementType::Select | StatementType::Show | StatementType::Explain
+    );
+
     // DB phase
     let db_start = Instant::now();
-    let rows: Vec<sqlx::mysql::MySqlRow> = if readonly_transaction {
+    let rows: Vec<sqlx::mysql::MySqlRow> = if use_transaction {
         // 4-RTT path: SET TRANSACTION READ ONLY → BEGIN → SQL → COMMIT
         // For MySQL, SET TRANSACTION READ ONLY must be called before BEGIN.
         let mut conn = pool.acquire().await?;
@@ -111,7 +125,7 @@ mod integration_tests {
     #[tokio::test]
     async fn test_select_basic() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT 1 AS one", true).await;
+        let result = execute_read_query(&test_db.pool, "SELECT 1 AS one", &StatementType::Select, false).await;
         assert!(result.is_ok(), "SELECT should succeed: {:?}", result.err());
         assert_eq!(result.unwrap().row_count, 1);
     }
@@ -119,28 +133,28 @@ mod integration_tests {
     #[tokio::test]
     async fn test_null_values() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT NULL AS null_col", true).await.unwrap();
+        let result = execute_read_query(&test_db.pool, "SELECT NULL AS null_col", &StatementType::Select, false).await.unwrap();
         assert_eq!(result.rows[0]["null_col"], serde_json::Value::Null);
     }
 
     #[tokio::test]
     async fn test_empty_result_set() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT 1 WHERE 1=0", true).await.unwrap();
+        let result = execute_read_query(&test_db.pool, "SELECT 1 WHERE 1=0", &StatementType::Select, false).await.unwrap();
         assert_eq!(result.row_count, 0);
     }
 
     #[tokio::test]
     async fn test_show_tables() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SHOW TABLES", true).await;
+        let result = execute_read_query(&test_db.pool, "SHOW TABLES", &StatementType::Show, false).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execution_time_tracked() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT 1", true).await.unwrap();
+        let result = execute_read_query(&test_db.pool, "SELECT 1", &StatementType::Select, false).await.unwrap();
         assert!(result.execution_time_ms < 5000);
     }
 }

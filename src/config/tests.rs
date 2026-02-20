@@ -17,15 +17,13 @@ mod tests {
         assert!(base.connection.connection_string.as_deref().unwrap().starts_with("mysql://"));
     }
 
-    // Test: ALLOW_DDL without DISABLE_READ_ONLY setting
+    // Test: ALLOW_DDL config is settable
     #[test]
     fn test_allow_ddl_config() {
         let mut config = Config::default();
         config.security.allow_ddl = true;
-        config.security.disable_read_only_transactions = false;
         // Config itself is valid - the warning would happen at runtime
         assert!(config.security.allow_ddl);
-        assert!(!config.security.disable_read_only_transactions);
     }
 
     // Test: schema permission keys with unusual database names
@@ -75,7 +73,6 @@ allow_insert = true
         assert!(!config.security.allow_update);
         assert!(!config.security.allow_delete);
         assert!(!config.security.allow_ddl);
-        assert!(!config.security.disable_read_only_transactions);
         assert!(!config.security.ssl);
         assert!(!config.security.multi_db_write_mode);
         assert!(config.security.schema_permissions.is_empty());
@@ -131,7 +128,6 @@ allow_insert = true
 allow_update = true
 allow_delete = true
 allow_ddl = true
-disable_read_only_transactions = true
 ssl = true
 multi_db_write_mode = true
 "#;
@@ -140,7 +136,6 @@ multi_db_write_mode = true
         assert!(config.security.allow_update);
         assert!(config.security.allow_delete);
         assert!(config.security.allow_ddl);
-        assert!(config.security.disable_read_only_transactions);
         assert!(config.security.ssl);
         assert!(config.security.multi_db_write_mode);
     }

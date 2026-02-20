@@ -52,7 +52,6 @@ pub struct SecurityConfig {
     pub allow_update: bool,
     pub allow_delete: bool,
     pub allow_ddl: bool,
-    pub disable_read_only_transactions: bool,
     pub ssl: bool,
     pub ssl_accept_invalid_certs: bool,
     /// Per-schema permission overrides: schema_name -> SchemaPermissions
@@ -121,7 +120,7 @@ impl Default for PoolConfig {
             connect_timeout_ms: 10_000,
             queue_limit: 100,
             cache_ttl_secs: 60,
-            readonly_transaction: true,
+            readonly_transaction: false,
         }
     }
 }
@@ -133,7 +132,6 @@ impl Default for SecurityConfig {
             allow_update: false,
             allow_delete: false,
             allow_ddl: false,
-            disable_read_only_transactions: false,
             ssl: false,
             ssl_accept_invalid_certs: false,
             schema_permissions: HashMap::new(),

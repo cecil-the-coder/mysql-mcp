@@ -145,7 +145,7 @@ impl ServerHandler for McpServer {
             let pool = self.db.pool();
 
             if parsed.statement_type.is_read_only() {
-                match crate::query::read::execute_read_query(pool, &sql, self.config.pool.readonly_transaction).await {
+                match crate::query::read::execute_read_query(pool, &sql, &parsed.statement_type, self.config.pool.readonly_transaction).await {
                     Ok(result) => {
                         let output = json!({
                             "rows": result.rows,
