@@ -22,7 +22,7 @@ fn connect_options_from_config(config: &Config) -> sqlx::mysql::MySqlConnectOpti
     if let Some(db) = &config.connection.database {
         opts = opts.database(db);
     }
-    opts
+    opts.statement_cache_capacity(config.pool.statement_cache_capacity as usize)
 }
 
 /// Global semaphore that limits how many tests may CREATE a new MySQL connection

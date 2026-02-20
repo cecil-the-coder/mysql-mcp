@@ -22,7 +22,8 @@ impl DbPool {
 }
 
 async fn build_pool(config: &Config) -> Result<MySqlPool> {
-    let connect_options = build_connect_options(config)?;
+    let connect_options = build_connect_options(config)?
+        .statement_cache_capacity(config.pool.statement_cache_capacity as usize);
 
     let pool = MySqlPoolOptions::new()
         .max_connections(config.pool.size)
