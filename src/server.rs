@@ -201,6 +201,7 @@ impl ServerHandler for McpServer {
                             readonly_transaction,
                             max_rows,
                             &hints_clone,
+                            0,
                         ).await;
                         (sql_clone, result)
                     });
@@ -232,6 +233,9 @@ impl ServerHandler for McpServer {
                             });
                             if !r.parse_warnings.is_empty() {
                                 entry["parse_warnings"] = json!(r.parse_warnings);
+                            }
+                            if let Some(plan) = r.plan {
+                                entry["plan"] = plan;
                             }
                             entry
                         }
@@ -307,6 +311,7 @@ impl ServerHandler for McpServer {
                     self.config.pool.readonly_transaction,
                     self.config.pool.max_rows,
                     &effective_hints,
+                    self.config.pool.slow_query_threshold_ms,
                 ).await {
                     Ok(result) => {
                         let mut output = json!({
@@ -320,6 +325,9 @@ impl ServerHandler for McpServer {
                         }
                         if !result.parse_warnings.is_empty() {
                             output["parse_warnings"] = json!(result.parse_warnings);
+                        }
+                        if let Some(plan) = result.plan {
+                            output["plan"] = plan;
                         }
                         Ok(CallToolResult::success(vec![
                             Content::text(serde_json::to_string_pretty(&output).unwrap_or_default()),
@@ -339,6 +347,9 @@ impl ServerHandler for McpServer {
                         if let Some(id) = result.last_insert_id {
                             output["last_insert_id"] = json!(id);
                         }
+                        if !result.parse_warnings.is_empty() {
+                            output["parse_warnings"] = json!(result.parse_warnings);
+                        }
                         Ok(CallToolResult::success(vec![
                             Content::text(serde_json::to_string_pretty(&output).unwrap_or_default()),
                         ]))
@@ -356,6 +367,9 @@ impl ServerHandler for McpServer {
                         });
                         if let Some(id) = result.last_insert_id {
                             output["last_insert_id"] = json!(id);
+                        }
+                        if !result.parse_warnings.is_empty() {
+                            output["parse_warnings"] = json!(result.parse_warnings);
                         }
                         Ok(CallToolResult::success(vec![
                             Content::text(serde_json::to_string_pretty(&output).unwrap_or_default()),

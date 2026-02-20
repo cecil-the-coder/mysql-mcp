@@ -11,6 +11,7 @@ pub struct QueryResult {
     pub serialization_time_ms: u64,
     pub capped: bool,
     pub parse_warnings: Vec<String>,
+    pub plan: Option<Value>,
 }
 
 /// Execute a read query.
@@ -31,6 +32,7 @@ pub async fn execute_read_query(
     force_readonly_transaction: bool,
     max_rows: u32,
     performance_hints: &str,
+    slow_query_threshold_ms: u64,
 ) -> Result<QueryResult> {
     // Compute parse-time warnings before the DB phase so the field is always present.
     let warnings = if performance_hints != "none" {
@@ -60,7 +62,7 @@ pub async fn execute_read_query(
         was_capped = false;
         std::borrow::Cow::Borrowed(sql)
     };
-    let sql = effective_sql.as_ref();
+    let effective_sql_ref = effective_sql.as_ref();
 
     // DB phase
     let db_start = Instant::now();
@@ -72,12 +74,12 @@ pub async fn execute_read_query(
             .execute(&mut *conn)
             .await?;
         let mut tx = conn.begin().await?;
-        let rows = sqlx::query(sql).fetch_all(&mut *tx).await?;
+        let rows = sqlx::query(effective_sql_ref).fetch_all(&mut *tx).await?;
         tx.commit().await?;
         rows
     } else {
         // 1-RTT path: bare fetch_all, no transaction overhead
-        sqlx::query(sql).fetch_all(pool).await?
+        sqlx::query(effective_sql_ref).fetch_all(pool).await?
     };
     let db_elapsed = db_start.elapsed().as_millis() as u64;
 
@@ -87,6 +89,49 @@ pub async fn execute_read_query(
     let ser_elapsed = ser_start.elapsed().as_millis() as u64;
 
     let row_count = json_rows.len();
+
+    // EXPLAIN phase: decide whether to run based on performance_hints and elapsed time.
+    // Only run EXPLAIN for SELECT statements (EXPLAIN doesn't support SHOW/EXPLAIN/etc.)
+    let run_explain = matches!(stmt_type, StatementType::Select) && match performance_hints {
+        "always" => true,
+        "auto" => db_elapsed >= slow_query_threshold_ms,
+        _ => false,
+    };
+
+    let plan: Option<Value> = if run_explain {
+        match crate::query::explain::run_explain(pool, sql).await {
+            Ok(mut explain_result) => {
+                // Compute tier based on db_elapsed
+                explain_result.tier = if db_elapsed < 100 {
+                    "fast".to_string()
+                } else if db_elapsed < 1000 {
+                    "slow".to_string()
+                } else {
+                    "very_slow".to_string()
+                };
+                // Compute efficiency: rows_returned / rows_examined
+                explain_result.efficiency = if explain_result.rows_examined_estimate > 0 {
+                    (row_count as f64) / (explain_result.rows_examined_estimate as f64)
+                } else {
+                    1.0
+                };
+                Some(serde_json::json!({
+                    "full_table_scan": explain_result.full_table_scan,
+                    "index_used": explain_result.index_used,
+                    "rows_examined_estimate": explain_result.rows_examined_estimate,
+                    "filtered_pct": explain_result.filtered_pct,
+                    "efficiency": explain_result.efficiency,
+                    "extra_flags": explain_result.extra_flags,
+                    "tier": explain_result.tier,
+                    "db_elapsed_ms": db_elapsed,
+                }))
+            }
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
     Ok(QueryResult {
         rows: json_rows,
         row_count,
@@ -94,6 +139,7 @@ pub async fn execute_read_query(
         serialization_time_ms: ser_elapsed,
         capped: was_capped,
         parse_warnings: warnings,
+        plan,
     })
 }
 
@@ -164,7 +210,7 @@ mod integration_tests {
     #[tokio::test]
     async fn test_select_basic() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT 1 AS one", &StatementType::Select, false, 0, "none").await;
+        let result = execute_read_query(&test_db.pool, "SELECT 1 AS one", &StatementType::Select, false, 0, "none", 0).await;
         assert!(result.is_ok(), "SELECT should succeed: {:?}", result.err());
         assert_eq!(result.unwrap().row_count, 1);
     }
@@ -172,28 +218,28 @@ mod integration_tests {
     #[tokio::test]
     async fn test_null_values() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT NULL AS null_col", &StatementType::Select, false, 0, "none").await.unwrap();
+        let result = execute_read_query(&test_db.pool, "SELECT NULL AS null_col", &StatementType::Select, false, 0, "none", 0).await.unwrap();
         assert_eq!(result.rows[0]["null_col"], serde_json::Value::Null);
     }
 
     #[tokio::test]
     async fn test_empty_result_set() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT 1 WHERE 1=0", &StatementType::Select, false, 0, "none").await.unwrap();
+        let result = execute_read_query(&test_db.pool, "SELECT 1 WHERE 1=0", &StatementType::Select, false, 0, "none", 0).await.unwrap();
         assert_eq!(result.row_count, 0);
     }
 
     #[tokio::test]
     async fn test_show_tables() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SHOW TABLES", &StatementType::Show, false, 0, "none").await;
+        let result = execute_read_query(&test_db.pool, "SHOW TABLES", &StatementType::Show, false, 0, "none", 0).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execution_time_tracked() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT 1", &StatementType::Select, false, 0, "none").await.unwrap();
+        let result = execute_read_query(&test_db.pool, "SELECT 1", &StatementType::Select, false, 0, "none", 0).await.unwrap();
         assert!(result.execution_time_ms < 5000);
     }
 }

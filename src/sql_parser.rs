@@ -208,6 +208,78 @@ fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedStatement> {
     })
 }
 
+/// Inspect a parsed write statement and return safety warnings.
+/// Detects dangerous patterns: UPDATE/DELETE without WHERE, TRUNCATE.
+pub fn parse_write_warnings(parsed: &ParsedStatement) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    match &parsed.statement_type {
+        StatementType::Truncate => {
+            warnings.push(
+                "TRUNCATE will delete ALL rows without transaction log — cannot be rolled back"
+                    .to_string(),
+            );
+            return warnings;
+        }
+        StatementType::Update | StatementType::Delete => {}
+        _ => return warnings,
+    }
+
+    // Re-parse to inspect the AST for WHERE clause presence
+    let dialect = MySqlDialect {};
+    let statements = match Parser::parse_sql(&dialect, &parsed.sql) {
+        Ok(s) => s,
+        Err(_) => {
+            // Fallback: use string heuristics
+            let upper = parsed.sql.to_uppercase();
+            let trimmed = upper.trim();
+            if parsed.statement_type == StatementType::Update {
+                if !trimmed.contains("WHERE") {
+                    warnings.push(
+                        "UPDATE has no WHERE clause — this will affect ALL rows in the table"
+                            .to_string(),
+                    );
+                }
+            } else if parsed.statement_type == StatementType::Delete {
+                if !trimmed.contains("WHERE") {
+                    warnings.push(
+                        "DELETE has no WHERE clause — this will delete ALL rows in the table"
+                            .to_string(),
+                    );
+                }
+            }
+            return warnings;
+        }
+    };
+
+    let stmt = match statements.into_iter().next() {
+        Some(s) => s,
+        None => return warnings,
+    };
+
+    match stmt {
+        Statement::Update { selection, .. } => {
+            if selection.is_none() {
+                warnings.push(
+                    "UPDATE has no WHERE clause — this will affect ALL rows in the table"
+                        .to_string(),
+                );
+            }
+        }
+        Statement::Delete(delete) => {
+            if delete.selection.is_none() {
+                warnings.push(
+                    "DELETE has no WHERE clause — this will delete ALL rows in the table"
+                        .to_string(),
+                );
+            }
+        }
+        _ => {}
+    }
+
+    warnings
+}
+
 /// Inspect a parsed SELECT statement and return human-readable performance warnings.
 /// Only meaningful for SELECT statements; returns empty vec for other statement types.
 pub fn parse_warnings(parsed: &ParsedStatement) -> Vec<String> {
@@ -631,5 +703,59 @@ mod tests {
         let parsed = parse_sql("DROP TABLE mydb.users").unwrap();
         assert_eq!(parsed.statement_type, StatementType::Drop);
         assert_eq!(parsed.target_schema, Some("mydb".to_string()));
+    }
+
+    // Tests for parse_write_warnings
+
+    #[test]
+    fn test_write_warnings_update_no_where() {
+        let parsed = parse_sql("UPDATE users SET name = 'x'").unwrap();
+        let warnings = parse_write_warnings(&parsed);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("WHERE"), "Expected WHERE warning, got: {}", warnings[0]);
+    }
+
+    #[test]
+    fn test_write_warnings_update_with_where() {
+        let parsed = parse_sql("UPDATE users SET name = 'x' WHERE id = 1").unwrap();
+        let warnings = parse_write_warnings(&parsed);
+        assert!(warnings.is_empty(), "Expected no warnings for UPDATE with WHERE");
+    }
+
+    #[test]
+    fn test_write_warnings_delete_no_where() {
+        let parsed = parse_sql("DELETE FROM users").unwrap();
+        let warnings = parse_write_warnings(&parsed);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("WHERE"), "Expected WHERE warning, got: {}", warnings[0]);
+    }
+
+    #[test]
+    fn test_write_warnings_delete_with_where() {
+        let parsed = parse_sql("DELETE FROM users WHERE id = 1").unwrap();
+        let warnings = parse_write_warnings(&parsed);
+        assert!(warnings.is_empty(), "Expected no warnings for DELETE with WHERE");
+    }
+
+    #[test]
+    fn test_write_warnings_truncate() {
+        let parsed = parse_sql("TRUNCATE TABLE users").unwrap();
+        let warnings = parse_write_warnings(&parsed);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("TRUNCATE"), "Expected TRUNCATE warning, got: {}", warnings[0]);
+    }
+
+    #[test]
+    fn test_write_warnings_insert_no_warnings() {
+        let parsed = parse_sql("INSERT INTO users (name) VALUES ('Alice')").unwrap();
+        let warnings = parse_write_warnings(&parsed);
+        assert!(warnings.is_empty(), "Expected no warnings for INSERT");
+    }
+
+    #[test]
+    fn test_write_warnings_select_no_warnings() {
+        let parsed = parse_sql("SELECT * FROM users").unwrap();
+        let warnings = parse_write_warnings(&parsed);
+        assert!(warnings.is_empty(), "Expected no warnings for SELECT");
     }
 }

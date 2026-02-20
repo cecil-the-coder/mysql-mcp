@@ -6,9 +6,16 @@ pub struct WriteResult {
     pub rows_affected: u64,
     pub last_insert_id: Option<u64>,
     pub execution_time_ms: u64,
+    pub parse_warnings: Vec<String>,
 }
 
 pub async fn execute_write_query(pool: &MySqlPool, sql: &str) -> Result<WriteResult> {
+    // Compute parse-time safety warnings before the DB phase.
+    let parse_warnings = match crate::sql_parser::parse_sql(sql) {
+        Ok(parsed) => crate::sql_parser::parse_write_warnings(&parsed),
+        Err(_) => vec![],
+    };
+
     let start = Instant::now();
 
     let mut tx = pool.begin().await?;
@@ -24,6 +31,7 @@ pub async fn execute_write_query(pool: &MySqlPool, sql: &str) -> Result<WriteRes
             if id > 0 { Some(id) } else { None }
         },
         execution_time_ms: elapsed,
+        parse_warnings,
     })
 }
 
@@ -41,6 +49,7 @@ pub async fn execute_ddl_query(pool: &MySqlPool, sql: &str) -> Result<WriteResul
             if id > 0 { Some(id) } else { None }
         },
         execution_time_ms: elapsed,
+        parse_warnings: vec![],
     })
 }
 
