@@ -79,6 +79,10 @@ impl ServerHandler for McpServer {
                     "sql": {
                         "type": "string",
                         "description": "The SQL query to execute"
+                    },
+                    "explain": {
+                        "type": "boolean",
+                        "description": "Request EXPLAIN analysis for this query (overrides server performance_hints setting)"
                     }
                 },
                 "required": ["sql"]
@@ -179,6 +183,7 @@ impl ServerHandler for McpServer {
                 let pool = self.db.pool().clone();
                 let readonly_transaction = self.config.pool.readonly_transaction;
                 let max_rows = self.config.pool.max_rows;
+                let multi_hints = self.config.pool.performance_hints.clone();
 
                 let wall_start = std::time::Instant::now();
                 let mut join_set = tokio::task::JoinSet::new();
@@ -187,6 +192,7 @@ impl ServerHandler for McpServer {
                     let pool_clone = pool.clone();
                     let sql_clone = sql.clone();
                     let stmt_type = parsed.statement_type.clone();
+                    let hints_clone = multi_hints.clone();
                     join_set.spawn(async move {
                         let result = crate::query::read::execute_read_query(
                             &pool_clone,
@@ -194,6 +200,7 @@ impl ServerHandler for McpServer {
                             &stmt_type,
                             readonly_transaction,
                             max_rows,
+                            &hints_clone,
                         ).await;
                         (sql_clone, result)
                     });
@@ -215,14 +222,18 @@ impl ServerHandler for McpServer {
                     let idx = queries.iter().position(|q| q == &sql).unwrap_or(0);
                     ordered[idx] = match result {
                         Ok(r) => {
-                            json!({
+                            let mut entry = json!({
                                 "sql": sql,
                                 "rows": r.rows,
                                 "row_count": r.row_count,
                                 "execution_time_ms": r.execution_time_ms,
                                 "serialization_time_ms": r.serialization_time_ms,
                                 "capped": r.capped,
-                            })
+                            });
+                            if !r.parse_warnings.is_empty() {
+                                entry["parse_warnings"] = json!(r.parse_warnings);
+                            }
+                            entry
                         }
                         Err(e) => {
                             json!({
@@ -259,6 +270,12 @@ impl ServerHandler for McpServer {
                     ]));
                 }
             };
+            let explain_requested = args.get("explain").and_then(|v| v.as_bool()).unwrap_or(false);
+            let effective_hints = if explain_requested {
+                "always".to_string()
+            } else {
+                self.config.pool.performance_hints.clone()
+            };
 
             // Parse and check permissions
             let parsed = match crate::sql_parser::parse_sql(&sql) {
@@ -289,6 +306,7 @@ impl ServerHandler for McpServer {
                     &parsed.statement_type,
                     self.config.pool.readonly_transaction,
                     self.config.pool.max_rows,
+                    &effective_hints,
                 ).await {
                     Ok(result) => {
                         let mut output = json!({
@@ -299,6 +317,9 @@ impl ServerHandler for McpServer {
                         });
                         if result.capped {
                             output["capped"] = json!(true);
+                        }
+                        if !result.parse_warnings.is_empty() {
+                            output["parse_warnings"] = json!(result.parse_warnings);
                         }
                         Ok(CallToolResult::success(vec![
                             Content::text(serde_json::to_string_pretty(&output).unwrap_or_default()),

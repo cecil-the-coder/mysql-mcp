@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use sqlparser::ast::{FromTable, ObjectName, Statement, TableFactor, Use};
+use sqlparser::ast::{Expr, FromTable, ObjectName, Query, Select, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins, Use};
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
 
@@ -78,6 +78,8 @@ pub struct ParsedStatement {
     pub statement_type: StatementType,
     /// The target schema/database extracted from the statement (if applicable)
     pub target_schema: Option<String>,
+    /// The original SQL string (used for heuristic-based analysis)
+    pub sql: String,
 }
 
 /// Parse a SQL string and return the statement type and target schema.
@@ -93,10 +95,10 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
 
     // We only handle the first statement
     let stmt = &statements[0];
-    classify_statement(stmt)
+    classify_statement(stmt, sql)
 }
 
-fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
+fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedStatement> {
     let (statement_type, target_schema) = match stmt {
         Statement::Query(_) => (StatementType::Select, None),
 
@@ -202,7 +204,155 @@ fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
     Ok(ParsedStatement {
         statement_type,
         target_schema,
+        sql: sql.to_string(),
     })
+}
+
+/// Inspect a parsed SELECT statement and return human-readable performance warnings.
+/// Only meaningful for SELECT statements; returns empty vec for other statement types.
+pub fn parse_warnings(parsed: &ParsedStatement) -> Vec<String> {
+    if parsed.statement_type != StatementType::Select {
+        return vec![];
+    }
+
+    let dialect = MySqlDialect {};
+    let statements = match Parser::parse_sql(&dialect, &parsed.sql) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    let stmt = match statements.into_iter().next() {
+        Some(s) => s,
+        None => return vec![],
+    };
+
+    let query = match stmt {
+        Statement::Query(q) => q,
+        _ => return vec![],
+    };
+
+    let select = match extract_select(&query) {
+        Some(s) => s,
+        None => return vec![],
+    };
+
+    let mut warnings = Vec::new();
+
+    // 1. SELECT * (wildcard projection)
+    let has_wildcard = select.projection.iter().any(|item| {
+        matches!(item, SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _))
+    });
+    if has_wildcard {
+        warnings.push(
+            "SELECT * returns all columns — specify needed columns for efficiency".to_string(),
+        );
+    }
+
+    // 2. SELECT from a named table with no WHERE clause
+    let has_named_table = select.from.iter().any(|t| is_named_table(&t.relation));
+    let has_where = select.selection.is_some();
+    if has_named_table && !has_where {
+        warnings.push("No WHERE clause — full table scan likely".to_string());
+    }
+
+    // 3. LIKE with a leading wildcard — use SQL string heuristic (handles all LIKE forms)
+    if has_leading_wildcard_like(&parsed.sql) {
+        warnings.push(
+            "Leading wildcard in LIKE — index on this column cannot be used".to_string(),
+        );
+    }
+
+    // 4. No LIMIT on a non-aggregate SELECT
+    let has_limit = query.limit.is_some();
+    let has_group_by = !matches!(&select.group_by, sqlparser::ast::GroupByExpr::Expressions(exprs, _) if exprs.is_empty());
+    let has_aggregate = has_aggregate_function(&select.projection);
+    if !has_limit && !has_group_by && !has_aggregate {
+        warnings.push("No LIMIT clause — query may return unbounded rows".to_string());
+    }
+
+    // 5. 3+ table joins
+    let join_count = count_joins(&select.from);
+    if join_count >= 3 {
+        warnings.push(format!(
+            "Query joins {} tables — ensure join columns are indexed",
+            join_count
+        ));
+    }
+
+    warnings
+}
+
+/// Extract the innermost Select from a Query (handles simple SELECT; ignores UNION etc.)
+fn extract_select(query: &Query) -> Option<&Select> {
+    match query.body.as_ref() {
+        SetExpr::Select(select) => Some(select),
+        _ => None,
+    }
+}
+
+/// Returns true if the table factor refers to a concrete named table (not a subquery/function).
+fn is_named_table(factor: &TableFactor) -> bool {
+    matches!(factor, TableFactor::Table { .. })
+}
+
+/// Count distinct table references across all FROM clauses including JOIN targets.
+/// Returns the total number of tables (base + joined).
+fn count_joins(from: &[TableWithJoins]) -> usize {
+    from.iter()
+        .map(|twj| 1 + twj.joins.len())
+        .sum()
+}
+
+/// Returns true if any aggregate function (COUNT, SUM, AVG, MIN, MAX) appears in the projection.
+fn has_aggregate_function(projection: &[SelectItem]) -> bool {
+    projection.iter().any(|item| {
+        let expr = match item {
+            SelectItem::UnnamedExpr(e) => e,
+            SelectItem::ExprWithAlias { expr, .. } => expr,
+            _ => return false,
+        };
+        expr_has_aggregate(expr)
+    })
+}
+
+fn expr_has_aggregate(expr: &Expr) -> bool {
+    match expr {
+        Expr::Function(f) => {
+            let name = f.name.to_string().to_uppercase();
+            matches!(name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            expr_has_aggregate(left) || expr_has_aggregate(right)
+        }
+        Expr::UnaryOp { expr, .. } => expr_has_aggregate(expr),
+        Expr::Nested(inner) => expr_has_aggregate(inner),
+        _ => false,
+    }
+}
+
+/// Heuristic: detect LIKE patterns with a leading wildcard (e.g. LIKE '%foo' or LIKE '%foo%').
+/// Uses the raw SQL string since extracting string literal values from the AST is verbose.
+fn has_leading_wildcard_like(sql: &str) -> bool {
+    // Normalise to uppercase for case-insensitive matching
+    let upper = sql.to_uppercase();
+    // Find all occurrences of LIKE followed by a quoted string starting with %
+    let mut rest = upper.as_str();
+    while let Some(pos) = rest.find("LIKE") {
+        rest = &rest[pos + 4..];
+        // Skip whitespace
+        let trimmed = rest.trim_start();
+        // Accept both ' and " delimiters
+        let inner = if trimmed.starts_with('\'') {
+            &trimmed[1..]
+        } else if trimmed.starts_with('"') {
+            &trimmed[1..]
+        } else {
+            continue;
+        };
+        if inner.starts_with('%') {
+            return true;
+        }
+    }
+    false
 }
 
 fn extract_schema_from_object_name(name: &ObjectName) -> Option<String> {
