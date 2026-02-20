@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 use anyhow::Result;
-use sqlx::mysql::{MySqlPool, MySqlPoolOptions, MySqlConnectOptions};
+use sqlx::mysql::{MySqlPool, MySqlPoolOptions, MySqlConnectOptions, MySqlSslMode};
 use std::str::FromStr;
 use crate::config::Config;
 
@@ -59,11 +59,17 @@ fn build_connect_options(config: &Config) -> Result<MySqlConnectOptions> {
     }
 
     // TCP connection
+    let ssl_mode = match (config.security.ssl, config.security.ssl_accept_invalid_certs) {
+        (false, _) => MySqlSslMode::Disabled,
+        (true, true) => MySqlSslMode::Required,       // SSL on, skip cert verification
+        (true, false) => MySqlSslMode::VerifyIdentity, // SSL on, verify cert + hostname
+    };
     let mut opts = MySqlConnectOptions::new()
         .host(&conn.host)
         .port(conn.port)
         .username(&conn.user)
-        .password(&conn.password);
+        .password(&conn.password)
+        .ssl_mode(ssl_mode);
     if let Some(db) = &conn.database {
         opts = opts.database(db);
     }

@@ -53,6 +53,7 @@ pub struct SecurityConfig {
     pub allow_ddl: bool,
     pub disable_read_only_transactions: bool,
     pub ssl: bool,
+    pub ssl_accept_invalid_certs: bool,
     /// Per-schema permission overrides: schema_name -> SchemaPermissions
     pub schema_permissions: HashMap<String, SchemaPermissions>,
     pub multi_db_write_mode: bool,
@@ -132,6 +133,7 @@ impl Default for SecurityConfig {
             allow_ddl: false,
             disable_read_only_transactions: false,
             ssl: false,
+            ssl_accept_invalid_certs: false,
             schema_permissions: HashMap::new(),
             multi_db_write_mode: false,
         }
