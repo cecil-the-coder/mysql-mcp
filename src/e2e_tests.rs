@@ -33,7 +33,8 @@ mod e2e_tests {
 
     async fn read_response(reader: &mut BufReader<tokio::process::ChildStdout>) -> Option<Value> {
         let mut line = String::new();
-        match tokio::time::timeout(Duration::from_secs(10), reader.read_line(&mut line)).await {
+        // 45s gives the binary time to connect to MySQL even under heavy parallel load.
+        match tokio::time::timeout(Duration::from_secs(45), reader.read_line(&mut line)).await {
             Ok(Ok(n)) if n > 0 => serde_json::from_str(line.trim()).ok(),
             _ => None,
         }
@@ -51,7 +52,11 @@ mod e2e_tests {
             .env("MYSQL_PASS", &cfg.connection.password)
             .env("MYSQL_DB", cfg.connection.database.as_deref().unwrap_or(""))
             .env("MYSQL_SSL", if cfg.security.ssl { "true" } else { "false" })
-            .env("MYSQL_SSL_ACCEPT_INVALID_CERTS", if cfg.security.ssl_accept_invalid_certs { "true" } else { "false" });
+            .env("MYSQL_SSL_ACCEPT_INVALID_CERTS", if cfg.security.ssl_accept_invalid_certs { "true" } else { "false" })
+            // Give the binary generous connection headroom: the production
+            // default (10 s) can be exhausted on high-latency remote DBs when
+            // other tests are simultaneously establishing connections.
+            .env("MYSQL_CONNECT_TIMEOUT", "120000");
         cmd.spawn().expect("Failed to spawn mysql-mcp")
     }
 

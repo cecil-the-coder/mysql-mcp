@@ -1,48 +1,64 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use crate::config::Config;
-use crate::db::DbPool;
 use testcontainers_modules::{
     mysql::Mysql,
     testcontainers::{runners::AsyncRunner, ContainerAsync},
 };
 
-/// Build a new pool with a custom max_connections using the same credentials as
-/// an existing TestDb. Useful for perf tests that want more connections than the
-/// shared pool allows without starving other tests. The caller must keep `test_db`
-/// alive (so any testcontainer stays running) for the lifetime of the returned pool.
-pub async fn make_pool(test_db: &TestDb, max_connections: u32) -> sqlx::MySqlPool {
-    let cfg = &test_db.config;
-
-    use sqlx::mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlSslMode};
-    // Mirror the same logic as db.rs build_connect_options.
-    let ssl_mode = match (cfg.security.ssl, cfg.security.ssl_accept_invalid_certs) {
+/// Build MySqlConnectOptions from a Config, applying the correct SSL mode.
+fn connect_options_from_config(config: &Config) -> sqlx::mysql::MySqlConnectOptions {
+    use sqlx::mysql::{MySqlConnectOptions, MySqlSslMode};
+    let ssl_mode = match (config.security.ssl, config.security.ssl_accept_invalid_certs) {
         (false, _) => MySqlSslMode::Disabled,
         (true, true) => MySqlSslMode::Required,
         (true, false) => MySqlSslMode::VerifyIdentity,
     };
     let mut opts = MySqlConnectOptions::new()
-        .host(&cfg.connection.host)
-        .port(cfg.connection.port)
-        .username(&cfg.connection.user)
-        .password(&cfg.connection.password)
+        .host(&config.connection.host)
+        .port(config.connection.port)
+        .username(&config.connection.user)
+        .password(&config.connection.password)
         .ssl_mode(ssl_mode);
-    if let Some(db) = &cfg.connection.database {
+    if let Some(db) = &config.connection.database {
         opts = opts.database(db);
     }
-
-    MySqlPoolOptions::new()
-        .max_connections(max_connections)
-        .acquire_timeout(std::time::Duration::from_secs(30))
-        .connect_with(opts)
-        .await
-        .expect("make_pool: failed to connect")
+    opts
 }
 
-/// Shared pool + config for the env-var path.
-/// All parallel tests reuse one pool rather than each opening their own,
-/// which avoids saturating the remote server's connection limit.
-static ENV_DB: tokio::sync::OnceCell<(sqlx::MySqlPool, Arc<Config>)> =
-    tokio::sync::OnceCell::const_new();
+/// Global semaphore that limits how many tests may CREATE a new MySQL connection
+/// simultaneously. MySQL's server-side `connect_timeout` (default 10 s) drops
+/// connections whose SSL+auth handshake takes too long. Under heavy parallel
+/// load, all 121 test connections being created at once can overwhelm MySQL's
+/// connection handler, causing handshakes to queue past the 10 s deadline and
+/// making the client retry repeatedly for the full 120 s acquire_timeout window.
+///
+/// 4 permits ≈ 4 concurrent SSL handshakes, each completing within MySQL's 10 s
+/// window even at 130 ms network RTT (4 RTTs × 260 ms ≈ 1 s per connection).
+static DB_SEMAPHORE: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
+
+pub fn db_semaphore() -> &'static tokio::sync::Semaphore {
+    DB_SEMAPHORE.get_or_init(|| tokio::sync::Semaphore::new(4))
+}
+
+/// Build a new pool with a custom max_connections using the same credentials as
+/// an existing TestDb. Useful for perf tests that want more connections than the
+/// shared pool allows without starving other tests. The caller must keep `test_db`
+/// alive (so any testcontainer stays running) for the lifetime of the returned pool.
+///
+/// Uses connect_lazy_with so NO connection is established at creation time.
+/// This prevents a thundering herd when many perf tests call make_pool simultaneously
+/// right after setup_test_db() returns. Connections are created on-demand the first
+/// time the pool is used.
+///
+/// acquire_timeout is generous (120s) because perf tests involve heavy parallel load
+/// that can slow the DB, and some saturation tests intentionally queue for connections.
+pub async fn make_pool(test_db: &TestDb, max_connections: u32) -> sqlx::MySqlPool {
+    use sqlx::mysql::MySqlPoolOptions;
+    MySqlPoolOptions::new()
+        .max_connections(max_connections)
+        .acquire_timeout(std::time::Duration::from_secs(120))
+        .connect_lazy_with(connect_options_from_config(&test_db.config))
+}
 
 /// Holds a test MySQL pool and optionally the container keeping it alive.
 /// Dropping this value tears down the container.
@@ -57,7 +73,17 @@ pub struct TestDb {
 
 /// Build a MySQL pool for integration tests.
 ///
-/// - If `MYSQL_HOST` is set, uses env-var config (same production code path as `db.rs`).
+/// - If `MYSQL_HOST` is set, creates a **fresh per-test** pool using
+///   connect_with. Each test runtime owns its own connections, so there is
+///   no cross-runtime issue: when a test completes and its tokio runtime shuts
+///   down, the connections in that test's pool go with it rather than sitting in
+///   a shared pool where the next runtime would try to ping them through a dead
+///   I/O reactor.
+///
+///   Connection creation is serialised through `DB_SEMAPHORE` (4 permits) to
+///   prevent overwhelming MySQL's connection handler when all 121 tests start
+///   simultaneously on a high-latency remote DB.
+///
 /// - Otherwise, starts a throwaway MySQL 8.1 container via testcontainers (requires Docker).
 ///
 /// Container auth: MySQL 8.1 defaults to `caching_sha2_password` which requires SSL
@@ -66,15 +92,40 @@ pub struct TestDb {
 /// verification) rather than going through `db.rs`'s Disabled path.
 pub async fn setup_test_db() -> TestDb {
     if std::env::var("MYSQL_HOST").is_ok() {
-        let (pool, config) = ENV_DB.get_or_init(|| async {
-            let config = Arc::new(crate::config::merge::load_config().unwrap());
-            let db = DbPool::new(config.clone()).await
-                .expect("Failed to connect to env-var MySQL");
-            (db.pool().clone(), config)
-        }).await;
+        let config = Arc::new(crate::config::merge::load_config().unwrap());
+
+        // Acquire a semaphore permit before creating the MySQL connection.
+        // This throttles simultaneous SSL handshakes so they complete within
+        // MySQL's server-side connect_timeout window even under heavy test
+        // parallelism.  The permit is released as soon as connect_with()
+        // returns, so it only serialises connection *creation*, not the
+        // entire test.
+        let _permit = db_semaphore()
+            .acquire()
+            .await
+            .expect("DB semaphore closed");
+
+        // max_connections=1: integration tests issue queries sequentially, so
+        // a single connection is always sufficient.
+        // test_before_acquire=false: skips the 500 ms ping that sqlx normally
+        // sends to validate an idle connection before returning it — unnecessary
+        // for a fresh per-test pool where the one connection stays alive for the
+        // duration of the test.
+        use sqlx::mysql::MySqlPoolOptions;
+        let pool = MySqlPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_secs(120))
+            .test_before_acquire(false)
+            .connect_with(connect_options_from_config(&config))
+            .await
+            .expect("setup_test_db: failed to connect to MySQL");
+
+        // Permit released here; the next waiting test can now connect.
+        drop(_permit);
+
         return TestDb {
-            pool: pool.clone(),
-            config: config.clone(),
+            pool,
+            config,
             using_container: false,
             _container: None,
         };

@@ -218,11 +218,37 @@ mod integration_tests {
         let test_db = setup_test_db().await;
         let pool = Arc::new(test_db.pool.clone());
         let db = test_db.config.connection.database.as_deref();
-        // TTL=0 means instant expiry; should always re-fetch
-        let introspector = SchemaIntrospector::new(pool, 0);
-        let tables1 = introspector.list_tables(db).await.unwrap();
-        let tables2 = introspector.list_tables(db).await.unwrap();
-        assert_eq!(tables1.len(), tables2.len());
+
+        // Use a unique table name to avoid races with other concurrent tests.
+        let marker = format!("_cache_ttl_test_{}", std::process::id());
+
+        // Ensure the marker table doesn't exist before we start.
+        sqlx::query(&format!("DROP TABLE IF EXISTS {marker}"))
+            .execute(pool.as_ref()).await.unwrap();
+
+        // TTL=0 means instant expiry; every call re-fetches from the DB.
+        let introspector = SchemaIntrospector::new(pool.clone(), 0);
+
+        // First call: marker table doesn't exist yet.
+        let tables_before = introspector.list_tables(db).await.unwrap();
+
+        // Create the marker table between calls.
+        sqlx::query(&format!("CREATE TABLE {marker} (id INT)"))
+            .execute(pool.as_ref()).await.unwrap();
+
+        // Second call: must re-fetch (TTL=0), so it should see the new table.
+        let tables_after = introspector.list_tables(db).await.unwrap();
+
+        // Cleanup.
+        sqlx::query(&format!("DROP TABLE IF EXISTS {marker}"))
+            .execute(pool.as_ref()).await.ok();
+
+        let before_names: Vec<&str> = tables_before.iter().map(|t| t.name.as_str()).collect();
+        let after_names: Vec<&str> = tables_after.iter().map(|t| t.name.as_str()).collect();
+        assert!(!before_names.contains(&marker.as_str()),
+            "marker table should not exist before creation");
+        assert!(after_names.contains(&marker.as_str()),
+            "TTL=0 must re-fetch: new table should be visible after creation");
     }
 
     // mysql-mcp-1au: get columns for a known table

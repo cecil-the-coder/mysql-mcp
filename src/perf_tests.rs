@@ -72,12 +72,20 @@ mod perf_tests {
         // interference when multiple perf tests run in parallel.
         let pool = crate::test_helpers::make_pool(&test_db, 3).await;
         let pool = &pool;
-        const WARMUP: usize = 5;
-        const N: usize = 100;
+        const WARMUP: usize = 3;
+        // N=20 keeps total duration to ~15s even at 500ms/query (high-latency remote DB),
+        // so concurrent perf tests (pool_saturation) can connect without being starved.
+        const N: usize = 20;
 
-        // Warm-up connections
-        for _ in 0..WARMUP {
-            crate::query::read::execute_read_query(pool, "SELECT 1").await.unwrap();
+        // Warm-up connections — hold semaphore permit while the pool creates new TCP+SSL
+        // connections so that concurrent perf/integration tests don't overwhelm MySQL's
+        // connection handler (server connect_timeout=10s).
+        {
+            let _permit = crate::test_helpers::db_semaphore()
+                .acquire().await.expect("DB semaphore closed");
+            for _ in 0..WARMUP {
+                crate::query::read::execute_read_query(pool, "SELECT 1").await.unwrap();
+            }
         }
 
         let wall = Instant::now();
@@ -88,7 +96,7 @@ mod perf_tests {
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
-        print("Sequential SELECT 1 (n=100)", &stats);
+        print(&format!("Sequential SELECT 1 (n={N})"), &stats);
 
         assert!(stats.p99_ms < 5_000.0, "p99 too high: {:.1}ms", stats.p99_ms);
     }
@@ -99,6 +107,14 @@ mod perf_tests {
         let test_db = setup_test_db().await;
         let pool = crate::test_helpers::make_pool(&test_db, 3).await;
         let pool = &pool;
+
+        // Establish the pool connection through the semaphore before the check query
+        // creates it lazily, so new TCP+SSL connections are throttled under parallel load.
+        {
+            let _permit = crate::test_helpers::db_semaphore()
+                .acquire().await.expect("DB semaphore closed");
+            sqlx::query("SELECT 1").fetch_one(pool).await.unwrap();
+        }
 
         // Ensure the table we're joining exists; skip gracefully if in container
         // (container has an empty "test" DB, no users/products/orders tables).
@@ -111,7 +127,8 @@ mod perf_tests {
             return;
         }
 
-        const N: usize = 50;
+        // N=20 keeps total duration to ~10s even at 500ms/query.
+        const N: usize = 20;
         let sql = "SELECT u.name, p.name AS product, o.quantity \
                    FROM orders o \
                    JOIN users u ON o.user_id = u.id \
@@ -125,33 +142,41 @@ mod perf_tests {
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
-        print("Sequential 3-table JOIN (n=50)", &stats);
+        print(&format!("Sequential 3-table JOIN (n={N})"), &stats);
 
         assert!(stats.p99_ms < 5_000.0, "p99 too high: {:.1}ms", stats.p99_ms);
     }
 
     /// Concurrent SELECTs — measures throughput and tail latency under load.
     /// Uses a dedicated pool so it doesn't starve other tests running in parallel.
+    /// Kept modest (CONCURRENCY=10) so the DB remains responsive for other perf
+    /// tests (pool_saturation) that run concurrently in the same test binary.
     #[tokio::test]
     async fn perf_concurrent_select_throughput() {
         let test_db = setup_test_db().await;
-        let pool = crate::test_helpers::make_pool(&test_db, 25).await;
-        const CONCURRENCY: usize = 20;
-        const PER_TASK: usize = 10;
+        let pool = crate::test_helpers::make_pool(&test_db, 15).await;
+        const CONCURRENCY: usize = 10;
+        const PER_TASK: usize = 5;
 
         // Pre-warm the pool: acquire CONCURRENCY connections sequentially while
         // holding them all, forcing the pool to create them one at a time.
         // Each creation takes 1 RTT for TCP + TLS + MySQL auth; on a remote DB
         // this can be seconds per connection, so we establish them all before
         // the timed test to avoid connection-creation delays inflating results.
+        // Each acquire is throttled through the shared semaphore so that the
+        // total simultaneous connection-creation attempts across all tests stays
+        // within MySQL's connection-handler capacity (server connect_timeout=10s).
         {
             let mut warm_conns: Vec<_> = Vec::with_capacity(CONCURRENCY);
             for _ in 0..CONCURRENCY {
+                let _permit = crate::test_helpers::db_semaphore()
+                    .acquire().await.expect("DB semaphore closed");
                 warm_conns.push(
                     pool.acquire()
                         .await
                         .expect("pool warmup: failed to acquire connection"),
                 );
+                drop(_permit);
             }
             // Drop releases all connections back to the pool as idle.
         }
@@ -182,12 +207,21 @@ mod perf_tests {
     }
 
     /// Write throughput — INSERT / UPDATE / DELETE cycle, sequential.
+    /// N=20 keeps total write time modest (~20s) so concurrent tests aren't
+    /// starved while this test holds the DB under heavy write load.
     #[tokio::test]
     async fn perf_write_cycle_latency() {
         let test_db = setup_test_db().await;
         let pool = crate::test_helpers::make_pool(&test_db, 3).await;
         let pool = &pool;
-        const N: usize = 50;
+        const N: usize = 20;
+
+        // Establish pool connection through semaphore before the first query creates it lazily.
+        {
+            let _permit = crate::test_helpers::db_semaphore()
+                .acquire().await.expect("DB semaphore closed");
+            sqlx::query("SELECT 1").fetch_one(pool).await.unwrap();
+        }
 
         sqlx::query("CREATE TABLE IF NOT EXISTS perf_write_test (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(64))")
             .execute(pool)
@@ -228,9 +262,9 @@ mod perf_tests {
 
         sqlx::query("DROP TABLE IF EXISTS perf_write_test").execute(pool).await.ok();
 
-        print("INSERT (n=50)", &compute(insert_ms, wall_ms / 3.0));
-        print("UPDATE (n=50)", &compute(update_ms, wall_ms / 3.0));
-        print("DELETE (n=50)", &compute(delete_ms, wall_ms / 3.0));
+        print(&format!("INSERT (n={N})"), &compute(insert_ms, wall_ms / 3.0));
+        print(&format!("UPDATE (n={N})"), &compute(update_ms, wall_ms / 3.0));
+        print(&format!("DELETE (n={N})"), &compute(delete_ms, wall_ms / 3.0));
     }
 
     /// Schema introspection: cold (TTL=0) vs warm (TTL=60s) cache.
@@ -240,6 +274,14 @@ mod perf_tests {
         let pool = Arc::new(crate::test_helpers::make_pool(&test_db, 3).await);
         let db = test_db.config.connection.database.as_deref();
         const N: usize = 20;
+
+        // Establish the pool connection through the semaphore before the first DB call
+        // creates it lazily, so this doesn't race with other tests' connection creation.
+        {
+            let _permit = crate::test_helpers::db_semaphore()
+                .acquire().await.expect("DB semaphore closed");
+            sqlx::query("SELECT 1").fetch_one(pool.as_ref()).await.unwrap();
+        }
 
         // Cold: TTL=0 forces a re-fetch every call
         let cold_intr = crate::schema::SchemaIntrospector::new(pool.clone(), 0);
@@ -279,13 +321,40 @@ mod perf_tests {
 
     /// Pool saturation: submit more concurrent queries than pool connections.
     /// Uses its own deliberately small pool to observe queueing behaviour.
+    /// CONCURRENCY=15 (5x pool_size) keeps the worst-case queue wait under
+    /// acquire_timeout even when the DB is responding slowly under parallel load.
+    ///
+    /// Connections are pre-warmed before the timed phase: SSL+auth handshakes at
+    /// ~130ms RTT can take 2+ seconds each, and connection creation failures under
+    /// concurrent DB load would obscure the queueing measurement.
     #[tokio::test]
     async fn perf_pool_saturation() {
         let test_db = setup_test_db().await;
         let small_pool = crate::test_helpers::make_pool(&test_db, 3).await;
 
-        const CONCURRENCY: usize = 30; // 10x over pool size
+        const CONCURRENCY: usize = 15; // 5x over pool size
         const PER_TASK: usize = 5;
+
+        // Pre-warm all 3 pool connections before spawning the concurrent tasks.
+        // Connection creation (TCP+TLS+MySQL auth) is sensitive to concurrent server
+        // load; establishing connections upfront lets the timed phase focus purely on
+        // queue-wait latency rather than connection-creation time.
+        // Each acquire goes through the shared semaphore to cap total simultaneous
+        // connection-creation attempts across all tests.
+        {
+            let mut warm_conns: Vec<_> = Vec::with_capacity(3);
+            for _ in 0..3 {
+                let _permit = crate::test_helpers::db_semaphore()
+                    .acquire().await.expect("DB semaphore closed");
+                warm_conns.push(
+                    small_pool.acquire()
+                        .await
+                        .expect("pool_saturation warmup: failed to acquire connection"),
+                );
+                drop(_permit);
+            }
+            // Drop releases all connections back to the pool as idle.
+        }
 
         let wall = Instant::now();
         let mut set = JoinSet::new();
