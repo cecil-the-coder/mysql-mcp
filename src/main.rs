@@ -31,6 +31,21 @@ async fn main() -> Result<()> {
     let db = Arc::new(db::DbPool::new(config.clone()).await?);
     info!("Database pool created");
 
+    // Warm up the connection pool in the background
+    if config.pool.warmup_connections > 0 {
+        let warmup_pool = db.pool().clone();
+        let n = config.pool.warmup_connections;
+        tokio::spawn(async move {
+            for i in 0..n {
+                match warmup_pool.acquire().await {
+                    Ok(conn) => drop(conn),
+                    Err(e) => tracing::warn!("Pool warmup connection {} failed: {}", i + 1, e),
+                }
+            }
+            tracing::debug!("Pool warmup complete ({} connections)", n);
+        });
+    }
+
     if config.remote.enabled {
         let server = Arc::new(server::McpServer::new(config.clone(), db));
         crate::remote::run_http_server(config, server).await?;
