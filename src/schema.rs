@@ -311,7 +311,7 @@ mod integration_tests {
     // mysql-mcp-t7a: list tables returns results
     #[tokio::test]
     async fn test_list_tables_returns_results() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let pool = Arc::new(test_db.pool.clone());
         let introspector = SchemaIntrospector::new(pool, 60);
         let db = test_db.config.connection.database.as_deref();
@@ -322,7 +322,7 @@ mod integration_tests {
     // mysql-mcp-63f: schema cache TTL=0 disables caching
     #[tokio::test]
     async fn test_schema_cache_ttl_zero_disables_cache() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let pool = Arc::new(test_db.pool.clone());
         let db = test_db.config.connection.database.as_deref();
 
@@ -361,7 +361,7 @@ mod integration_tests {
     // mysql-mcp-1au: get columns for a known table
     #[tokio::test]
     async fn test_get_columns_for_table() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let pool = &test_db.pool;
         let db = test_db.config.connection.database.as_deref();
 

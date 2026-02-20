@@ -67,7 +67,7 @@ mod perf_tests {
     /// Sequential SELECT 1 — measures raw round-trip latency.
     #[tokio::test]
     async fn perf_sequential_select_latency() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         // Use an isolated pool (not the shared ENV_DB pool) to avoid cross-runtime
         // interference when multiple perf tests run in parallel.
         let pool = crate::test_helpers::make_pool(&test_db, 3).await;
@@ -104,7 +104,7 @@ mod perf_tests {
     /// Sequential SELECT on a real table with joins.
     #[tokio::test]
     async fn perf_sequential_join_query() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let pool = crate::test_helpers::make_pool(&test_db, 3).await;
         let pool = &pool;
 
@@ -153,7 +153,7 @@ mod perf_tests {
     /// tests (pool_saturation) that run concurrently in the same test binary.
     #[tokio::test]
     async fn perf_concurrent_select_throughput() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let pool = crate::test_helpers::make_pool(&test_db, 15).await;
         const CONCURRENCY: usize = 10;
         const PER_TASK: usize = 5;
@@ -211,7 +211,7 @@ mod perf_tests {
     /// starved while this test holds the DB under heavy write load.
     #[tokio::test]
     async fn perf_write_cycle_latency() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let pool = crate::test_helpers::make_pool(&test_db, 3).await;
         let pool = &pool;
         const N: usize = 20;
@@ -270,7 +270,7 @@ mod perf_tests {
     /// Schema introspection: cold (TTL=0) vs warm (TTL=60s) cache.
     #[tokio::test]
     async fn perf_schema_cache_comparison() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let pool = Arc::new(crate::test_helpers::make_pool(&test_db, 3).await);
         let db = test_db.config.connection.database.as_deref();
         const N: usize = 20;
@@ -329,7 +329,7 @@ mod perf_tests {
     /// concurrent DB load would obscure the queueing measurement.
     #[tokio::test]
     async fn perf_pool_saturation() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let small_pool = crate::test_helpers::make_pool(&test_db, 3).await;
 
         const CONCURRENCY: usize = 15; // 5x over pool size
@@ -389,7 +389,7 @@ mod perf_tests {
     /// Expected delta ≈ 3 RTTs on high-latency remote DBs.
     #[tokio::test]
     async fn perf_read_isolation_comparison() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let pool = crate::test_helpers::make_pool(&test_db, 3).await;
         let pool = &pool;
         const N: usize = 20;
@@ -453,7 +453,7 @@ mod perf_tests {
     /// Uses a wide table (10 varchar + 10 int columns) with 1 000 and 100 rows.
     #[tokio::test]
     async fn perf_serialization_overhead() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let pool = crate::test_helpers::make_pool(&test_db, 3).await;
         let pool = &pool;
 

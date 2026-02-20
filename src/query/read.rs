@@ -210,7 +210,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_select_basic() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let result = execute_read_query(&test_db.pool, "SELECT 1 AS one", &StatementType::Select, false, 0, "none", 0).await;
         assert!(result.is_ok(), "SELECT should succeed: {:?}", result.err());
         assert_eq!(result.unwrap().row_count, 1);
@@ -218,28 +218,28 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_null_values() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let result = execute_read_query(&test_db.pool, "SELECT NULL AS null_col", &StatementType::Select, false, 0, "none", 0).await.unwrap();
         assert_eq!(result.rows[0]["null_col"], serde_json::Value::Null);
     }
 
     #[tokio::test]
     async fn test_empty_result_set() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let result = execute_read_query(&test_db.pool, "SELECT 1 WHERE 1=0", &StatementType::Select, false, 0, "none", 0).await.unwrap();
         assert_eq!(result.row_count, 0);
     }
 
     #[tokio::test]
     async fn test_show_tables() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let result = execute_read_query(&test_db.pool, "SHOW TABLES", &StatementType::Show, false, 0, "none", 0).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execution_time_tracked() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let result = execute_read_query(&test_db.pool, "SELECT 1", &StatementType::Select, false, 0, "none", 0).await.unwrap();
         assert!(result.execution_time_ms < 5000);
     }

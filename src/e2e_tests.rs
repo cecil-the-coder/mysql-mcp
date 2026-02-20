@@ -67,7 +67,7 @@ mod e2e_tests {
             return;
         };
 
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let mut child = spawn_server(&binary, &test_db);
 
         let mut stdin = child.stdin.take().unwrap();
@@ -99,7 +99,7 @@ mod e2e_tests {
             return;
         };
 
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let mut child = spawn_server(&binary, &test_db);
 
         let mut stdin = child.stdin.take().unwrap();

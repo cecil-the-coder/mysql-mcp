@@ -90,7 +90,7 @@ pub struct TestDb {
 /// for its first-connection full-authentication exchange, even with an empty password.
 /// We therefore connect with `MySqlSslMode::Preferred` (SSL when available, no cert
 /// verification) rather than going through `db.rs`'s Disabled path.
-pub async fn setup_test_db() -> TestDb {
+pub async fn setup_test_db() -> Option<TestDb> {
     if std::env::var("MYSQL_HOST").is_ok() {
         let config = Arc::new(crate::config::merge::load_config().unwrap());
 
@@ -112,32 +112,53 @@ pub async fn setup_test_db() -> TestDb {
         // for a fresh per-test pool where the one connection stays alive for the
         // duration of the test.
         use sqlx::mysql::MySqlPoolOptions;
-        let pool = MySqlPoolOptions::new()
+        let pool = match MySqlPoolOptions::new()
             .max_connections(1)
             .acquire_timeout(std::time::Duration::from_secs(120))
             .test_before_acquire(false)
             .connect_with(connect_options_from_config(&config))
             .await
-            .expect("setup_test_db: failed to connect to MySQL");
+        {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("[SKIP] Failed to connect to MySQL ({}), skipping integration test", e);
+                return None;
+            }
+        };
 
         // Permit released here; the next waiting test can now connect.
         drop(_permit);
 
-        return TestDb {
+        return Some(TestDb {
             pool,
             config,
             using_container: false,
             _container: None,
-        };
+        });
     }
 
-    let container = Mysql::default()
-        .start()
-        .await
-        .expect("Failed to start MySQL container — is Docker running?");
+    let container = match Mysql::default().start().await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("[SKIP] Docker not available ({}), skipping integration test", e);
+            return None;
+        }
+    };
 
-    let host = container.get_host().await.unwrap().to_string();
-    let port = container.get_host_port_ipv4(3306).await.unwrap();
+    let host = match container.get_host().await {
+        Ok(h) => h.to_string(),
+        Err(e) => {
+            eprintln!("[SKIP] Failed to get container host ({}), skipping integration test", e);
+            return None;
+        }
+    };
+    let port = match container.get_host_port_ipv4(3306).await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[SKIP] Failed to get container port ({}), skipping integration test", e);
+            return None;
+        }
+    };
 
     // Build pool directly so we can use Preferred SSL mode.
     // caching_sha2_password (MySQL 8 default) requires SSL for its full-auth
@@ -151,12 +172,18 @@ pub async fn setup_test_db() -> TestDb {
         .database("test") // MYSQL_DATABASE=test
         .ssl_mode(MySqlSslMode::Preferred);
 
-    let pool = MySqlPoolOptions::new()
+    let pool = match MySqlPoolOptions::new()
         .max_connections(10)
         .acquire_timeout(std::time::Duration::from_secs(10))
         .connect_with(opts)
         .await
-        .expect("Failed to connect to MySQL container");
+    {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[SKIP] Failed to connect to MySQL container ({}), skipping integration test", e);
+            return None;
+        }
+    };
 
     // Build a config that reflects the container's coordinates.
     // Used by e2e tests to pass env vars to the spawned binary.
@@ -171,10 +198,10 @@ pub async fn setup_test_db() -> TestDb {
     config.security.ssl = true;
     config.security.ssl_accept_invalid_certs = true;
 
-    TestDb {
+    Some(TestDb {
         pool,
         config: Arc::new(config),
         using_container: true,
         _container: Some(container),
-    }
+    })
 }

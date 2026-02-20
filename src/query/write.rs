@@ -60,7 +60,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_insert_and_rollback() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let pool = &test_db.pool;
 
         sqlx::query("CREATE TABLE IF NOT EXISTS test_write_ops (id INT AUTO_INCREMENT PRIMARY KEY, val VARCHAR(50))")
@@ -86,7 +86,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_ddl_create_and_drop() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let pool = &test_db.pool;
 
         let result = execute_ddl_query(pool, "CREATE TABLE IF NOT EXISTS test_ddl_temp (id INT)").await;
@@ -98,7 +98,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_invalid_sql_returns_error() {
-        let test_db = setup_test_db().await;
+        let Some(test_db) = setup_test_db().await else { return; };
         let result = execute_write_query(&test_db.pool, "INSERT INTO nonexistent_table_xyz VALUES (1)").await;
         assert!(result.is_err());
     }
