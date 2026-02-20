@@ -1,0 +1,485 @@
+use anyhow::{bail, Result};
+use sqlparser::ast::{FromTable, ObjectName, Statement, TableFactor, Use};
+use sqlparser::dialect::MySqlDialect;
+use sqlparser::parser::Parser;
+
+/// The type of SQL statement parsed
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatementType {
+    Select,
+    Insert,
+    Update,
+    Delete,
+    Create,
+    Alter,
+    Drop,
+    Truncate,
+    Use,
+    Show,
+    /// EXPLAIN, DESCRIBE, etc. - read-only informational
+    Explain,
+    /// SET statements
+    Set,
+    /// Other statements we don't explicitly categorize
+    Other(String),
+}
+
+impl StatementType {
+    /// Returns true if this is a read-only statement (SELECT, SHOW, EXPLAIN, etc.)
+    pub fn is_read_only(&self) -> bool {
+        matches!(
+            self,
+            StatementType::Select | StatementType::Show | StatementType::Explain
+        )
+    }
+
+    /// Returns true if this is a write statement (INSERT, UPDATE, DELETE)
+    pub fn is_write(&self) -> bool {
+        matches!(
+            self,
+            StatementType::Insert | StatementType::Update | StatementType::Delete
+        )
+    }
+
+    /// Returns true if this is a DDL statement
+    pub fn is_ddl(&self) -> bool {
+        matches!(
+            self,
+            StatementType::Create
+                | StatementType::Alter
+                | StatementType::Drop
+                | StatementType::Truncate
+        )
+    }
+
+    /// Human-readable name for error messages
+    pub fn name(&self) -> &str {
+        match self {
+            StatementType::Select => "SELECT",
+            StatementType::Insert => "INSERT",
+            StatementType::Update => "UPDATE",
+            StatementType::Delete => "DELETE",
+            StatementType::Create => "CREATE",
+            StatementType::Alter => "ALTER",
+            StatementType::Drop => "DROP",
+            StatementType::Truncate => "TRUNCATE",
+            StatementType::Use => "USE",
+            StatementType::Show => "SHOW",
+            StatementType::Explain => "EXPLAIN",
+            StatementType::Set => "SET",
+            StatementType::Other(s) => s.as_str(),
+        }
+    }
+}
+
+/// Result of parsing a SQL statement
+#[derive(Debug, Clone)]
+pub struct ParsedStatement {
+    pub statement_type: StatementType,
+    /// The target schema/database extracted from the statement (if applicable)
+    pub target_schema: Option<String>,
+}
+
+/// Parse a SQL string and return the statement type and target schema.
+/// Returns an error if the SQL is invalid or cannot be parsed.
+pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
+    let dialect = MySqlDialect {};
+    let statements = Parser::parse_sql(&dialect, sql)
+        .map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
+
+    if statements.is_empty() {
+        bail!("Empty SQL statement");
+    }
+
+    // We only handle the first statement
+    let stmt = &statements[0];
+    classify_statement(stmt)
+}
+
+fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
+    let (statement_type, target_schema) = match stmt {
+        Statement::Query(_) => (StatementType::Select, None),
+
+        Statement::Insert(insert) => {
+            let schema = extract_schema_from_object_name(&insert.table_name);
+            (StatementType::Insert, schema)
+        }
+
+        Statement::Update { table, .. } => {
+            let schema = extract_schema_from_table_factor(&table.relation);
+            (StatementType::Update, schema)
+        }
+
+        Statement::Delete(delete) => {
+            let schema = match &delete.from {
+                FromTable::WithFromKeyword(tables) | FromTable::WithoutKeyword(tables) => tables
+                    .first()
+                    .and_then(|t| extract_schema_from_table_factor(&t.relation)),
+            };
+            (StatementType::Delete, schema)
+        }
+
+        Statement::CreateTable(ct) => {
+            let schema = extract_schema_from_object_name(&ct.name);
+            (StatementType::Create, schema)
+        }
+
+        Statement::CreateDatabase { db_name, .. } => {
+            let schema = Some(db_name.to_string());
+            (StatementType::Create, schema)
+        }
+
+        Statement::AlterTable { name, .. } => {
+            let schema = extract_schema_from_object_name(name);
+            (StatementType::Alter, schema)
+        }
+
+        Statement::Drop { names, .. } => {
+            let schema = names
+                .first()
+                .and_then(|n| extract_schema_from_object_name(n));
+            (StatementType::Drop, schema)
+        }
+
+        Statement::Truncate { table_names, .. } => {
+            let schema = table_names
+                .first()
+                .and_then(|t| extract_schema_from_object_name(&t.name));
+            (StatementType::Truncate, schema)
+        }
+
+        Statement::Use(use_stmt) => {
+            let schema = match use_stmt {
+                Use::Object(name) => Some(name.to_string()),
+                Use::Database(name) => Some(name.to_string()),
+                Use::Schema(name) => Some(name.to_string()),
+                Use::Catalog(name) => Some(name.to_string()),
+                _ => None,
+            };
+            (StatementType::Use, schema)
+        }
+
+        Statement::ShowTables { show_options, .. } => {
+            let schema = show_options
+                .show_in
+                .as_ref()
+                .and_then(|si| si.parent_name.as_ref())
+                .map(|n| n.to_string());
+            (StatementType::Show, schema)
+        }
+
+        Statement::ShowColumns { show_options, .. } => {
+            let schema = show_options
+                .show_in
+                .as_ref()
+                .and_then(|si| si.parent_name.as_ref())
+                .map(|n| n.to_string());
+            (StatementType::Show, schema)
+        }
+
+        Statement::ShowDatabases { .. }
+        | Statement::ShowSchemas { .. }
+        | Statement::ShowViews { .. } => (StatementType::Show, None),
+
+        Statement::ShowCreate { obj_name, .. } => {
+            let schema = extract_schema_from_object_name(obj_name);
+            (StatementType::Show, schema)
+        }
+
+        Statement::Explain { .. } => (StatementType::Explain, None),
+
+        Statement::SetVariable { .. }
+        | Statement::SetNames { .. }
+        | Statement::SetNamesDefault { .. }
+        | Statement::SetTimeZone { .. } => (StatementType::Set, None),
+
+        other => {
+            let name = format!("{:?}", std::mem::discriminant(other));
+            (StatementType::Other(name), None)
+        }
+    };
+
+    Ok(ParsedStatement {
+        statement_type,
+        target_schema,
+    })
+}
+
+fn extract_schema_from_object_name(name: &ObjectName) -> Option<String> {
+    // MySQL fully-qualified: schema.table has 2 parts; the first is schema
+    if name.0.len() >= 2 {
+        Some(name.0[0].value.clone())
+    } else {
+        None
+    }
+}
+
+fn extract_schema_from_table_factor(factor: &TableFactor) -> Option<String> {
+    match factor {
+        TableFactor::Table { name, .. } => extract_schema_from_object_name(name),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_select() {
+        let p = parse_sql("SELECT * FROM users").unwrap();
+        assert_eq!(p.statement_type, StatementType::Select);
+        assert!(p.statement_type.is_read_only());
+    }
+
+    #[test]
+    fn test_select_with_schema() {
+        let p = parse_sql("SELECT * FROM mydb.users").unwrap();
+        assert_eq!(p.statement_type, StatementType::Select);
+        // schema extraction is from INSERT/UPDATE/DELETE/DDL, not SELECT
+    }
+
+    #[test]
+    fn test_insert() {
+        let p = parse_sql("INSERT INTO mydb.users (id, name) VALUES (1, 'Alice')").unwrap();
+        assert_eq!(p.statement_type, StatementType::Insert);
+        assert_eq!(p.target_schema, Some("mydb".to_string()));
+        assert!(p.statement_type.is_write());
+    }
+
+    #[test]
+    fn test_update() {
+        let p = parse_sql("UPDATE mydb.users SET name = 'Bob' WHERE id = 1").unwrap();
+        assert_eq!(p.statement_type, StatementType::Update);
+        assert_eq!(p.target_schema, Some("mydb".to_string()));
+    }
+
+    #[test]
+    fn test_delete() {
+        let p = parse_sql("DELETE FROM mydb.orders WHERE id = 5").unwrap();
+        assert_eq!(p.statement_type, StatementType::Delete);
+        assert_eq!(p.target_schema, Some("mydb".to_string()));
+    }
+
+    #[test]
+    fn test_create_table() {
+        let p = parse_sql("CREATE TABLE mydb.t (id INT)").unwrap();
+        assert_eq!(p.statement_type, StatementType::Create);
+        assert!(p.statement_type.is_ddl());
+        assert_eq!(p.target_schema, Some("mydb".to_string()));
+    }
+
+    #[test]
+    fn test_alter_table() {
+        let p = parse_sql("ALTER TABLE mydb.users ADD COLUMN age INT").unwrap();
+        assert_eq!(p.statement_type, StatementType::Alter);
+        assert_eq!(p.target_schema, Some("mydb".to_string()));
+    }
+
+    #[test]
+    fn test_drop_table() {
+        let p = parse_sql("DROP TABLE mydb.users").unwrap();
+        assert_eq!(p.statement_type, StatementType::Drop);
+        assert_eq!(p.target_schema, Some("mydb".to_string()));
+    }
+
+    #[test]
+    fn test_truncate() {
+        let p = parse_sql("TRUNCATE TABLE mydb.logs").unwrap();
+        assert_eq!(p.statement_type, StatementType::Truncate);
+        assert_eq!(p.target_schema, Some("mydb".to_string()));
+    }
+
+    #[test]
+    fn test_use() {
+        let p = parse_sql("USE mydb").unwrap();
+        assert_eq!(p.statement_type, StatementType::Use);
+    }
+
+    #[test]
+    fn test_show_tables() {
+        let p = parse_sql("SHOW TABLES").unwrap();
+        assert_eq!(p.statement_type, StatementType::Show);
+        assert!(p.statement_type.is_read_only());
+    }
+
+    #[test]
+    fn test_explain() {
+        let p = parse_sql("EXPLAIN SELECT * FROM users").unwrap();
+        assert_eq!(p.statement_type, StatementType::Explain);
+        assert!(p.statement_type.is_read_only());
+    }
+
+    #[test]
+    fn test_set_variable() {
+        let p = parse_sql("SET @x = 1").unwrap();
+        assert_eq!(p.statement_type, StatementType::Set);
+    }
+
+    #[test]
+    fn test_empty_sql() {
+        assert!(parse_sql("").is_err());
+    }
+
+    #[test]
+    fn test_is_ddl() {
+        assert!(StatementType::Create.is_ddl());
+        assert!(StatementType::Alter.is_ddl());
+        assert!(StatementType::Drop.is_ddl());
+        assert!(StatementType::Truncate.is_ddl());
+        assert!(!StatementType::Select.is_ddl());
+    }
+
+    #[test]
+    fn test_names() {
+        assert_eq!(StatementType::Select.name(), "SELECT");
+        assert_eq!(StatementType::Insert.name(), "INSERT");
+        assert_eq!(StatementType::Other("FOO".to_string()).name(), "FOO");
+    }
+
+    #[test]
+    fn test_insert_no_schema() {
+        let parsed = parse_sql("INSERT INTO users (name) VALUES ('test')").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Insert);
+        assert!(parsed.target_schema.is_none());
+    }
+
+    #[test]
+    fn test_update_no_schema() {
+        let parsed = parse_sql("UPDATE users SET name='new' WHERE id=1").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Update);
+        assert!(parsed.target_schema.is_none());
+    }
+
+    #[test]
+    fn test_delete_no_schema() {
+        let parsed = parse_sql("DELETE FROM users WHERE id=1").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Delete);
+        assert!(parsed.target_schema.is_none());
+    }
+
+    #[test]
+    fn test_create_table_no_schema() {
+        let parsed = parse_sql("CREATE TABLE foo (id INT PRIMARY KEY)").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Create);
+        assert!(parsed.target_schema.is_none());
+    }
+
+    #[test]
+    fn test_alter_table_no_schema() {
+        let parsed = parse_sql("ALTER TABLE foo ADD COLUMN bar VARCHAR(255)").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Alter);
+        assert!(parsed.target_schema.is_none());
+    }
+
+    #[test]
+    fn test_drop_table_no_schema() {
+        let parsed = parse_sql("DROP TABLE foo").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Drop);
+        assert!(parsed.target_schema.is_none());
+    }
+
+    #[test]
+    fn test_truncate_no_schema() {
+        let parsed = parse_sql("TRUNCATE TABLE foo").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Truncate);
+        assert!(parsed.target_schema.is_none());
+    }
+
+    #[test]
+    fn test_select_no_schema() {
+        let parsed = parse_sql("SELECT * FROM users").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Select);
+        assert!(parsed.target_schema.is_none());
+    }
+
+    #[test]
+    fn test_invalid_sql() {
+        let result = parse_sql("NOT VALID SQL !!!");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_schema_detection_qualified() {
+        let parsed = parse_sql("INSERT INTO mydb.users (name) VALUES ('test')").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Insert);
+        assert_eq!(parsed.target_schema, Some("mydb".to_string()));
+    }
+
+    #[test]
+    fn test_is_read_only() {
+        assert!(StatementType::Select.is_read_only());
+        assert!(StatementType::Show.is_read_only());
+        assert!(StatementType::Explain.is_read_only());
+        assert!(!StatementType::Insert.is_read_only());
+        assert!(!StatementType::Create.is_read_only());
+        assert!(!StatementType::Update.is_read_only());
+        assert!(!StatementType::Delete.is_read_only());
+    }
+
+    #[test]
+    fn test_is_write() {
+        assert!(StatementType::Insert.is_write());
+        assert!(StatementType::Update.is_write());
+        assert!(StatementType::Delete.is_write());
+        assert!(!StatementType::Select.is_write());
+        assert!(!StatementType::Show.is_write());
+        assert!(!StatementType::Create.is_write());
+    }
+
+    #[test]
+    fn test_is_ddl_comprehensive() {
+        assert!(StatementType::Create.is_ddl());
+        assert!(StatementType::Alter.is_ddl());
+        assert!(StatementType::Drop.is_ddl());
+        assert!(StatementType::Truncate.is_ddl());
+        assert!(!StatementType::Select.is_ddl());
+        assert!(!StatementType::Insert.is_ddl());
+        assert!(!StatementType::Update.is_ddl());
+        assert!(!StatementType::Delete.is_ddl());
+        assert!(!StatementType::Show.is_ddl());
+    }
+
+    #[test]
+    fn test_use_database() {
+        // USE is supported - should parse as Use or similar
+        let result = parse_sql("USE mydb");
+        if let Ok(parsed) = result {
+            assert!(matches!(parsed.statement_type, StatementType::Use | StatementType::Other(_)));
+        }
+        // If err, that's also acceptable - just don't panic
+    }
+
+    #[test]
+    fn test_show_databases() {
+        let parsed = parse_sql("SHOW DATABASES").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Show);
+        assert!(parsed.statement_type.is_read_only());
+    }
+
+    #[test]
+    fn test_explain_select() {
+        let parsed = parse_sql("EXPLAIN SELECT * FROM users WHERE id = 1").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Explain);
+        assert!(parsed.statement_type.is_read_only());
+    }
+
+    #[test]
+    fn test_set_statement() {
+        let parsed = parse_sql("SET @x = 1").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Set);
+    }
+
+    #[test]
+    fn test_create_database() {
+        let parsed = parse_sql("CREATE DATABASE mydb").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Create);
+    }
+
+    #[test]
+    fn test_drop_qualified_schema() {
+        let parsed = parse_sql("DROP TABLE mydb.users").unwrap();
+        assert_eq!(parsed.statement_type, StatementType::Drop);
+        assert_eq!(parsed.target_schema, Some("mydb".to_string()));
+    }
+}

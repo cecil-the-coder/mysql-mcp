@@ -1,0 +1,105 @@
+# mysql-mcp example configuration file
+# Copy this to mysql-mcp.toml and customize as needed.
+# Environment variables take precedence over values set here.
+
+[connection]
+# MySQL host (default: localhost)
+host = "localhost"
+
+# MySQL port (default: 3306)
+port = 3306
+
+# Unix socket path (takes precedence over host:port when set)
+# socket = "/var/run/mysqld/mysqld.sock"
+
+# MySQL user (default: root)
+user = "root"
+
+# MySQL password
+password = ""
+
+# Target database (leave empty for multi-database mode)
+# database = "myapp"
+
+# Full MySQL connection URL (overrides individual connection fields when set)
+# connection_string = "mysql://user:pass@host:3306/database"
+
+[pool]
+# Maximum number of connections in the pool (default: 10)
+size = 10
+
+# Maximum time (ms) to wait for a query to complete (default: 30000)
+query_timeout_ms = 30000
+
+# Maximum time (ms) to wait for a connection to be established (default: 10000)
+connect_timeout_ms = 10000
+
+# Maximum number of queries to queue waiting for a connection (default: 100)
+queue_limit = 100
+
+# How long (seconds) to cache schema introspection results (default: 60)
+# Set to 0 to disable caching
+cache_ttl_secs = 60
+
+[security]
+# Allow INSERT operations (default: false)
+allow_insert = false
+
+# Allow UPDATE operations (default: false)
+allow_update = false
+
+# Allow DELETE operations (default: false)
+allow_delete = false
+
+# Allow DDL operations (CREATE, ALTER, DROP, TRUNCATE) (default: false)
+allow_ddl = false
+
+# Disable read-only transaction wrapper for DDL (MySQL requires this for DDL)
+# Only needed when allow_ddl = true (default: false)
+disable_read_only_transactions = false
+
+# Require SSL for MySQL connections (default: false)
+ssl = false
+
+# Allow write operations when operating in multi-database mode (no database set)
+# (default: false)
+multi_db_write_mode = false
+
+# Per-schema permission overrides
+# These take precedence over the global settings above.
+# Useful for allowing writes to one database while keeping others read-only.
+#
+# Example: allow writes to 'app_db' but keep everything else read-only
+# [security.schema_permissions.app_db]
+# allow_insert = true
+# allow_update = true
+# allow_delete = false
+# allow_ddl = false
+
+[remote]
+# Enable HTTP remote transport mode (default: false)
+# When true, serves MCP over HTTP instead of stdio
+enabled = false
+
+# Secret key for Bearer token authentication in remote mode
+# secret_key = "your-secret-key-here"
+
+# Port to listen on in remote mode (default: 3000)
+port = 3000
+
+[monitoring]
+# Enable request logging (default: true)
+logging = true
+
+# Log level: error, warn, info, debug, trace (default: info)
+log_level = "info"
+
+# Enable Prometheus metrics (default: false)
+metrics_enabled = false
+
+# MySQL session timezone (optional)
+# Examples: "UTC", "+08:00", "America/New_York"
+# timezone = "UTC"
+
+# Return date/datetime values as strings instead of native types (default: false)
+date_strings = false

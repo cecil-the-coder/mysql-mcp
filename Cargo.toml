@@ -1,0 +1,27 @@
+[package]
+name = "mysql-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MySQL MCP server - expose MySQL databases via the Model Context Protocol"
+license = "MIT"
+
+[[bin]]
+name = "mysql-mcp"
+path = "src/main.rs"
+
+[dependencies]
+rmcp = { version = "0.16", features = ["server", "transport-io"] }
+sqlx = { version = "0.8", features = ["mysql", "runtime-tokio", "tls-rustls", "json", "chrono", "macros"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+dotenv = "0.15"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
+sqlparser = { version = "0.53", features = [] }
+axum = "0.8"
+tower = "0.5"
