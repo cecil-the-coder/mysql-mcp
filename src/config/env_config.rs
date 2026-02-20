@@ -34,6 +34,11 @@ pub fn load_env_config() -> EnvConfig {
         timezone: std::env::var("MYSQL_TIMEZONE").ok(),
         date_strings: parse_bool_env("MYSQL_DATE_STRINGS"),
         schema_permissions: parse_schema_permissions(),
+        performance_hints: std::env::var("MYSQL_PERFORMANCE_HINTS").ok(),
+        slow_query_threshold_ms: std::env::var("MYSQL_SLOW_QUERY_THRESHOLD_MS").ok().and_then(|v| v.parse().ok()),
+        warmup_connections: std::env::var("MYSQL_POOL_WARMUP").ok().and_then(|v| v.parse().ok()),
+        statement_cache_capacity: std::env::var("MYSQL_STATEMENT_CACHE_CAPACITY").ok().and_then(|v| v.parse().ok()),
+        max_rows: std::env::var("MYSQL_MAX_ROWS").ok().and_then(|v| v.parse().ok()),
     }
 }
 
@@ -95,6 +100,11 @@ pub struct EnvConfig {
     pub timezone: Option<String>,
     pub date_strings: Option<bool>,
     pub schema_permissions: HashMap<String, SchemaPermissions>,
+    pub performance_hints: Option<String>,
+    pub slow_query_threshold_ms: Option<u64>,
+    pub warmup_connections: Option<u32>,
+    pub statement_cache_capacity: Option<u32>,
+    pub max_rows: Option<u32>,
 }
 
 impl EnvConfig {
@@ -131,6 +141,11 @@ impl EnvConfig {
         if let Some(v) = self.metrics_enabled { base.monitoring.metrics_enabled = v; }
         if let Some(v) = &self.timezone { base.timezone = Some(v.clone()); }
         if let Some(v) = self.date_strings { base.date_strings = v; }
+        if let Some(v) = &self.performance_hints { base.pool.performance_hints = v.clone(); }
+        if let Some(v) = self.slow_query_threshold_ms { base.pool.slow_query_threshold_ms = v; }
+        if let Some(v) = self.warmup_connections { base.pool.warmup_connections = v; }
+        if let Some(v) = self.statement_cache_capacity { base.pool.statement_cache_capacity = v; }
+        if let Some(v) = self.max_rows { base.pool.max_rows = v; }
         base
     }
 }

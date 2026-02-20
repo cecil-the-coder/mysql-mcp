@@ -43,6 +43,11 @@ pub struct PoolConfig {
     pub queue_limit: u32,
     pub cache_ttl_secs: u64,
     pub readonly_transaction: bool,
+    pub performance_hints: String,
+    pub slow_query_threshold_ms: u64,
+    pub warmup_connections: u32,
+    pub statement_cache_capacity: u32,
+    pub max_rows: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -121,6 +126,11 @@ impl Default for PoolConfig {
             queue_limit: 100,
             cache_ttl_secs: 60,
             readonly_transaction: false,
+            performance_hints: "none".to_string(),
+            slow_query_threshold_ms: 500,
+            warmup_connections: 1,
+            statement_cache_capacity: 100,
+            max_rows: 1000,
         }
     }
 }
