@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use sqlx::MySqlPool;
@@ -57,44 +59,151 @@ fn is_col_str_opt(row: &sqlx::mysql::MySqlRow, col: &str) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
-pub struct SchemaIntrospector {
+/// Shared inner state for SchemaIntrospector, kept behind Arc so it can be
+/// moved into background tokio::spawn tasks.
+struct Inner {
     pool: Arc<MySqlPool>,
     cache_ttl: Duration,
     tables_cache: Mutex<Option<CacheEntry<Vec<TableInfo>>>>,
-    columns_cache: Mutex<std::collections::HashMap<String, CacheEntry<Vec<ColumnInfo>>>>,
+    columns_cache: Mutex<HashMap<String, CacheEntry<Vec<ColumnInfo>>>>,
+    /// Prevents concurrent background refreshes of the tables cache.
+    tables_refreshing: AtomicBool,
+    /// Tracks which column cache keys are currently being refreshed in the background.
+    columns_refreshing: Mutex<HashSet<String>>,
+}
+
+pub struct SchemaIntrospector {
+    inner: Arc<Inner>,
 }
 
 impl SchemaIntrospector {
     pub fn new(pool: Arc<MySqlPool>, cache_ttl_secs: u64) -> Self {
         Self {
-            pool,
-            cache_ttl: Duration::from_secs(cache_ttl_secs),
-            tables_cache: Mutex::new(None),
-            columns_cache: Mutex::new(std::collections::HashMap::new()),
+            inner: Arc::new(Inner {
+                pool,
+                cache_ttl: Duration::from_secs(cache_ttl_secs),
+                tables_cache: Mutex::new(None),
+                columns_cache: Mutex::new(HashMap::new()),
+                tables_refreshing: AtomicBool::new(false),
+                columns_refreshing: Mutex::new(HashSet::new()),
+            }),
         }
     }
 
     pub async fn list_tables(&self, database: Option<&str>) -> Result<Vec<TableInfo>> {
+        // Check cache first.
         {
-            let cache = self.tables_cache.lock().await;
+            let cache = self.inner.tables_cache.lock().await;
             if let Some(entry) = &*cache {
-                if entry.fetched_at.elapsed() < self.cache_ttl {
+                if entry.fetched_at.elapsed() < self.inner.cache_ttl {
+                    // Cache hit within TTL: return immediately.
                     return Ok(entry.data.clone());
+                }
+                // Cache is stale but has a value.
+                // If TTL > 0: stale-while-revalidate — return stale immediately,
+                // spawn a background refresh.
+                // If TTL == 0: always do a synchronous refresh (no stale serving).
+                if self.inner.cache_ttl > Duration::ZERO {
+                    let stale_data = entry.data.clone();
+                    // Only one background refresh at a time.
+                    if !self.inner.tables_refreshing.swap(true, Ordering::AcqRel) {
+                        let inner = Arc::clone(&self.inner);
+                        let owned_database = database.map(|s| s.to_owned());
+                        tokio::spawn(async move {
+                            let db_ref = owned_database.as_deref();
+                            match Inner::fetch_tables(&inner.pool, db_ref).await {
+                                Ok(tables) => {
+                                    let mut cache = inner.tables_cache.lock().await;
+                                    *cache = Some(CacheEntry {
+                                        data: tables,
+                                        fetched_at: Instant::now(),
+                                    });
+                                }
+                                Err(_) => {
+                                    // Leave the stale cache in place on error.
+                                }
+                            }
+                            inner.tables_refreshing.store(false, Ordering::Release);
+                        });
+                    }
+                    return Ok(stale_data);
                 }
             }
         }
 
-        let tables = self.fetch_tables(database).await?;
+        // Cold start (no cached value) or TTL==0 (always re-fetch): block synchronously.
+        let tables = Inner::fetch_tables(&self.inner.pool, database).await?;
 
         {
-            let mut cache = self.tables_cache.lock().await;
+            let mut cache = self.inner.tables_cache.lock().await;
             *cache = Some(CacheEntry { data: tables.clone(), fetched_at: Instant::now() });
         }
 
         Ok(tables)
     }
 
-    async fn fetch_tables(&self, database: Option<&str>) -> Result<Vec<TableInfo>> {
+    pub async fn get_columns(&self, table_name: &str, database: Option<&str>) -> Result<Vec<ColumnInfo>> {
+        let cache_key = format!("{}.{}", database.unwrap_or(""), table_name);
+
+        {
+            let cache = self.inner.columns_cache.lock().await;
+            if let Some(entry) = cache.get(&cache_key) {
+                if entry.fetched_at.elapsed() < self.inner.cache_ttl {
+                    // Cache hit within TTL: return immediately.
+                    return Ok(entry.data.clone());
+                }
+                // Cache is stale but has a value.
+                // If TTL > 0: stale-while-revalidate — return stale immediately,
+                // spawn a background refresh.
+                // If TTL == 0: always do a synchronous refresh (no stale serving).
+                if self.inner.cache_ttl > Duration::ZERO {
+                    let stale_data = entry.data.clone();
+                    // Only one background refresh per cache key at a time.
+                    let mut refreshing = self.inner.columns_refreshing.lock().await;
+                    if !refreshing.contains(&cache_key) {
+                        refreshing.insert(cache_key.clone());
+                        drop(refreshing); // release lock before spawning
+                        let inner = Arc::clone(&self.inner);
+                        let owned_table = table_name.to_owned();
+                        let owned_database = database.map(|s| s.to_owned());
+                        let owned_key = cache_key.clone();
+                        tokio::spawn(async move {
+                            let db_ref = owned_database.as_deref();
+                            match Inner::fetch_columns(&inner.pool, &owned_table, db_ref).await {
+                                Ok(columns) => {
+                                    let mut cache = inner.columns_cache.lock().await;
+                                    cache.insert(owned_key.clone(), CacheEntry {
+                                        data: columns,
+                                        fetched_at: Instant::now(),
+                                    });
+                                }
+                                Err(_) => {
+                                    // Leave the stale cache in place on error.
+                                }
+                            }
+                            let mut refreshing = inner.columns_refreshing.lock().await;
+                            refreshing.remove(&owned_key);
+                        });
+                    }
+                    return Ok(stale_data);
+                }
+            }
+        }
+
+        // Cold start (no cached value) or TTL==0 (always re-fetch): block synchronously.
+        let columns = Inner::fetch_columns(&self.inner.pool, table_name, database).await?;
+
+        {
+            let mut cache = self.inner.columns_cache.lock().await;
+            cache.insert(cache_key, CacheEntry { data: columns.clone(), fetched_at: Instant::now() });
+        }
+
+        Ok(columns)
+    }
+}
+
+impl Inner {
+    async fn fetch_tables(pool: &MySqlPool, database: Option<&str>) -> Result<Vec<TableInfo>> {
         let db_filter = database
             .map(|d| format!("AND table_schema = '{}'", d))
             .unwrap_or_else(|| "AND table_schema NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')".to_string());
@@ -114,7 +223,7 @@ impl SchemaIntrospector {
             db_filter
         );
 
-        let rows = sqlx::query(&sql).fetch_all(self.pool.as_ref()).await?;
+        let rows = sqlx::query(&sql).fetch_all(pool).await?;
 
         let tables = rows.iter().map(|row| {
             use sqlx::Row;
@@ -133,29 +242,7 @@ impl SchemaIntrospector {
         Ok(tables)
     }
 
-    pub async fn get_columns(&self, table_name: &str, database: Option<&str>) -> Result<Vec<ColumnInfo>> {
-        let cache_key = format!("{}.{}", database.unwrap_or(""), table_name);
-
-        {
-            let cache = self.columns_cache.lock().await;
-            if let Some(entry) = cache.get(&cache_key) {
-                if entry.fetched_at.elapsed() < self.cache_ttl {
-                    return Ok(entry.data.clone());
-                }
-            }
-        }
-
-        let columns = self.fetch_columns(table_name, database).await?;
-
-        {
-            let mut cache = self.columns_cache.lock().await;
-            cache.insert(cache_key, CacheEntry { data: columns.clone(), fetched_at: Instant::now() });
-        }
-
-        Ok(columns)
-    }
-
-    async fn fetch_columns(&self, table_name: &str, database: Option<&str>) -> Result<Vec<ColumnInfo>> {
+    async fn fetch_columns(pool: &MySqlPool, table_name: &str, database: Option<&str>) -> Result<Vec<ColumnInfo>> {
         let db_filter = database
             .map(|d| format!("AND TABLE_SCHEMA = '{}'", d))
             .unwrap_or_default();
@@ -175,7 +262,7 @@ impl SchemaIntrospector {
             table_name, db_filter
         );
 
-        let rows = sqlx::query(&sql).fetch_all(self.pool.as_ref()).await?;
+        let rows = sqlx::query(&sql).fetch_all(pool).await?;
 
         let columns = rows.iter().map(|row| {
             let nullable_str = is_col_str(row, "is_nullable");
