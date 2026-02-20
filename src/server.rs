@@ -314,6 +314,36 @@ impl ServerHandler for McpServer {
                     self.config.pool.slow_query_threshold_ms,
                 ).await {
                     Ok(result) => {
+                        // Generate schema-aware index suggestions when EXPLAIN detected a full
+                        // table scan with no index used.
+                        let mut suggestions: Vec<String> = vec![];
+                        if let Some(ref plan) = result.plan {
+                            let is_full_scan = plan.get("full_table_scan")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let no_index = plan.get("index_used")
+                                .map(|v| v.is_null())
+                                .unwrap_or(true);
+                            if is_full_scan && no_index {
+                                let where_cols = crate::sql_parser::extract_where_columns(&parsed);
+                                if !where_cols.is_empty() {
+                                    if let Some(ref tname) = parsed.target_table {
+                                        let db = self.config.connection.database.as_deref();
+                                        if let Ok(indexed_cols) = self.introspector.list_indexed_columns(tname, db).await {
+                                            for col in &where_cols {
+                                                if !indexed_cols.iter().any(|ic| ic.eq_ignore_ascii_case(col)) {
+                                                    suggestions.push(format!(
+                                                        "Column `{}` in WHERE clause on table `{}` has no index. Consider: CREATE INDEX idx_{}_{} ON {}({});",
+                                                        col, tname, tname, col, tname, col
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         let mut output = json!({
                             "rows": result.rows,
                             "row_count": result.row_count,
@@ -328,6 +358,9 @@ impl ServerHandler for McpServer {
                         }
                         if let Some(plan) = result.plan {
                             output["plan"] = plan;
+                        }
+                        if !suggestions.is_empty() {
+                            output["suggestions"] = json!(suggestions);
                         }
                         Ok(CallToolResult::success(vec![
                             Content::text(serde_json::to_string_pretty(&output).unwrap_or_default()),

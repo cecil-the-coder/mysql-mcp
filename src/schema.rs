@@ -142,6 +142,26 @@ impl SchemaIntrospector {
         Ok(tables)
     }
 
+    /// Return all columns that have at least one index on the given table.
+    /// Runs `SHOW INDEX FROM {table}` (qualified with database if provided).
+    /// No caching — this is only called when EXPLAIN already detected a problem.
+    pub async fn list_indexed_columns(&self, table: &str, database: Option<&str>) -> Result<Vec<String>> {
+        let qualified = match database {
+            Some(db) => format!("`{}`.`{}`", db, table),
+            None => format!("`{}`", table),
+        };
+        let sql = format!("SHOW INDEX FROM {}", qualified);
+        let rows = sqlx::query(&sql).fetch_all(self.inner.pool.as_ref()).await?;
+        let mut cols: Vec<String> = Vec::new();
+        for row in &rows {
+            let col_name = is_col_str(row, "Column_name");
+            if !col_name.is_empty() && !cols.iter().any(|c: &String| c.eq_ignore_ascii_case(&col_name)) {
+                cols.push(col_name);
+            }
+        }
+        Ok(cols)
+    }
+
     pub async fn get_columns(&self, table_name: &str, database: Option<&str>) -> Result<Vec<ColumnInfo>> {
         let cache_key = format!("{}.{}", database.unwrap_or(""), table_name);
 

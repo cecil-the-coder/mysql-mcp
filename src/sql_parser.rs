@@ -2,6 +2,7 @@ use anyhow::{bail, Result};
 use sqlparser::ast::{Expr, FromTable, ObjectName, Query, Select, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins, Use};
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;
+use std::collections::HashSet;
 
 /// The type of SQL statement parsed
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +79,8 @@ pub struct ParsedStatement {
     pub statement_type: StatementType,
     /// The target schema/database extracted from the statement (if applicable)
     pub target_schema: Option<String>,
+    /// The primary FROM table name for SELECT statements (if extractable)
+    pub target_table: Option<String>,
     /// The original SQL string (used for heuristic-based analysis)
     pub sql: String,
 }
@@ -99,17 +102,20 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
 }
 
 fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedStatement> {
-    let (statement_type, target_schema) = match stmt {
-        Statement::Query(_) => (StatementType::Select, None),
+    let (statement_type, target_schema, target_table) = match stmt {
+        Statement::Query(query) => {
+            let tname = extract_first_from_table_name(query);
+            (StatementType::Select, None, tname)
+        }
 
         Statement::Insert(insert) => {
             let schema = extract_schema_from_object_name(&insert.table_name);
-            (StatementType::Insert, schema)
+            (StatementType::Insert, schema, None)
         }
 
         Statement::Update { table, .. } => {
             let schema = extract_schema_from_table_factor(&table.relation);
-            (StatementType::Update, schema)
+            (StatementType::Update, schema, None)
         }
 
         Statement::Delete(delete) => {
@@ -118,36 +124,36 @@ fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedStatement> {
                     .first()
                     .and_then(|t| extract_schema_from_table_factor(&t.relation)),
             };
-            (StatementType::Delete, schema)
+            (StatementType::Delete, schema, None)
         }
 
         Statement::CreateTable(ct) => {
             let schema = extract_schema_from_object_name(&ct.name);
-            (StatementType::Create, schema)
+            (StatementType::Create, schema, None)
         }
 
         Statement::CreateDatabase { db_name, .. } => {
             let schema = Some(db_name.to_string());
-            (StatementType::Create, schema)
+            (StatementType::Create, schema, None)
         }
 
         Statement::AlterTable { name, .. } => {
             let schema = extract_schema_from_object_name(name);
-            (StatementType::Alter, schema)
+            (StatementType::Alter, schema, None)
         }
 
         Statement::Drop { names, .. } => {
             let schema = names
                 .first()
                 .and_then(|n| extract_schema_from_object_name(n));
-            (StatementType::Drop, schema)
+            (StatementType::Drop, schema, None)
         }
 
         Statement::Truncate { table_names, .. } => {
             let schema = table_names
                 .first()
                 .and_then(|t| extract_schema_from_object_name(&t.name));
-            (StatementType::Truncate, schema)
+            (StatementType::Truncate, schema, None)
         }
 
         Statement::Use(use_stmt) => {
@@ -158,7 +164,7 @@ fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedStatement> {
                 Use::Catalog(name) => Some(name.to_string()),
                 _ => None,
             };
-            (StatementType::Use, schema)
+            (StatementType::Use, schema, None)
         }
 
         Statement::ShowTables { show_options, .. } => {
@@ -167,7 +173,7 @@ fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedStatement> {
                 .as_ref()
                 .and_then(|si| si.parent_name.as_ref())
                 .map(|n| n.to_string());
-            (StatementType::Show, schema)
+            (StatementType::Show, schema, None)
         }
 
         Statement::ShowColumns { show_options, .. } => {
@@ -176,34 +182,35 @@ fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedStatement> {
                 .as_ref()
                 .and_then(|si| si.parent_name.as_ref())
                 .map(|n| n.to_string());
-            (StatementType::Show, schema)
+            (StatementType::Show, schema, None)
         }
 
         Statement::ShowDatabases { .. }
         | Statement::ShowSchemas { .. }
-        | Statement::ShowViews { .. } => (StatementType::Show, None),
+        | Statement::ShowViews { .. } => (StatementType::Show, None, None),
 
         Statement::ShowCreate { obj_name, .. } => {
             let schema = extract_schema_from_object_name(obj_name);
-            (StatementType::Show, schema)
+            (StatementType::Show, schema, None)
         }
 
-        Statement::Explain { .. } => (StatementType::Explain, None),
+        Statement::Explain { .. } => (StatementType::Explain, None, None),
 
         Statement::SetVariable { .. }
         | Statement::SetNames { .. }
         | Statement::SetNamesDefault { .. }
-        | Statement::SetTimeZone { .. } => (StatementType::Set, None),
+        | Statement::SetTimeZone { .. } => (StatementType::Set, None, None),
 
         other => {
             let name = format!("{:?}", std::mem::discriminant(other));
-            (StatementType::Other(name), None)
+            (StatementType::Other(name), None, None)
         }
     };
 
     Ok(ParsedStatement {
         statement_type,
         target_schema,
+        target_table,
         sql: sql.to_string(),
     })
 }
@@ -440,6 +447,108 @@ fn extract_schema_from_table_factor(factor: &TableFactor) -> Option<String> {
     match factor {
         TableFactor::Table { name, .. } => extract_schema_from_object_name(name),
         _ => None,
+    }
+}
+
+/// Extract the primary FROM table name from a SELECT query AST.
+/// Returns only the bare table name (last identifier), ignoring any schema prefix.
+fn extract_first_from_table_name(query: &Query) -> Option<String> {
+    let select = match query.body.as_ref() {
+        SetExpr::Select(s) => s,
+        _ => return None,
+    };
+    let first_from = select.from.first()?;
+    match &first_from.relation {
+        TableFactor::Table { name, .. } => {
+            // Last part of a (possibly qualified) name is the table name
+            name.0.last().map(|ident| ident.value.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Extract column names referenced in the WHERE clause of a SELECT statement.
+/// Returns simple column names (last segment of compound identifiers).
+/// Returns an empty vec if the SQL is not a SELECT, has no WHERE clause, or parsing fails.
+pub fn extract_where_columns(parsed: &ParsedStatement) -> Vec<String> {
+    if parsed.statement_type != StatementType::Select {
+        return vec![];
+    }
+    let dialect = MySqlDialect {};
+    let statements = match Parser::parse_sql(&dialect, &parsed.sql) {
+        Ok(s) => s,
+        Err(_) => return vec![],
+    };
+    let stmt = match statements.into_iter().next() {
+        Some(s) => s,
+        None => return vec![],
+    };
+    let query = match stmt {
+        Statement::Query(q) => q,
+        _ => return vec![],
+    };
+    let select = match query.body.as_ref() {
+        SetExpr::Select(s) => s,
+        _ => return vec![],
+    };
+    let selection = match &select.selection {
+        Some(expr) => expr,
+        None => return vec![],
+    };
+    let mut cols: Vec<String> = vec![];
+    let mut seen: HashSet<String> = HashSet::new();
+    collect_where_columns(selection, &mut cols, &mut seen);
+    cols
+}
+
+/// Recursively walk an expression tree and collect column name identifiers.
+fn collect_where_columns(expr: &Expr, cols: &mut Vec<String>, seen: &mut HashSet<String>) {
+    match expr {
+        Expr::Identifier(ident) => {
+            let name = ident.value.clone();
+            if seen.insert(name.to_lowercase()) {
+                cols.push(name);
+            }
+        }
+        Expr::CompoundIdentifier(parts) => {
+            // Take the last part as the column name (e.g., table.column -> column)
+            if let Some(last) = parts.last() {
+                let name = last.value.clone();
+                if seen.insert(name.to_lowercase()) {
+                    cols.push(name);
+                }
+            }
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            collect_where_columns(left, cols, seen);
+            collect_where_columns(right, cols, seen);
+        }
+        Expr::UnaryOp { expr, .. } => {
+            collect_where_columns(expr, cols, seen);
+        }
+        Expr::IsNull(inner) | Expr::IsNotNull(inner) => {
+            collect_where_columns(inner, cols, seen);
+        }
+        Expr::IsDistinctFrom(left, right) | Expr::IsNotDistinctFrom(left, right) => {
+            collect_where_columns(left, cols, seen);
+            collect_where_columns(right, cols, seen);
+        }
+        Expr::Between { expr, low, high, .. } => {
+            collect_where_columns(expr, cols, seen);
+            collect_where_columns(low, cols, seen);
+            collect_where_columns(high, cols, seen);
+        }
+        Expr::Like { expr, pattern, .. } | Expr::ILike { expr, pattern, .. } => {
+            collect_where_columns(expr, cols, seen);
+            collect_where_columns(pattern, cols, seen);
+        }
+        Expr::InList { expr, .. } => {
+            collect_where_columns(expr, cols, seen);
+        }
+        Expr::Nested(inner) => {
+            collect_where_columns(inner, cols, seen);
+        }
+        _ => {}
     }
 }
 

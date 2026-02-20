@@ -41,6 +41,7 @@ pub async fn execute_read_query(
         let pseudo_parsed = ParsedStatement {
             statement_type: stmt_type.clone(),
             target_schema: None,
+            target_table: None,
             sql: sql.to_string(),
         };
         crate::sql_parser::parse_warnings(&pseudo_parsed)
