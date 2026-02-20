@@ -145,14 +145,23 @@ impl ServerHandler for McpServer {
             let pool = self.db.pool();
 
             if parsed.statement_type.is_read_only() {
-                match crate::query::read::execute_read_query(pool, &sql, &parsed.statement_type, self.config.pool.readonly_transaction).await {
+                match crate::query::read::execute_read_query(
+                    pool,
+                    &sql,
+                    &parsed.statement_type,
+                    self.config.pool.readonly_transaction,
+                    self.config.pool.max_rows,
+                ).await {
                     Ok(result) => {
-                        let output = json!({
+                        let mut output = json!({
                             "rows": result.rows,
                             "row_count": result.row_count,
                             "execution_time_ms": result.execution_time_ms,
                             "serialization_time_ms": result.serialization_time_ms,
                         });
+                        if result.capped {
+                            output["capped"] = json!(true);
+                        }
                         Ok(CallToolResult::success(vec![
                             Content::text(serde_json::to_string_pretty(&output).unwrap_or_default()),
                         ]))

@@ -9,6 +9,7 @@ pub struct QueryResult {
     pub row_count: usize,
     pub execution_time_ms: u64,
     pub serialization_time_ms: u64,
+    pub capped: bool,
 }
 
 /// Execute a read query.
@@ -19,11 +20,31 @@ pub struct QueryResult {
 ///
 /// Uses a 1-RTT bare fetch_all for SELECT, SHOW, EXPLAIN, and Describe (mapped to Explain
 /// by the parser) when `force_readonly_transaction` is false.
-pub async fn execute_read_query(pool: &MySqlPool, sql: &str, stmt_type: &StatementType, force_readonly_transaction: bool) -> Result<QueryResult> {
+///
+/// If `max_rows > 0` and the SQL does not already contain a LIMIT clause, a
+/// `LIMIT {max_rows}` is appended automatically and `QueryResult::capped` is set to `true`.
+pub async fn execute_read_query(
+    pool: &MySqlPool,
+    sql: &str,
+    stmt_type: &StatementType,
+    force_readonly_transaction: bool,
+    max_rows: u32,
+) -> Result<QueryResult> {
     let use_transaction = force_readonly_transaction || !matches!(
         stmt_type,
         StatementType::Select | StatementType::Show | StatementType::Explain
     );
+
+    // Apply max_rows cap: append LIMIT if none present and max_rows > 0.
+    let was_capped;
+    let effective_sql: std::borrow::Cow<str> = if max_rows > 0 && !sql.to_uppercase().contains("LIMIT") {
+        was_capped = true;
+        std::borrow::Cow::Owned(format!("{} LIMIT {}", sql, max_rows))
+    } else {
+        was_capped = false;
+        std::borrow::Cow::Borrowed(sql)
+    };
+    let sql = effective_sql.as_ref();
 
     // DB phase
     let db_start = Instant::now();
@@ -55,6 +76,7 @@ pub async fn execute_read_query(pool: &MySqlPool, sql: &str, stmt_type: &Stateme
         row_count,
         execution_time_ms: db_elapsed,
         serialization_time_ms: ser_elapsed,
+        capped: was_capped,
     })
 }
 
@@ -125,7 +147,7 @@ mod integration_tests {
     #[tokio::test]
     async fn test_select_basic() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT 1 AS one", &StatementType::Select, false).await;
+        let result = execute_read_query(&test_db.pool, "SELECT 1 AS one", &StatementType::Select, false, 0).await;
         assert!(result.is_ok(), "SELECT should succeed: {:?}", result.err());
         assert_eq!(result.unwrap().row_count, 1);
     }
@@ -133,28 +155,28 @@ mod integration_tests {
     #[tokio::test]
     async fn test_null_values() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT NULL AS null_col", &StatementType::Select, false).await.unwrap();
+        let result = execute_read_query(&test_db.pool, "SELECT NULL AS null_col", &StatementType::Select, false, 0).await.unwrap();
         assert_eq!(result.rows[0]["null_col"], serde_json::Value::Null);
     }
 
     #[tokio::test]
     async fn test_empty_result_set() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT 1 WHERE 1=0", &StatementType::Select, false).await.unwrap();
+        let result = execute_read_query(&test_db.pool, "SELECT 1 WHERE 1=0", &StatementType::Select, false, 0).await.unwrap();
         assert_eq!(result.row_count, 0);
     }
 
     #[tokio::test]
     async fn test_show_tables() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SHOW TABLES", &StatementType::Show, false).await;
+        let result = execute_read_query(&test_db.pool, "SHOW TABLES", &StatementType::Show, false, 0).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execution_time_tracked() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT 1", &StatementType::Select, false).await.unwrap();
+        let result = execute_read_query(&test_db.pool, "SELECT 1", &StatementType::Select, false, 0).await.unwrap();
         assert!(result.execution_time_ms < 5000);
     }
 }
