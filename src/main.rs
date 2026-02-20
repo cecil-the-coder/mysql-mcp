@@ -14,6 +14,8 @@ pub mod remote;
 pub mod test_helpers;
 #[cfg(test)]
 mod e2e_tests;
+#[cfg(test)]
+mod perf_tests;
 
 #[tokio::main]
 async fn main() -> Result<()> {
