@@ -219,7 +219,7 @@ impl ServerHandler for McpServer {
                 .into_iter()
                 .map(|t| {
                     RawResource {
-                        uri: format!("mysql://tables/{}.{}", t.schema, t.name),
+                        uri: format!("mysql://tables/{}/{}", t.schema, t.name),
                         name: format!("{}.{}", t.schema, t.name),
                         title: Some(format!("Table: {}.{}", t.schema, t.name)),
                         description: t.row_count.map(|r| format!("~{} rows", r)),

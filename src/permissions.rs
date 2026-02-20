@@ -11,8 +11,19 @@ pub fn check_permission(
 ) -> Result<()> {
     let sec = &config.security;
 
-    // Get schema-specific permissions if we have a target schema
-    let schema_perms = target_schema
+    // Resolve the effective schema for permission lookup:
+    // - Use the explicit target_schema from the SQL (e.g., `mcp_test.users` -> `mcp_test`).
+    // - Fall back to config.connection.database in single-DB mode (unqualified SQL like
+    //   `INSERT INTO users ...` implicitly targets the connected database).
+    // Keys in schema_permissions are stored lowercase (env var parser lowercases them),
+    // so normalise to lowercase for the lookup.
+    let effective_schema: Option<String> = target_schema
+        .map(|s| s.to_lowercase())
+        .or_else(|| config.connection.database.as_ref().map(|d| d.to_lowercase()));
+
+    // Get schema-specific permissions if we have an effective schema
+    let schema_perms = effective_schema
+        .as_deref()
         .and_then(|s| sec.schema_permissions.get(s));
 
     match stmt_type {
@@ -293,5 +304,55 @@ mod tests {
         // No database = multi-DB mode, flag not set
         let err = check_permission(&config, &StatementType::Insert, Some("mydb")).unwrap_err();
         assert!(err.to_string().contains("multi-database mode"));
+    }
+
+    // --- New tests for the schema-fallback and case-insensitivity fixes ---
+
+    #[test]
+    fn test_schema_override_via_connected_db_unqualified_sql() {
+        // When SQL is unqualified (target_schema = None) and we're in single-DB mode,
+        // the connected database name should be used for schema permission lookup.
+        use crate::config::SchemaPermissions;
+        let mut config = Config::default();
+        config.connection.database = Some("mcp_test".to_string());
+        config.security.allow_insert = false; // global: deny
+        config.security.schema_permissions.insert(
+            "mcp_test".to_string(),
+            SchemaPermissions { allow_insert: Some(true), ..Default::default() },
+        );
+        // target_schema = None (unqualified SQL), but connected DB = mcp_test -> override allows
+        assert!(check_permission(&config, &StatementType::Insert, None).is_ok());
+    }
+
+    #[test]
+    fn test_schema_override_deny_via_connected_db_unqualified_sql() {
+        // Global allows insert, but schema override denies it; unqualified SQL should still be denied.
+        use crate::config::SchemaPermissions;
+        let mut config = Config::default();
+        config.connection.database = Some("mcp_test".to_string());
+        config.security.allow_insert = true; // global: allow
+        config.security.schema_permissions.insert(
+            "mcp_test".to_string(),
+            SchemaPermissions { allow_insert: Some(false), ..Default::default() },
+        );
+        // target_schema = None (unqualified SQL), but connected DB = mcp_test -> override denies
+        assert!(check_permission(&config, &StatementType::Insert, None).is_err());
+    }
+
+    #[test]
+    fn test_schema_lookup_is_case_insensitive() {
+        // Keys in schema_permissions are stored lowercase; SQL may extract mixed case.
+        use crate::config::SchemaPermissions;
+        let mut config = Config::default();
+        config.connection.database = Some("testdb".to_string());
+        config.security.allow_insert = false;
+        // Key stored lowercase (as the env var parser does)
+        config.security.schema_permissions.insert(
+            "myschema".to_string(),
+            SchemaPermissions { allow_insert: Some(true), ..Default::default() },
+        );
+        // SQL-extracted schema in mixed case should still match
+        assert!(check_permission(&config, &StatementType::Insert, Some("MySchema")).is_ok());
+        assert!(check_permission(&config, &StatementType::Insert, Some("MYSCHEMA")).is_ok());
     }
 }

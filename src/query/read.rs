@@ -78,10 +78,19 @@ fn column_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col: &sqlx::mysql::My
     if let Ok(v) = row.try_get::<Option<String>, _>(idx) {
         return v.map(Value::String).unwrap_or(Value::Null);
     }
-    // Try bytes as last resort
+    // Try bytes as last resort — attempt UTF-8 decode first (handles SHOW DATABASES etc.
+    // where MySQL returns string columns as binary blobs), fall back to hex only for
+    // genuinely binary data.
     if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(idx) {
         return v
-            .map(|b| Value::String(format!("0x{:02x?}", b).replace(", ", "").replace('[', "").replace(']', "")))
+            .map(|b| {
+                String::from_utf8(b)
+                    .map(Value::String)
+                    .unwrap_or_else(|e| {
+                        let hex: String = e.into_bytes().iter().map(|byte| format!("{:02x}", byte)).collect();
+                        Value::String(format!("0x{}", hex))
+                    })
+            })
             .unwrap_or(Value::Null);
     }
     Value::Null

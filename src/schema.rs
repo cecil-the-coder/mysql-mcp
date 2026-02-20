@@ -30,6 +30,33 @@ struct CacheEntry<T> {
     fetched_at: Instant,
 }
 
+// MySQL information_schema columns (TABLE_NAME, DATA_TYPE, COLUMN_KEY, etc.) are
+// sometimes returned as binary blobs by sqlx. These helpers try String first,
+// then fall back to Vec<u8> -> UTF-8 so callers always get a usable value.
+fn is_col_str(row: &sqlx::mysql::MySqlRow, col: &str) -> String {
+    use sqlx::Row;
+    row.try_get::<String, _>(col)
+        .or_else(|_| {
+            row.try_get::<Vec<u8>, _>(col)
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+        })
+        .unwrap_or_default()
+}
+
+fn is_col_str_opt(row: &sqlx::mysql::MySqlRow, col: &str) -> Option<String> {
+    use sqlx::Row;
+    let s = row.try_get::<Option<String>, _>(col)
+        .ok()
+        .flatten()
+        .or_else(|| {
+            row.try_get::<Option<Vec<u8>>, _>(col)
+                .ok()
+                .flatten()
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+        })?;
+    if s.is_empty() { None } else { Some(s) }
+}
+
 pub struct SchemaIntrospector {
     pool: Arc<MySqlPool>,
     cache_ttl: Duration,
@@ -92,8 +119,8 @@ impl SchemaIntrospector {
         let tables = rows.iter().map(|row| {
             use sqlx::Row;
             TableInfo {
-                name: row.try_get("name").unwrap_or_default(),
-                schema: row.try_get("schema").unwrap_or_default(),
+                name: is_col_str(row, "name"),
+                schema: is_col_str(row, "schema"),
                 row_count: row.try_get("row_count").ok(),
                 data_size_bytes: row.try_get("data_size_bytes").ok(),
                 create_time: row.try_get::<Option<chrono::NaiveDateTime>, _>("create_time")
@@ -151,16 +178,17 @@ impl SchemaIntrospector {
         let rows = sqlx::query(&sql).fetch_all(self.pool.as_ref()).await?;
 
         let columns = rows.iter().map(|row| {
-            use sqlx::Row;
+            let nullable_str = is_col_str(row, "is_nullable");
             ColumnInfo {
-                name: row.try_get("name").unwrap_or_default(),
-                data_type: row.try_get("data_type").unwrap_or_default(),
-                is_nullable: row.try_get::<String, _>("is_nullable")
-                    .map(|s| s == "YES")
-                    .unwrap_or(true),
-                column_default: row.try_get("column_default").ok().flatten(),
-                column_key: row.try_get("column_key").ok().flatten(),
-                extra: row.try_get("extra").ok(),
+                name: is_col_str(row, "name"),
+                data_type: is_col_str(row, "data_type"),
+                is_nullable: nullable_str == "YES",
+                column_default: is_col_str_opt(row, "column_default"),
+                column_key: is_col_str_opt(row, "column_key"),
+                extra: {
+                    let e = is_col_str(row, "extra");
+                    if e.is_empty() { None } else { Some(e) }
+                },
             }
         }).collect();
 
