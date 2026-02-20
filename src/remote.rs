@@ -80,8 +80,6 @@ async fn handle_mcp(
 
 #[cfg(test)]
 mod integration_tests {
-    use super::*;
-
     fn mysql_available() -> bool {
         let host = std::env::var("MYSQL_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let port = std::env::var("MYSQL_PORT").unwrap_or_else(|_| "3306".to_string());
