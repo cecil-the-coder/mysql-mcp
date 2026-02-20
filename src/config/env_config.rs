@@ -22,6 +22,7 @@ pub fn load_env_config() -> EnvConfig {
         allow_delete: parse_bool_env("ALLOW_DELETE_OPERATION"),
         allow_ddl: parse_bool_env("ALLOW_DDL_OPERATION"),
         disable_read_only_transactions: parse_bool_env("MYSQL_DISABLE_READ_ONLY_TRANSACTIONS"),
+        readonly_transaction: parse_bool_env("MYSQL_READONLY_TRANSACTION"),
         ssl: parse_bool_env("MYSQL_SSL"),
         ssl_accept_invalid_certs: parse_bool_env("MYSQL_SSL_ACCEPT_INVALID_CERTS"),
         multi_db_write_mode: parse_bool_env("MULTI_DB_WRITE_MODE"),
@@ -83,6 +84,7 @@ pub struct EnvConfig {
     pub allow_delete: Option<bool>,
     pub allow_ddl: Option<bool>,
     pub disable_read_only_transactions: Option<bool>,
+    pub readonly_transaction: Option<bool>,
     pub ssl: Option<bool>,
     pub ssl_accept_invalid_certs: Option<bool>,
     pub multi_db_write_mode: Option<bool>,
@@ -117,6 +119,7 @@ impl EnvConfig {
         if let Some(v) = self.allow_delete { base.security.allow_delete = v; }
         if let Some(v) = self.allow_ddl { base.security.allow_ddl = v; }
         if let Some(v) = self.disable_read_only_transactions { base.security.disable_read_only_transactions = v; }
+        if let Some(v) = self.readonly_transaction { base.pool.readonly_transaction = v; }
         if let Some(v) = self.ssl { base.security.ssl = v; }
         if let Some(v) = self.ssl_accept_invalid_certs { base.security.ssl_accept_invalid_certs = v; }
         if let Some(v) = self.multi_db_write_mode { base.security.multi_db_write_mode = v; }

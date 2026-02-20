@@ -7,33 +7,40 @@ pub struct QueryResult {
     pub rows: Vec<Map<String, Value>>,
     pub row_count: usize,
     pub execution_time_ms: u64,
+    pub serialization_time_ms: u64,
 }
 
-pub async fn execute_read_query(pool: &MySqlPool, sql: &str) -> Result<QueryResult> {
-    let start = Instant::now();
+pub async fn execute_read_query(pool: &MySqlPool, sql: &str, readonly_transaction: bool) -> Result<QueryResult> {
+    // DB phase
+    let db_start = Instant::now();
+    let rows: Vec<sqlx::mysql::MySqlRow> = if readonly_transaction {
+        // 4-RTT path: SET TRANSACTION READ ONLY → BEGIN → SQL → COMMIT
+        // For MySQL, SET TRANSACTION READ ONLY must be called before BEGIN.
+        let mut conn = pool.acquire().await?;
+        sqlx::query("SET TRANSACTION READ ONLY")
+            .execute(&mut *conn)
+            .await?;
+        let mut tx = conn.begin().await?;
+        let rows = sqlx::query(sql).fetch_all(&mut *tx).await?;
+        tx.commit().await?;
+        rows
+    } else {
+        // 1-RTT path: bare fetch_all, no transaction overhead
+        sqlx::query(sql).fetch_all(pool).await?
+    };
+    let db_elapsed = db_start.elapsed().as_millis() as u64;
 
-    // For MySQL, SET TRANSACTION READ ONLY must be called before BEGIN.
-    // We acquire a connection, issue SET TRANSACTION READ ONLY, then begin a transaction.
-    let mut conn = pool.acquire().await?;
-    sqlx::query("SET TRANSACTION READ ONLY")
-        .execute(&mut *conn)
-        .await?;
-    let mut tx = conn.begin().await?;
-    let rows: Vec<sqlx::mysql::MySqlRow> = sqlx::query(sql).fetch_all(&mut *tx).await?;
-    tx.commit().await?;
-
-    let elapsed = start.elapsed().as_millis() as u64;
-
-    let json_rows: Vec<Map<String, Value>> = rows
-        .iter()
-        .map(row_to_json)
-        .collect();
+    // Serialization phase
+    let ser_start = Instant::now();
+    let json_rows: Vec<Map<String, Value>> = rows.iter().map(row_to_json).collect();
+    let ser_elapsed = ser_start.elapsed().as_millis() as u64;
 
     let row_count = json_rows.len();
     Ok(QueryResult {
         rows: json_rows,
         row_count,
-        execution_time_ms: elapsed,
+        execution_time_ms: db_elapsed,
+        serialization_time_ms: ser_elapsed,
     })
 }
 
@@ -104,7 +111,7 @@ mod integration_tests {
     #[tokio::test]
     async fn test_select_basic() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT 1 AS one").await;
+        let result = execute_read_query(&test_db.pool, "SELECT 1 AS one", true).await;
         assert!(result.is_ok(), "SELECT should succeed: {:?}", result.err());
         assert_eq!(result.unwrap().row_count, 1);
     }
@@ -112,28 +119,28 @@ mod integration_tests {
     #[tokio::test]
     async fn test_null_values() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT NULL AS null_col").await.unwrap();
+        let result = execute_read_query(&test_db.pool, "SELECT NULL AS null_col", true).await.unwrap();
         assert_eq!(result.rows[0]["null_col"], serde_json::Value::Null);
     }
 
     #[tokio::test]
     async fn test_empty_result_set() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT 1 WHERE 1=0").await.unwrap();
+        let result = execute_read_query(&test_db.pool, "SELECT 1 WHERE 1=0", true).await.unwrap();
         assert_eq!(result.row_count, 0);
     }
 
     #[tokio::test]
     async fn test_show_tables() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SHOW TABLES").await;
+        let result = execute_read_query(&test_db.pool, "SHOW TABLES", true).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execution_time_tracked() {
         let test_db = setup_test_db().await;
-        let result = execute_read_query(&test_db.pool, "SELECT 1").await.unwrap();
+        let result = execute_read_query(&test_db.pool, "SELECT 1", true).await.unwrap();
         assert!(result.execution_time_ms < 5000);
     }
 }

@@ -84,7 +84,7 @@ mod perf_tests {
             let _permit = crate::test_helpers::db_semaphore()
                 .acquire().await.expect("DB semaphore closed");
             for _ in 0..WARMUP {
-                crate::query::read::execute_read_query(pool, "SELECT 1").await.unwrap();
+                crate::query::read::execute_read_query(pool, "SELECT 1", true).await.unwrap();
             }
         }
 
@@ -92,7 +92,7 @@ mod perf_tests {
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(pool, "SELECT 1").await.unwrap();
+            crate::query::read::execute_read_query(pool, "SELECT 1", true).await.unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
@@ -138,7 +138,7 @@ mod perf_tests {
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(pool, sql).await.unwrap();
+            crate::query::read::execute_read_query(pool, sql, true).await.unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
@@ -189,7 +189,7 @@ mod perf_tests {
                 let mut v = Vec::with_capacity(PER_TASK);
                 for _ in 0..PER_TASK {
                     let t = Instant::now();
-                    crate::query::read::execute_read_query(&pool, "SELECT 1").await.unwrap();
+                    crate::query::read::execute_read_query(&pool, "SELECT 1", true).await.unwrap();
                     v.push(t.elapsed().as_secs_f64() * 1000.0);
                 }
                 v
@@ -364,7 +364,7 @@ mod perf_tests {
                 let mut v = Vec::with_capacity(PER_TASK);
                 for _ in 0..PER_TASK {
                     let t = Instant::now();
-                    crate::query::read::execute_read_query(&pool, "SELECT 1").await.unwrap();
+                    crate::query::read::execute_read_query(&pool, "SELECT 1", true).await.unwrap();
                     v.push(t.elapsed().as_secs_f64() * 1000.0);
                 }
                 v
@@ -383,5 +383,150 @@ mod perf_tests {
         eprintln!("  (high latency expected — queries queue for a connection)");
 
         assert!(stats.p99_ms < 30_000.0, "p99 under saturation too high: {:.1}ms", stats.p99_ms);
+    }
+
+    /// Read-isolation comparison: 4-RTT transaction path vs bare 1-RTT fetch_all.
+    /// Expected delta ≈ 3 RTTs on high-latency remote DBs.
+    #[tokio::test]
+    async fn perf_read_isolation_comparison() {
+        let test_db = setup_test_db().await;
+        let pool = crate::test_helpers::make_pool(&test_db, 3).await;
+        let pool = &pool;
+        const N: usize = 20;
+
+        // Warm up connections before timing (throttled through shared semaphore).
+        {
+            let _permit = crate::test_helpers::db_semaphore()
+                .acquire().await.expect("DB semaphore closed");
+            for _ in 0..3 {
+                crate::query::read::execute_read_query(pool, "SELECT 1", true).await.unwrap();
+            }
+        }
+
+        // With readonly_transaction=true (4-RTT path)
+        let wall_with = Instant::now();
+        let mut with_tx_ms = Vec::with_capacity(N);
+        for _ in 0..N {
+            let t = Instant::now();
+            crate::query::read::execute_read_query(pool, "SELECT 1", true).await.unwrap();
+            with_tx_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        let wall_with_ms = wall_with.elapsed().as_secs_f64() * 1000.0;
+
+        // With readonly_transaction=false (1-RTT path)
+        let wall_without = Instant::now();
+        let mut no_tx_ms = Vec::with_capacity(N);
+        for _ in 0..N {
+            let t = Instant::now();
+            crate::query::read::execute_read_query(pool, "SELECT 1", false).await.unwrap();
+            no_tx_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+        }
+        let wall_without_ms = wall_without.elapsed().as_secs_f64() * 1000.0;
+
+        let with_stats = compute(with_tx_ms, wall_with_ms);
+        let no_stats = compute(no_tx_ms, wall_without_ms);
+
+        print(&format!("SELECT 1 — WITH readonly_transaction (4-RTT, n={N})"), &with_stats);
+        print(&format!("SELECT 1 — NO  readonly_transaction (1-RTT, n={N})"), &no_stats);
+
+        let delta = with_stats.mean_ms - no_stats.mean_ms;
+        eprintln!("\n  Delta (with - without): {delta:.1}ms/query (≈3 RTTs on remote DB)");
+        eprintln!("  Speedup: {:.1}x", with_stats.mean_ms / no_stats.mean_ms.max(0.001));
+
+        // no-transaction path must be at least as fast (usually much faster on remote DBs)
+        assert!(
+            no_stats.mean_ms <= with_stats.mean_ms,
+            "no-transaction mean ({:.1}ms) should be <= with-transaction mean ({:.1}ms)",
+            no_stats.mean_ms,
+            with_stats.mean_ms,
+        );
+    }
+
+    /// Serialization overhead: measure DB time vs JSON serialization time separately.
+    /// Uses a wide table (10 varchar + 10 int columns) with 1 000 and 100 rows.
+    #[tokio::test]
+    async fn perf_serialization_overhead() {
+        let test_db = setup_test_db().await;
+        let pool = crate::test_helpers::make_pool(&test_db, 3).await;
+        let pool = &pool;
+
+        // Establish pool connection through semaphore before first DB call.
+        {
+            let _permit = crate::test_helpers::db_semaphore()
+                .acquire().await.expect("DB semaphore closed");
+            sqlx::query("SELECT 1").fetch_one(pool).await.unwrap();
+        }
+
+        // Create wide temp table
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS perf_ser_test (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                s1 VARCHAR(100), s2 VARCHAR(100), s3 VARCHAR(100), s4 VARCHAR(100), s5 VARCHAR(100),
+                s6 VARCHAR(100), s7 VARCHAR(100), s8 VARCHAR(100), s9 VARCHAR(100), s10 VARCHAR(100),
+                n1 INT, n2 INT, n3 INT, n4 INT, n5 INT,
+                n6 INT, n7 INT, n8 INT, n9 INT, n10 INT
+            )"
+        ).execute(pool).await.unwrap();
+
+        // Populate 1 000 rows
+        for chunk in 0..10usize {
+            let mut values = Vec::with_capacity(100);
+            for i in 0..100usize {
+                let row_i = chunk * 100 + i;
+                values.push(format!(
+                    "('str{row_i}a','str{row_i}b','str{row_i}c','str{row_i}d','str{row_i}e',\
+                     'str{row_i}f','str{row_i}g','str{row_i}h','str{row_i}i','str{row_i}j',\
+                     {row_i},{row_i},{row_i},{row_i},{row_i},{row_i},{row_i},{row_i},{row_i},{row_i})"
+                ));
+            }
+            let sql = format!(
+                "INSERT INTO perf_ser_test (s1,s2,s3,s4,s5,s6,s7,s8,s9,s10,n1,n2,n3,n4,n5,n6,n7,n8,n9,n10) VALUES {}",
+                values.join(",")
+            );
+            sqlx::query(&sql).execute(pool).await.unwrap();
+        }
+
+        // Benchmark with 1 000 rows
+        let result_1000 = crate::query::read::execute_read_query(
+            pool,
+            "SELECT * FROM perf_ser_test LIMIT 1000",
+            false,
+        ).await.unwrap();
+
+        // Benchmark with 100 rows
+        let result_100 = crate::query::read::execute_read_query(
+            pool,
+            "SELECT * FROM perf_ser_test LIMIT 100",
+            false,
+        ).await.unwrap();
+
+        // Drop table
+        sqlx::query("DROP TABLE IF EXISTS perf_ser_test").execute(pool).await.ok();
+
+        eprintln!(
+            "\n┌─ PERF: Serialization overhead — 1 000 rows (20 cols)\n\
+             │  execution_time_ms (DB):     {}ms\n\
+             │  serialization_time_ms (JSON): {}ms\n\
+             └──────────────────────────────────────────────────────────",
+            result_1000.execution_time_ms,
+            result_1000.serialization_time_ms,
+        );
+        eprintln!(
+            "\n┌─ PERF: Serialization overhead — 100 rows (20 cols)\n\
+             │  execution_time_ms (DB):     {}ms\n\
+             │  serialization_time_ms (JSON): {}ms\n\
+             └──────────────────────────────────────────────────────────",
+            result_100.execution_time_ms,
+            result_100.serialization_time_ms,
+        );
+
+        // Serialization of a local in-memory operation should be far less than a DB round-trip
+        // (holds universally — even on localhost the DB has syscall overhead).
+        assert!(
+            result_1000.serialization_time_ms <= result_1000.execution_time_ms + 100,
+            "serialization ({} ms) surprisingly close to or exceeding DB time ({} ms)",
+            result_1000.serialization_time_ms,
+            result_1000.execution_time_ms,
+        );
     }
 }

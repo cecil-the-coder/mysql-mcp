@@ -42,6 +42,7 @@ pub struct PoolConfig {
     pub connect_timeout_ms: u64,
     pub queue_limit: u32,
     pub cache_ttl_secs: u64,
+    pub readonly_transaction: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -120,6 +121,7 @@ impl Default for PoolConfig {
             connect_timeout_ms: 10_000,
             queue_limit: 100,
             cache_ttl_secs: 60,
+            readonly_transaction: true,
         }
     }
 }

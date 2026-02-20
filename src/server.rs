@@ -145,12 +145,13 @@ impl ServerHandler for McpServer {
             let pool = self.db.pool();
 
             if parsed.statement_type.is_read_only() {
-                match crate::query::read::execute_read_query(pool, &sql).await {
+                match crate::query::read::execute_read_query(pool, &sql, self.config.pool.readonly_transaction).await {
                     Ok(result) => {
                         let output = json!({
                             "rows": result.rows,
                             "row_count": result.row_count,
                             "execution_time_ms": result.execution_time_ms,
+                            "serialization_time_ms": result.serialization_time_ms,
                         });
                         Ok(CallToolResult::success(vec![
                             Content::text(serde_json::to_string_pretty(&output).unwrap_or_default()),
