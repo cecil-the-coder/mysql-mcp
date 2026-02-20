@@ -90,9 +90,26 @@ impl ServerHandler for McpServer {
                 schema,
             );
 
+            let multi_schema = Arc::new(rmcp::model::object(json!({
+                "type": "object",
+                "properties": {
+                    "queries": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "SQL statements to execute in parallel. Must all be read-only (SELECT, SHOW, EXPLAIN)."
+                    }
+                },
+                "required": ["queries"]
+            })));
+            let multi_tool = Tool::new(
+                "mysql_multi_query",
+                "Execute multiple read-only SQL queries in parallel and return all results together. Use this when you need data from multiple independent tables or queries — it completes in ~1 RTT instead of N sequential RTTs.",
+                multi_schema,
+            );
+
             Ok(ListToolsResult {
                 meta: None,
-                tools: vec![tool],
+                tools: vec![tool, multi_tool],
                 next_cursor: None,
             })
         }
@@ -104,6 +121,127 @@ impl ServerHandler for McpServer {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
         async move {
+            if request.name == "mysql_multi_query" {
+                let args = request.arguments.unwrap_or_default();
+                let queries: Vec<String> = match args.get("queries").and_then(|v| v.as_array()) {
+                    Some(arr) => {
+                        let mut out = Vec::with_capacity(arr.len());
+                        for v in arr {
+                            match v.as_str() {
+                                Some(s) => out.push(s.to_string()),
+                                None => {
+                                    return Ok(CallToolResult::error(vec![
+                                        Content::text("Each entry in 'queries' must be a string"),
+                                    ]));
+                                }
+                            }
+                        }
+                        out
+                    }
+                    None => {
+                        return Ok(CallToolResult::error(vec![
+                            Content::text("Missing required argument: queries"),
+                        ]));
+                    }
+                };
+
+                // Parse and validate all queries up-front (all must be read-only)
+                let mut parsed_queries = Vec::with_capacity(queries.len());
+                for sql in &queries {
+                    let parsed = match crate::sql_parser::parse_sql(sql) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return Ok(CallToolResult::error(vec![
+                                Content::text(format!("SQL parse error for '{}': {}", sql, e)),
+                            ]));
+                        }
+                    };
+                    if let Err(e) = crate::permissions::check_permission(
+                        &self.config,
+                        &parsed.statement_type,
+                        parsed.target_schema.as_deref(),
+                    ) {
+                        return Ok(CallToolResult::error(vec![
+                            Content::text(format!("Permission denied for '{}': {}", sql, e)),
+                        ]));
+                    }
+                    if !parsed.statement_type.is_read_only() {
+                        return Ok(CallToolResult::error(vec![
+                            Content::text(format!(
+                                "Query is not read-only: '{}'. mysql_multi_query only supports SELECT, SHOW, EXPLAIN.",
+                                sql
+                            )),
+                        ]));
+                    }
+                    parsed_queries.push(parsed);
+                }
+
+                let pool = self.db.pool().clone();
+                let readonly_transaction = self.config.pool.readonly_transaction;
+                let max_rows = self.config.pool.max_rows;
+
+                let wall_start = std::time::Instant::now();
+                let mut join_set = tokio::task::JoinSet::new();
+
+                for (sql, parsed) in queries.iter().zip(parsed_queries.iter()) {
+                    let pool_clone = pool.clone();
+                    let sql_clone = sql.clone();
+                    let stmt_type = parsed.statement_type.clone();
+                    join_set.spawn(async move {
+                        let result = crate::query::read::execute_read_query(
+                            &pool_clone,
+                            &sql_clone,
+                            &stmt_type,
+                            readonly_transaction,
+                            max_rows,
+                        ).await;
+                        (sql_clone, result)
+                    });
+                }
+
+                let mut results: Vec<(String, std::result::Result<crate::query::read::QueryResult, anyhow::Error>)> = Vec::new();
+                while let Some(join_result) = join_set.join_next().await {
+                    match join_result {
+                        Ok(pair) => results.push(pair),
+                        Err(e) => results.push(("(unknown)".to_string(), Err(anyhow::anyhow!("Task panicked: {}", e)))),
+                    }
+                }
+
+                let wall_time_ms = wall_start.elapsed().as_millis() as u64;
+
+                // Re-order results to match the original query order
+                let mut ordered: Vec<serde_json::Value> = queries.iter().map(|_| serde_json::Value::Null).collect();
+                for (sql, result) in results {
+                    let idx = queries.iter().position(|q| q == &sql).unwrap_or(0);
+                    ordered[idx] = match result {
+                        Ok(r) => {
+                            json!({
+                                "sql": sql,
+                                "rows": r.rows,
+                                "row_count": r.row_count,
+                                "execution_time_ms": r.execution_time_ms,
+                                "serialization_time_ms": r.serialization_time_ms,
+                                "capped": r.capped,
+                            })
+                        }
+                        Err(e) => {
+                            json!({
+                                "sql": sql,
+                                "error": e.to_string(),
+                            })
+                        }
+                    };
+                }
+
+                let output = json!({
+                    "results": ordered,
+                    "wall_time_ms": wall_time_ms,
+                });
+                return Ok(CallToolResult::success(vec![
+                    Content::text(serde_json::to_string_pretty(&output).unwrap_or_default()),
+                ]));
+            }
+
             if request.name != "mysql_query" {
                 return Err(McpError::new(
                     ErrorCode::METHOD_NOT_FOUND,
