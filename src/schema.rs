@@ -256,7 +256,7 @@ impl SchemaIntrospector {
             if let Some(entry) = cache.get(&cache_key) {
                 if entry.fetched_at.elapsed() < self.inner.cache_ttl {
                     // Deserialize from the stored JSON-encoded form.
-                    let indexes: Vec<IndexDef> = serde_json::from_str(&entry.data.join(" ")).unwrap_or_default();
+                    let indexes: Vec<IndexDef> = serde_json::from_str(entry.data.first().unwrap_or(&String::new())).unwrap_or_default();
                     return Ok(indexes);
                 }
             }
@@ -264,10 +264,8 @@ impl SchemaIntrospector {
 
         let indexes = Inner::fetch_composite_indexes(&self.inner.pool, table, database).await?;
 
-        // Serialize to a Vec<String> by encoding as JSON lines (one per index).
-        let serialized: Vec<String> = indexes.iter()
-            .map(|idx| serde_json::to_string(idx).unwrap_or_default())
-            .collect();
+        // Serialize entire Vec<IndexDef> as a single JSON array string.
+        let serialized: Vec<String> = vec![serde_json::to_string(&indexes).unwrap_or_default()];
 
         {
             let mut cache = self.inner.indexed_columns_cache.lock().await;
