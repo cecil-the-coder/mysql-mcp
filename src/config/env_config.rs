@@ -63,6 +63,7 @@ pub fn load_env_config() -> EnvConfig {
         ssl: parse_bool_env("MYSQL_SSL"),
         ssl_accept_invalid_certs: parse_bool_env("MYSQL_SSL_ACCEPT_INVALID_CERTS"),
         multi_db_write_mode: parse_bool_env("MULTI_DB_WRITE_MODE"),
+        allow_runtime_connections: parse_bool_env("MYSQL_ALLOW_RUNTIME_CONNECTIONS"),
         remote_enabled: parse_bool_env("IS_REMOTE_MCP"),
         remote_secret_key: std::env::var("REMOTE_SECRET_KEY").ok(),
         remote_port: parse_env_num::<u16>("PORT"),
@@ -123,6 +124,7 @@ pub struct EnvConfig {
     pub ssl: Option<bool>,
     pub ssl_accept_invalid_certs: Option<bool>,
     pub multi_db_write_mode: Option<bool>,
+    pub allow_runtime_connections: Option<bool>,
     pub remote_enabled: Option<bool>,
     pub remote_secret_key: Option<String>,
     pub remote_port: Option<u16>,
@@ -162,6 +164,7 @@ impl EnvConfig {
         if let Some(v) = self.ssl { base.security.ssl = v; }
         if let Some(v) = self.ssl_accept_invalid_certs { base.security.ssl_accept_invalid_certs = v; }
         if let Some(v) = self.multi_db_write_mode { base.security.multi_db_write_mode = v; }
+        if let Some(v) = self.allow_runtime_connections { base.security.allow_runtime_connections = v; }
         if !self.schema_permissions.is_empty() {
             base.security.schema_permissions.extend(self.schema_permissions.clone());
         }

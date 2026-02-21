@@ -62,6 +62,9 @@ pub struct SecurityConfig {
     /// Per-schema permission overrides: schema_name -> SchemaPermissions
     pub schema_permissions: HashMap<String, SchemaPermissions>,
     pub multi_db_write_mode: bool,
+    /// Allow mysql_connect to accept raw credentials at runtime.
+    /// When false (default), only preset-based connections are allowed.
+    pub allow_runtime_connections: bool,
 }
 
 /// Per-schema permission overrides
@@ -146,6 +149,7 @@ impl Default for SecurityConfig {
             ssl_accept_invalid_certs: false,
             schema_permissions: HashMap::new(),
             multi_db_write_mode: false,
+            allow_runtime_connections: false,
         }
     }
 }

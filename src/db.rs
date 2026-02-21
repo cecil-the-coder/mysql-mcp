@@ -22,7 +22,7 @@ impl DbPool {
 }
 
 async fn build_pool(config: &Config) -> Result<MySqlPool> {
-    let connect_options = build_connect_options(config)?
+    let connect_options = build_connect_options_from_config(config)?
         .statement_cache_capacity(config.pool.statement_cache_capacity as usize);
 
     let pool = MySqlPoolOptions::new()
@@ -36,7 +36,42 @@ async fn build_pool(config: &Config) -> Result<MySqlPool> {
     Ok(pool)
 }
 
-fn build_connect_options(config: &Config) -> Result<MySqlConnectOptions> {
+/// Build a small pool (max 5) for a named session from raw connection fields.
+pub async fn build_session_pool(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    database: Option<&str>,
+    ssl: bool,
+    ssl_accept_invalid_certs: bool,
+    connect_timeout_ms: u64,
+) -> Result<MySqlPool> {
+    let ssl_mode = match (ssl, ssl_accept_invalid_certs) {
+        (false, _) => MySqlSslMode::Disabled,
+        (true, true) => MySqlSslMode::Required,
+        (true, false) => MySqlSslMode::VerifyIdentity,
+    };
+    let mut opts = MySqlConnectOptions::new()
+        .host(host)
+        .port(port)
+        .username(user)
+        .password(password)
+        .ssl_mode(ssl_mode);
+    if let Some(db) = database {
+        opts = opts.database(db);
+    }
+    let pool = MySqlPoolOptions::new()
+        .max_connections(5)
+        .acquire_timeout(Duration::from_millis(connect_timeout_ms))
+        .idle_timeout(Duration::from_secs(300))
+        .max_lifetime(Duration::from_secs(1800))
+        .connect_with(opts)
+        .await?;
+    Ok(pool)
+}
+
+fn build_connect_options_from_config(config: &Config) -> Result<MySqlConnectOptions> {
     let conn = &config.connection;
 
     // If a full mysql:// URL is given, parse it directly

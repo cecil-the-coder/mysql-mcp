@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::collections::HashMap;
 use anyhow::Result;
 use rmcp::{
     ServerHandler, ServiceExt,
@@ -17,15 +18,28 @@ use rmcp::{
     transport::stdio,
 };
 use serde_json::json;
+use tokio::sync::Mutex;
 
 use crate::config::Config;
 use crate::db::DbPool;
 use crate::schema::SchemaIntrospector;
 
+/// A named database session (non-default, runtime-created connection).
+struct Session {
+    pool: sqlx::MySqlPool,
+    introspector: Arc<SchemaIntrospector>,
+    last_used: std::time::Instant,
+    /// Human-readable display info for mysql_list_sessions
+    host: String,
+    database: Option<String>,
+}
+
 pub struct McpServer {
     pub config: Arc<Config>,
     pub db: Arc<DbPool>,
     pub introspector: Arc<SchemaIntrospector>,
+    /// Named sessions (does not include "default" which uses self.db/self.introspector).
+    sessions: Arc<Mutex<HashMap<String, Session>>>,
 }
 
 impl McpServer {
@@ -35,13 +49,53 @@ impl McpServer {
             pool,
             config.pool.cache_ttl_secs,
         ));
-        Self { config, db, introspector }
+        let sessions: Arc<Mutex<HashMap<String, Session>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        // Background task: drop sessions idle for > 10 minutes (600 s).
+        // "default" is never dropped.
+        let sessions_reaper = sessions.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                let mut map = sessions_reaper.lock().await;
+                map.retain(|_name, session| {
+                    session.last_used.elapsed().as_secs() < 600
+                });
+            }
+        });
+
+        Self { config, db, introspector, sessions }
     }
 
     pub async fn run(self) -> Result<()> {
         let service = self.serve(stdio()).await?;
         service.waiting().await?;
         Ok(())
+    }
+
+    /// Resolve a session name to (pool, introspector).
+    /// Updates last_used on non-default sessions.
+    /// Returns Err with a user-friendly message if not found.
+    async fn get_session(
+        &self,
+        name: &str,
+    ) -> std::result::Result<(sqlx::MySqlPool, Arc<SchemaIntrospector>), String> {
+        if name == "default" || name.is_empty() {
+            return Ok((self.db.pool().clone(), self.introspector.clone()));
+        }
+        let mut map = self.sessions.lock().await;
+        match map.get_mut(name) {
+            Some(session) => {
+                session.last_used = std::time::Instant::now();
+                Ok((session.pool.clone(), session.introspector.clone()))
+            }
+            None => Err(format!(
+                "Session '{}' not found. Use mysql_connect to create it, or omit 'session' to use the default connection.",
+                name
+            )),
+        }
     }
 }
 
@@ -83,6 +137,10 @@ impl ServerHandler for McpServer {
                     "explain": {
                         "type": "boolean",
                         "description": "Set to true when investigating a slow query — returns full execution plan including index usage, rows examined, and optimization suggestions. Overrides the server performance_hints setting for this call."
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": "Named session to route this query to (omit for default connection)"
                     }
                 },
                 "required": ["sql"]
@@ -108,6 +166,10 @@ impl ServerHandler for McpServer {
                         "type": "array",
                         "items": { "type": "string" },
                         "description": "SQL statements to execute in parallel. Must all be read-only (SELECT, SHOW, EXPLAIN)."
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": "Named session to route these queries to (omit for default connection)"
                     }
                 },
                 "required": ["queries"]
@@ -134,6 +196,10 @@ impl ServerHandler for McpServer {
                         "type": "array",
                         "items": { "type": "string", "enum": ["indexes", "foreign_keys", "size"] },
                         "description": "Additional metadata to include. Default: just columns. Options: 'indexes' (all indexes with columns), 'foreign_keys' (FK constraints), 'size' (estimated row count and byte sizes)."
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": "Named session to use (omit for default connection)"
                     }
                 },
                 "required": ["table"]
@@ -153,7 +219,9 @@ impl ServerHandler for McpServer {
 
             let server_info_schema = Arc::new(rmcp::model::object(serde_json::json!({
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "session": { "type": "string", "description": "Named session to use (omit for default connection)" }
+                },
                 "required": []
             })));
             let server_info_tool = Tool::new(
@@ -162,9 +230,65 @@ impl ServerHandler for McpServer {
                 server_info_schema,
             );
 
+            let connect_schema = Arc::new(rmcp::model::object(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Session name (e.g. 'staging', 'prod')" },
+                    "host": { "type": "string", "description": "MySQL host (required unless using preset)" },
+                    "port": { "type": "integer", "description": "MySQL port (default 3306)" },
+                    "user": { "type": "string", "description": "MySQL username" },
+                    "password": { "type": "string", "description": "MySQL password" },
+                    "database": { "type": "string", "description": "Default database to use" },
+                    "ssl": { "type": "boolean", "description": "Enable SSL (default false)" }
+                },
+                "required": ["name", "host", "user"]
+            })));
+            let connect_tool = Tool::new(
+                "mysql_connect",
+                concat!(
+                    "Create a named database session to an additional MySQL server. ",
+                    "Requires MYSQL_ALLOW_RUNTIME_CONNECTIONS=true on the server. ",
+                    "After connecting, pass 'session' param to other tools to route queries there. ",
+                    "Sessions idle for 10 minutes are automatically closed.",
+                ),
+                connect_schema,
+            );
+
+            let disconnect_schema = Arc::new(rmcp::model::object(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Session name to disconnect" }
+                },
+                "required": ["name"]
+            })));
+            let disconnect_tool = Tool::new(
+                "mysql_disconnect",
+                "Explicitly close a named database session. The default session cannot be closed.",
+                disconnect_schema,
+            );
+
+            let list_sessions_schema = Arc::new(rmcp::model::object(serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            })));
+            let list_sessions_tool = Tool::new(
+                "mysql_list_sessions",
+                "List all active named database sessions with host, database, and idle time. The default session is omitted when it is the only active session.",
+                list_sessions_schema,
+            );
+
             Ok(ListToolsResult {
                 meta: None,
-                tools: vec![tool, multi_tool, schema_info_tool, server_info_tool],
+                tools: vec![
+                    tool,
+                    multi_tool,
+                    schema_info_tool,
+                    server_info_tool,
+                    connect_tool,
+                    disconnect_tool,
+                    list_sessions_tool,
+                ],
                 next_cursor: None,
             })
         }
@@ -176,6 +300,149 @@ impl ServerHandler for McpServer {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
         async move {
+            // ------------------------------------------------------------------
+            // mysql_connect: create a named session
+            // ------------------------------------------------------------------
+            if request.name == "mysql_connect" {
+                let args = request.arguments.unwrap_or_default();
+                let name = match args.get("name").and_then(|v| v.as_str()) {
+                    Some(n) if !n.is_empty() => n.to_string(),
+                    _ => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: name")])),
+                };
+                if name == "default" {
+                    return Ok(CallToolResult::error(vec![Content::text("Session name 'default' is reserved")]));
+                }
+
+                if !self.config.security.allow_runtime_connections {
+                    return Ok(CallToolResult::error(vec![Content::text(
+                        "Runtime connections are disabled. Set MYSQL_ALLOW_RUNTIME_CONNECTIONS=true to enable mysql_connect with raw credentials."
+                    )]));
+                }
+
+                let host = match args.get("host").and_then(|v| v.as_str()) {
+                    Some(h) => h.to_string(),
+                    None => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: host")])),
+                };
+                let port = args.get("port").and_then(|v| v.as_u64()).unwrap_or(3306) as u16;
+                let user = match args.get("user").and_then(|v| v.as_str()) {
+                    Some(u) => u.to_string(),
+                    None => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: user")])),
+                };
+                let password = args.get("password").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let database = args.get("database").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let ssl = args.get("ssl").and_then(|v| v.as_bool()).unwrap_or(false);
+
+                tracing::debug!(
+                    name = %name,
+                    host = %host,
+                    port = port,
+                    user = %user,
+                    database = ?database,
+                    "mysql_connect: creating session"
+                );
+
+                match crate::db::build_session_pool(
+                    &host, port, &user, &password,
+                    database.as_deref(), ssl, false,
+                    self.config.pool.connect_timeout_ms,
+                ).await {
+                    Ok(pool) => {
+                        let pool_arc = Arc::new(pool.clone());
+                        let introspector = Arc::new(SchemaIntrospector::new(
+                            pool_arc,
+                            self.config.pool.cache_ttl_secs,
+                        ));
+                        let session = Session {
+                            pool,
+                            introspector,
+                            last_used: std::time::Instant::now(),
+                            host: host.clone(),
+                            database: database.clone(),
+                        };
+                        let mut sessions = self.sessions.lock().await;
+                        sessions.insert(name.clone(), session);
+                        let info = json!({
+                            "connected": true,
+                            "session": name,
+                            "host": host,
+                            "database": database,
+                        });
+                        return Ok(CallToolResult::success(vec![
+                            Content::text(serde_json::to_string_pretty(&info).unwrap_or_default()),
+                        ]));
+                    }
+                    Err(e) => {
+                        return Ok(CallToolResult::error(vec![
+                            Content::text(format!("Connection failed: {}", e)),
+                        ]));
+                    }
+                }
+            }
+
+            // ------------------------------------------------------------------
+            // mysql_disconnect: drop a named session
+            // ------------------------------------------------------------------
+            if request.name == "mysql_disconnect" {
+                let args = request.arguments.unwrap_or_default();
+                let name = match args.get("name").and_then(|v| v.as_str()) {
+                    Some(n) => n.to_string(),
+                    None => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: name")])),
+                };
+                if name == "default" {
+                    return Ok(CallToolResult::error(vec![Content::text("The default session cannot be closed")]));
+                }
+                let mut sessions = self.sessions.lock().await;
+                if sessions.remove(&name).is_some() {
+                    return Ok(CallToolResult::success(vec![
+                        Content::text(format!("Session '{}' closed", name)),
+                    ]));
+                } else {
+                    return Ok(CallToolResult::error(vec![
+                        Content::text(format!("Session '{}' not found", name)),
+                    ]));
+                }
+            }
+
+            // ------------------------------------------------------------------
+            // mysql_list_sessions: list active sessions
+            // ------------------------------------------------------------------
+            if request.name == "mysql_list_sessions" {
+                let sessions = self.sessions.lock().await;
+                let mut list: Vec<serde_json::Value> = vec![];
+
+                // Include default session if there are other sessions too
+                if !sessions.is_empty() {
+                    list.push(json!({
+                        "name": "default",
+                        "host": self.config.connection.host,
+                        "database": self.config.connection.database,
+                        "idle_seconds": null,
+                    }));
+                }
+                for (name, session) in sessions.iter() {
+                    list.push(json!({
+                        "name": name,
+                        "host": session.host,
+                        "database": session.database,
+                        "idle_seconds": session.last_used.elapsed().as_secs(),
+                    }));
+                }
+
+                if list.is_empty() {
+                    // Only the default session exists — show it alone
+                    list.push(json!({
+                        "name": "default",
+                        "host": self.config.connection.host,
+                        "database": self.config.connection.database,
+                        "idle_seconds": null,
+                    }));
+                }
+
+                return Ok(CallToolResult::success(vec![
+                    Content::text(serde_json::to_string_pretty(&json!({"sessions": list})).unwrap_or_default()),
+                ]));
+            }
+
             if request.name == "mysql_multi_query" {
                 let args = request.arguments.unwrap_or_default();
                 let queries: Vec<String> = match args.get("queries").and_then(|v| v.as_array()) {
@@ -238,7 +505,11 @@ impl ServerHandler for McpServer {
                     parsed_queries.push(parsed);
                 }
 
-                let pool = self.db.pool().clone();
+                let session_name = args.get("session").and_then(|v| v.as_str()).unwrap_or("default");
+                let (pool, _introspector) = match self.get_session(session_name).await {
+                    Ok(pair) => pair,
+                    Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+                };
                 let readonly_transaction = self.config.pool.readonly_transaction;
                 let max_rows = self.config.pool.max_rows;
                 let multi_hints = self.config.pool.performance_hints.clone();
@@ -388,8 +659,14 @@ impl ServerHandler for McpServer {
                 let include_fk = include.contains(&"foreign_keys".to_string());
                 let include_size = include.contains(&"size".to_string());
 
+                let session_name = args.get("session").and_then(|v: &serde_json::Value| v.as_str()).unwrap_or("default");
+                let (session_pool, _introspector) = match self.get_session(session_name).await {
+                    Ok(pair) => pair,
+                    Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+                };
+
                 let result = crate::schema::get_schema_info(
-                    self.db.pool(),
+                    &session_pool,
                     &table,
                     database.as_deref(),
                     include_indexes,
@@ -408,9 +685,15 @@ impl ServerHandler for McpServer {
             }
 
             if request.name == "mysql_server_info" {
+                let args = request.arguments.clone().unwrap_or_default();
+                let session_name = args.get("session").and_then(|v: &serde_json::Value| v.as_str()).unwrap_or("default");
+                let (session_pool, _introspector) = match self.get_session(session_name).await {
+                    Ok(pair) => pair,
+                    Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+                };
                 let rows = sqlx::query(
                     "SELECT VERSION() AS mysql_version, CURRENT_USER() AS db_user, DATABASE() AS db_name"
-                ).fetch_all(self.db.pool()).await;
+                ).fetch_all(&session_pool).await;
 
                 return match rows {
                     Ok(rows) if !rows.is_empty() => {
@@ -471,6 +754,13 @@ impl ServerHandler for McpServer {
                 self.config.pool.performance_hints.clone()
             };
 
+            // Session routing: resolve pool and introspector for this request
+            let session_name = args.get("session").and_then(|v| v.as_str()).unwrap_or("default");
+            let (query_pool, query_introspector) = match self.get_session(session_name).await {
+                Ok(pair) => pair,
+                Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
+            };
+
             // Parse and check permissions
             let parsed = match crate::sql_parser::parse_sql(&sql) {
                 Ok(p) => p,
@@ -511,11 +801,9 @@ impl ServerHandler for McpServer {
                 ]));
             }
 
-            let pool = self.db.pool();
-
             if parsed.statement_type.is_read_only() {
                 match crate::query::read::execute_read_query(
-                    pool,
+                    &query_pool,
                     &sql,
                     &parsed.statement_type,
                     self.config.pool.readonly_transaction,
@@ -539,7 +827,7 @@ impl ServerHandler for McpServer {
                                 if !where_cols.is_empty() {
                                     if let Some(ref tname) = parsed.target_table {
                                         let db = self.config.connection.database.as_deref();
-                                        if let Ok(indexed_cols) = self.introspector.list_indexed_columns(tname, db).await {
+                                        if let Ok(indexed_cols) = query_introspector.list_indexed_columns(tname, db).await {
                                             for col in &where_cols {
                                                 if !indexed_cols.iter().any(|ic| ic.eq_ignore_ascii_case(col)) {
                                                     suggestions.push(format!(
@@ -625,7 +913,7 @@ impl ServerHandler for McpServer {
                     ])),
                 }
             } else if parsed.statement_type.is_ddl() {
-                match crate::query::write::execute_ddl_query(pool, &sql).await {
+                match crate::query::write::execute_ddl_query(&query_pool, &sql).await {
                     Ok(result) => {
                         let mut output = json!({
                             "rows_affected": result.rows_affected,
@@ -646,7 +934,7 @@ impl ServerHandler for McpServer {
                     ])),
                 }
             } else {
-                match crate::query::write::execute_write_query(pool, &sql).await {
+                match crate::query::write::execute_write_query(&query_pool, &sql).await {
                     Ok(result) => {
                         let mut output = json!({
                             "rows_affected": result.rows_affected,
