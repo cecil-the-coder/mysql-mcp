@@ -6,7 +6,6 @@ pub struct ExplainResult {
     pub full_table_scan: bool,
     pub index_used: Option<String>,
     pub rows_examined_estimate: u64,
-    pub filtered_pct: f64,
     pub extra_flags: Vec<String>, // "Using filesort", "Using temporary", etc.
     pub tier: String,             // "fast" | "slow" | "very_slow"
 }
@@ -129,9 +128,6 @@ fn parse_v2(v: &Value) -> Result<ExplainResult> {
     let index_used = stats.index_names.into_iter().next();
     // Use total estimated rows from leaf scans as the examined row estimate.
     let rows_examined_estimate = stats.total_estimated_rows.ceil() as u64;
-    // There is no direct "filtered %" in v2; default to 100% (no filtering info).
-    let filtered_pct = 100.0;
-
     let mut extra_flags = Vec::new();
     if stats.has_sort {
         extra_flags.push("Using filesort".to_string());
@@ -144,7 +140,6 @@ fn parse_v2(v: &Value) -> Result<ExplainResult> {
         full_table_scan,
         index_used,
         rows_examined_estimate,
-        filtered_pct,
         extra_flags,
         tier: "fast".to_string(), // will be set by caller
     })

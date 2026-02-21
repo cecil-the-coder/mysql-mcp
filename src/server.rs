@@ -65,16 +65,12 @@ fn is_private_host(host: &str) -> bool {
     }
 }
 
-type IntrospectorKey = (String, u16, Option<String>); // (host, port, database)
-
 pub struct McpServer {
     pub config: Arc<Config>,
     pub db: Arc<DbPool>,
     pub introspector: Arc<SchemaIntrospector>,
     /// Named sessions (does not include "default" which uses self.db/self.introspector).
     sessions: Arc<Mutex<HashMap<String, Session>>>,
-    /// Shared introspector registry keyed by (host, port, database).
-    introspectors: Arc<tokio::sync::Mutex<std::collections::HashMap<IntrospectorKey, Arc<SchemaIntrospector>>>>,
 }
 
 impl McpServer {
@@ -87,14 +83,6 @@ impl McpServer {
         let sessions: Arc<Mutex<HashMap<String, Session>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        let mut intr_map = std::collections::HashMap::new();
-        let default_key = (
-            config.connection.host.clone(),
-            config.connection.port,
-            config.connection.database.clone(),
-        );
-        intr_map.insert(default_key, Arc::clone(&introspector));
-        let introspectors = Arc::new(tokio::sync::Mutex::new(intr_map));
 
         // Background task: drop sessions idle for > 10 minutes (600 s).
         // "default" is never dropped.
@@ -110,7 +98,7 @@ impl McpServer {
             }
         });
 
-        Self { config, db, introspector, sessions, introspectors }
+        Self { config, db, introspector, sessions }
     }
 
     pub async fn run(self) -> Result<()> {
@@ -150,24 +138,6 @@ impl McpServer {
         }
     }
 
-    /// Return a shared SchemaIntrospector for (host, port, database), creating one if needed.
-    async fn get_or_create_introspector(
-        &self,
-        host: &str,
-        port: u16,
-        database: Option<&str>,
-        pool: &sqlx::MySqlPool,
-    ) -> Arc<SchemaIntrospector> {
-        let key = (host.to_string(), port, database.map(str::to_string));
-        let mut map = self.introspectors.lock().await;
-        if let Some(existing) = map.get(&key) {
-            return Arc::clone(existing);
-        }
-        let pool_arc = Arc::new(pool.clone());
-        let new_intr = Arc::new(SchemaIntrospector::new(pool_arc, self.config.pool.cache_ttl_secs));
-        map.insert(key, Arc::clone(&new_intr));
-        new_intr
-    }
 }
 
 /// Serialize a JSON value to pretty-printed text and wrap in a successful CallToolResult.
@@ -619,9 +589,8 @@ impl McpServer {
             self.config.pool.connect_timeout_ms,
         ).await {
             Ok(pool) => {
-                let introspector = self.get_or_create_introspector(
-                    &host, port, database.as_deref(), &pool,
-                ).await;
+                let pool_arc = Arc::new(pool.clone());
+                let introspector = Arc::new(SchemaIntrospector::new(pool_arc, self.config.pool.cache_ttl_secs));
                 let session = Session {
                     pool,
                     introspector,
@@ -854,7 +823,6 @@ impl McpServer {
                     "full_table_scan": full_table_scan,
                     "index_used": plan.index_used,
                     "rows_examined_estimate": rows,
-                    "filtered_pct": plan.filtered_pct,
                     "extra_flags": plan.extra_flags,
                     "tier": tier,
                     "note": "Execution plan only — query was not executed"

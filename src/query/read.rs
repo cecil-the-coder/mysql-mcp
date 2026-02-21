@@ -118,7 +118,6 @@ pub async fn execute_read_query(
                     "full_table_scan": explain_result.full_table_scan,
                     "index_used": explain_result.index_used,
                     "rows_examined_estimate": explain_result.rows_examined_estimate,
-                    "filtered_pct": explain_result.filtered_pct,
                     "extra_flags": explain_result.extra_flags,
                     "tier": explain_result.tier,
                 }))
