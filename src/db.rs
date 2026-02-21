@@ -48,10 +48,11 @@ pub async fn build_session_pool(
     ssl_ca: Option<&str>,
     connect_timeout_ms: u64,
 ) -> Result<MySqlPool> {
-    let ssl_mode = match (ssl, ssl_accept_invalid_certs) {
-        (false, _) => MySqlSslMode::Disabled,
-        (true, true) => MySqlSslMode::Required,
-        (true, false) => MySqlSslMode::VerifyIdentity,
+    let ssl_mode = match (ssl, ssl_accept_invalid_certs, ssl_ca.is_some()) {
+        (false, _, _)       => MySqlSslMode::Disabled,
+        (true, true, _)     => MySqlSslMode::Required,
+        (true, false, true) => MySqlSslMode::VerifyCa,
+        (true, false, false) => MySqlSslMode::VerifyIdentity,
     };
     let mut opts = MySqlConnectOptions::new()
         .host(host)
@@ -99,10 +100,16 @@ fn build_connect_options_from_config(config: &Config) -> Result<MySqlConnectOpti
     }
 
     // TCP connection
-    let ssl_mode = match (config.security.ssl, config.security.ssl_accept_invalid_certs) {
-        (false, _) => MySqlSslMode::Disabled,
-        (true, true) => MySqlSslMode::Required,       // SSL on, skip cert verification
-        (true, false) => MySqlSslMode::VerifyIdentity, // SSL on, verify cert + hostname
+    // When ssl_ca is set without ssl_accept_invalid_certs, use VerifyCa:
+    //   - validates the cert chain against the specified CA
+    //   - does NOT check hostname/IP (servers often use CN=hostname without a SAN)
+    // VerifyIdentity would also check hostname, which fails for IP-addressed servers
+    // with a CN-only cert.
+    let ssl_mode = match (config.security.ssl, config.security.ssl_accept_invalid_certs, config.security.ssl_ca.is_some()) {
+        (false, _, _)      => MySqlSslMode::Disabled,
+        (true, true, _)    => MySqlSslMode::Required,     // SSL on, skip cert verification
+        (true, false, true) => MySqlSslMode::VerifyCa,    // SSL on, verify CA only (no hostname check)
+        (true, false, false) => MySqlSslMode::VerifyIdentity, // SSL on, verify cert + hostname
     };
     let mut opts = MySqlConnectOptions::new()
         .host(&conn.host)
