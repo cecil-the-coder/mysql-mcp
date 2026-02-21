@@ -239,7 +239,8 @@ impl ServerHandler for McpServer {
                     "user": { "type": "string", "description": "MySQL username" },
                     "password": { "type": "string", "description": "MySQL password" },
                     "database": { "type": "string", "description": "Default database to use" },
-                    "ssl": { "type": "boolean", "description": "Enable SSL (default false)" }
+                    "ssl": { "type": "boolean", "description": "Enable SSL (default false)" },
+                    "ssl_ca": { "type": "string", "description": "Path to PEM CA bundle for SSL verification" }
                 },
                 "required": ["name", "host", "user"]
             })));
@@ -331,6 +332,7 @@ impl ServerHandler for McpServer {
                 let password = args.get("password").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let database = args.get("database").and_then(|v| v.as_str()).map(|s| s.to_string());
                 let ssl = args.get("ssl").and_then(|v| v.as_bool()).unwrap_or(false);
+                let ssl_ca = args.get("ssl_ca").and_then(|v| v.as_str()).map(|s| s.to_string());
 
                 tracing::debug!(
                     name = %name,
@@ -343,7 +345,7 @@ impl ServerHandler for McpServer {
 
                 match crate::db::build_session_pool(
                     &host, port, &user, &password,
-                    database.as_deref(), ssl, false,
+                    database.as_deref(), ssl, false, ssl_ca.as_deref(),
                     self.config.pool.connect_timeout_ms,
                 ).await {
                     Ok(pool) => {

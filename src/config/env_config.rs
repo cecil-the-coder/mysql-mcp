@@ -62,6 +62,7 @@ pub fn load_env_config() -> EnvConfig {
         readonly_transaction: parse_bool_env("MYSQL_READONLY_TRANSACTION"),
         ssl: parse_bool_env("MYSQL_SSL"),
         ssl_accept_invalid_certs: parse_bool_env("MYSQL_SSL_ACCEPT_INVALID_CERTS"),
+        ssl_ca: std::env::var("MYSQL_SSL_CA").ok().filter(|s| !s.is_empty()),
         multi_db_write_mode: parse_bool_env("MULTI_DB_WRITE_MODE"),
         allow_runtime_connections: parse_bool_env("MYSQL_ALLOW_RUNTIME_CONNECTIONS"),
         remote_enabled: parse_bool_env("IS_REMOTE_MCP"),
@@ -123,6 +124,7 @@ pub struct EnvConfig {
     pub readonly_transaction: Option<bool>,
     pub ssl: Option<bool>,
     pub ssl_accept_invalid_certs: Option<bool>,
+    pub ssl_ca: Option<String>,
     pub multi_db_write_mode: Option<bool>,
     pub allow_runtime_connections: Option<bool>,
     pub remote_enabled: Option<bool>,
@@ -163,6 +165,7 @@ impl EnvConfig {
         if let Some(v) = self.readonly_transaction { base.pool.readonly_transaction = v; }
         if let Some(v) = self.ssl { base.security.ssl = v; }
         if let Some(v) = self.ssl_accept_invalid_certs { base.security.ssl_accept_invalid_certs = v; }
+        if let Some(v) = &self.ssl_ca { base.security.ssl_ca = Some(v.clone()); }
         if let Some(v) = self.multi_db_write_mode { base.security.multi_db_write_mode = v; }
         if let Some(v) = self.allow_runtime_connections { base.security.allow_runtime_connections = v; }
         if !self.schema_permissions.is_empty() {

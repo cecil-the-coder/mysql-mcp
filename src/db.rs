@@ -45,6 +45,7 @@ pub async fn build_session_pool(
     database: Option<&str>,
     ssl: bool,
     ssl_accept_invalid_certs: bool,
+    ssl_ca: Option<&str>,
     connect_timeout_ms: u64,
 ) -> Result<MySqlPool> {
     let ssl_mode = match (ssl, ssl_accept_invalid_certs) {
@@ -60,6 +61,9 @@ pub async fn build_session_pool(
         .ssl_mode(ssl_mode);
     if let Some(db) = database {
         opts = opts.database(db);
+    }
+    if let Some(ca_path) = ssl_ca {
+        opts = opts.ssl_ca(ca_path);
     }
     let pool = MySqlPoolOptions::new()
         .max_connections(5)
@@ -108,6 +112,9 @@ fn build_connect_options_from_config(config: &Config) -> Result<MySqlConnectOpti
         .ssl_mode(ssl_mode);
     if let Some(db) = &conn.database {
         opts = opts.database(db);
+    }
+    if let Some(ca_path) = &config.security.ssl_ca {
+        opts = opts.ssl_ca(ca_path);
     }
     Ok(opts)
 }

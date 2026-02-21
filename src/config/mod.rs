@@ -59,6 +59,9 @@ pub struct SecurityConfig {
     pub allow_ddl: bool,
     pub ssl: bool,
     pub ssl_accept_invalid_certs: bool,
+    /// Path to a PEM CA bundle for SSL verification (optional).
+    /// When set and ssl=true, this CA is used instead of the system trust store.
+    pub ssl_ca: Option<String>,
     /// Per-schema permission overrides: schema_name -> SchemaPermissions
     pub schema_permissions: HashMap<String, SchemaPermissions>,
     pub multi_db_write_mode: bool,
@@ -147,6 +150,7 @@ impl Default for SecurityConfig {
             allow_ddl: false,
             ssl: false,
             ssl_accept_invalid_certs: false,
+            ssl_ca: None,
             schema_permissions: HashMap::new(),
             multi_db_write_mode: false,
             allow_runtime_connections: false,
