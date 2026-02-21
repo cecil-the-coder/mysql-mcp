@@ -107,13 +107,15 @@ pub async fn execute_read_query(
     let plan: Option<Value> = if run_explain {
         match crate::query::explain::run_explain(pool, sql).await {
             Ok(mut explain_result) => {
-                // Compute tier based on db_elapsed
-                explain_result.tier = if db_elapsed < 100 {
-                    "fast".to_string()
-                } else if db_elapsed < 1000 {
+                // Compute tier based on MySQL's own rows_examined_estimate and
+                // full_table_scan — NOT wall-clock time, which includes network RTT
+                // and tells the LLM nothing actionable about query efficiency.
+                explain_result.tier = if explain_result.full_table_scan && explain_result.rows_examined_estimate > 10_000 {
+                    "very_slow".to_string()
+                } else if explain_result.full_table_scan || explain_result.rows_examined_estimate > 1_000 {
                     "slow".to_string()
                 } else {
-                    "very_slow".to_string()
+                    "fast".to_string()
                 };
                 // Compute efficiency: rows_returned / rows_examined
                 explain_result.efficiency = if explain_result.rows_examined_estimate > 0 {
