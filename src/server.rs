@@ -75,21 +75,21 @@ impl McpServer {
         Ok(())
     }
 
-    /// Resolve a session name to (pool, introspector).
+    /// Resolve a session name to (pool, introspector, database).
     /// Updates last_used on non-default sessions.
     /// Returns Err with a user-friendly message if not found.
     async fn get_session(
         &self,
         name: &str,
-    ) -> std::result::Result<(sqlx::MySqlPool, Arc<SchemaIntrospector>), String> {
+    ) -> std::result::Result<(sqlx::MySqlPool, Arc<SchemaIntrospector>, Option<String>), String> {
         if name == "default" || name.is_empty() {
-            return Ok((self.db.pool().clone(), self.introspector.clone()));
+            return Ok((self.db.pool().clone(), self.introspector.clone(), self.config.connection.database.clone()));
         }
         let mut map = self.sessions.lock().await;
         match map.get_mut(name) {
             Some(session) => {
                 session.last_used = std::time::Instant::now();
-                Ok((session.pool.clone(), session.introspector.clone()))
+                Ok((session.pool.clone(), session.introspector.clone(), session.database.clone()))
             }
             None => Err(format!(
                 "Session '{}' not found. Use mysql_connect to create it, or omit 'session' to use the default connection.",
@@ -508,7 +508,7 @@ impl ServerHandler for McpServer {
                 }
 
                 let session_name = args.get("session").and_then(|v| v.as_str()).unwrap_or("default");
-                let (pool, _introspector) = match self.get_session(session_name).await {
+                let (pool, _introspector, _session_db) = match self.get_session(session_name).await {
                     Ok(pair) => pair,
                     Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
                 };
@@ -662,7 +662,7 @@ impl ServerHandler for McpServer {
                 let include_size = include.contains(&"size".to_string());
 
                 let session_name = args.get("session").and_then(|v: &serde_json::Value| v.as_str()).unwrap_or("default");
-                let (session_pool, _introspector) = match self.get_session(session_name).await {
+                let (session_pool, _introspector, _session_db) = match self.get_session(session_name).await {
                     Ok(pair) => pair,
                     Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
                 };
@@ -689,7 +689,7 @@ impl ServerHandler for McpServer {
             if request.name == "mysql_server_info" {
                 let args = request.arguments.clone().unwrap_or_default();
                 let session_name = args.get("session").and_then(|v: &serde_json::Value| v.as_str()).unwrap_or("default");
-                let (session_pool, _introspector) = match self.get_session(session_name).await {
+                let (session_pool, _introspector, _session_db) = match self.get_session(session_name).await {
                     Ok(pair) => pair,
                     Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
                 };
@@ -758,7 +758,7 @@ impl ServerHandler for McpServer {
 
             // Session routing: resolve pool and introspector for this request
             let session_name = args.get("session").and_then(|v| v.as_str()).unwrap_or("default");
-            let (query_pool, query_introspector) = match self.get_session(session_name).await {
+            let (query_pool, query_introspector, session_db) = match self.get_session(session_name).await {
                 Ok(pair) => pair,
                 Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
             };
@@ -828,7 +828,7 @@ impl ServerHandler for McpServer {
                                 let where_cols = crate::sql_parser::extract_where_columns(&parsed);
                                 if !where_cols.is_empty() {
                                     if let Some(ref tname) = parsed.target_table {
-                                        let db = self.config.connection.database.as_deref();
+                                        let db = session_db.as_deref();
                                         if let Ok(indexed_cols) = query_introspector.list_indexed_columns(tname, db).await {
                                             for col in &where_cols {
                                                 if !indexed_cols.iter().any(|ic| ic.eq_ignore_ascii_case(col)) {

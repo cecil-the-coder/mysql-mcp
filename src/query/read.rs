@@ -134,21 +134,26 @@ pub async fn execute_read_query(
                 } else {
                     "fast".to_string()
                 };
-                // Compute efficiency: rows_returned / rows_examined
-                explain_result.efficiency = if explain_result.rows_examined_estimate > 0 {
-                    f64::min(
+                // Compute efficiency: rows_returned / rows_examined.
+                // Returns null for empty result sets — a query that correctly returns 0 rows
+                // isn't "inefficient" (the ratio is 0/N=0.0 which is misleading).
+                let efficiency: Option<f64> = if explain_result.rows_examined_estimate == 0 {
+                    Some(1.0)
+                } else if row_count == 0 {
+                    None // empty result set; ratio is meaningless
+                } else {
+                    Some(f64::min(
                         1.0,
                         (row_count as f64) / (explain_result.rows_examined_estimate as f64),
-                    )
-                } else {
-                    1.0
+                    ))
                 };
+                explain_result.efficiency = efficiency.unwrap_or(0.0);
                 Some(serde_json::json!({
                     "full_table_scan": explain_result.full_table_scan,
                     "index_used": explain_result.index_used,
                     "rows_examined_estimate": explain_result.rows_examined_estimate,
                     "filtered_pct": explain_result.filtered_pct,
-                    "efficiency": explain_result.efficiency,
+                    "efficiency": efficiency,
                     "extra_flags": explain_result.extra_flags,
                     "tier": explain_result.tier,
                 }))
