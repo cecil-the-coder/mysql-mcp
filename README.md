@@ -217,8 +217,7 @@ Execute a single SQL statement.
 | `filtered_pct` | number | Estimated percentage of rows remaining after filtering |
 | `efficiency` | number | rows_returned / rows_examined_estimate |
 | `extra_flags` | array of strings | MySQL EXPLAIN Extra field tokens (e.g. `Using filesort`) |
-| `tier` | string | `fast` (< 100 ms), `slow` (100–999 ms), or `very_slow` (>= 1000 ms) |
-| `db_elapsed_ms` | number | Actual query duration that triggered this EXPLAIN |
+| `tier` | string | `fast` (index used, ≤1k rows examined), `slow` (full scan or >1k rows), `very_slow` (full scan + >10k rows) |
 
 **Response fields — write queries (INSERT / UPDATE / DELETE)**
 
@@ -272,8 +271,7 @@ With `performance_hints=always` (or `explain: true`), a slow query also returns 
     "filtered_pct": 10.0,
     "efficiency": 0.0097,
     "extra_flags": ["Using where"],
-    "tier": "slow",
-    "db_elapsed_ms": 820
+    "tier": "slow"
   },
   "suggestions": [
     "Column `active` in WHERE clause on table `users` has no index. Consider: CREATE INDEX idx_users_active ON users(active);"
