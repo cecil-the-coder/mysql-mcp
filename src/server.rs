@@ -247,8 +247,10 @@ impl ServerHandler for McpServer {
                                 "row_count": r.row_count,
                                 "execution_time_ms": r.execution_time_ms,
                                 "serialization_time_ms": r.serialization_time_ms,
-                                "capped": r.capped,
                             });
+                            if r.capped {
+                                entry["capped"] = json!(true);
+                            }
                             if !r.parse_warnings.is_empty() {
                                 entry["parse_warnings"] = json!(r.parse_warnings);
                             }
