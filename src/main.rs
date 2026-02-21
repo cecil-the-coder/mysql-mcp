@@ -9,7 +9,6 @@ pub mod permissions;
 pub mod query;
 pub mod schema;
 pub mod server;
-pub mod remote;
 #[cfg(test)]
 pub mod test_helpers;
 #[cfg(test)]
@@ -52,15 +51,10 @@ async fn main() -> Result<()> {
         });
     }
 
-    if config.remote.enabled {
-        let server = Arc::new(server::McpServer::new(config.clone(), db));
-        crate::remote::run_http_server(config, server).await?;
-    } else {
-        // Create and run the MCP server
-        let mcp_server = server::McpServer::new(config, db);
-        info!("MCP server starting on stdio");
-        mcp_server.run().await?;
-    }
+    // Create and run the MCP server
+    let mcp_server = server::McpServer::new(config, db);
+    info!("MCP server starting on stdio");
+    mcp_server.run().await?;
 
     Ok(())
 }

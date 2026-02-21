@@ -36,7 +36,7 @@ pub fn check_permission(
                 .and_then(|p| p.allow_insert)
                 .unwrap_or(sec.allow_insert);
             if !allowed {
-                bail!("INSERT operations are not allowed. Set ALLOW_INSERT_OPERATION=true to enable.");
+                bail!("INSERT operations are not allowed. Set MYSQL_ALLOW_INSERT=true to enable.");
             }
             check_multi_db_write(config, target_schema)?;
             Ok(())
@@ -46,7 +46,7 @@ pub fn check_permission(
                 .and_then(|p| p.allow_update)
                 .unwrap_or(sec.allow_update);
             if !allowed {
-                bail!("UPDATE operations are not allowed. Set ALLOW_UPDATE_OPERATION=true to enable.");
+                bail!("UPDATE operations are not allowed. Set MYSQL_ALLOW_UPDATE=true to enable.");
             }
             check_multi_db_write(config, target_schema)?;
             Ok(())
@@ -56,7 +56,7 @@ pub fn check_permission(
                 .and_then(|p| p.allow_delete)
                 .unwrap_or(sec.allow_delete);
             if !allowed {
-                bail!("DELETE operations are not allowed. Set ALLOW_DELETE_OPERATION=true to enable.");
+                bail!("DELETE operations are not allowed. Set MYSQL_ALLOW_DELETE=true to enable.");
             }
             check_multi_db_write(config, target_schema)?;
             Ok(())
@@ -66,7 +66,7 @@ pub fn check_permission(
                 .and_then(|p| p.allow_ddl)
                 .unwrap_or(sec.allow_ddl);
             if !allowed {
-                bail!("DDL operations ({}) are not allowed. Set ALLOW_DDL_OPERATION=true to enable.", stmt_type.name());
+                bail!("DDL operations ({}) are not allowed. Set MYSQL_ALLOW_DDL=true to enable.", stmt_type.name());
             }
             check_multi_db_write(config, target_schema)?;
             Ok(())
@@ -91,10 +91,10 @@ fn check_multi_db_write(config: &Config, target_schema: Option<&str>) -> Result<
     if config.connection.database.is_some() {
         return Ok(());
     }
-    // Multi-DB mode: check MULTI_DB_WRITE_MODE
+    // Multi-DB mode: check MYSQL_MULTI_DB_WRITE_MODE
     if !config.security.multi_db_write_mode {
         bail!(
-            "Write operations on schema '{}' are not allowed in multi-database mode. Set MULTI_DB_WRITE_MODE=true to enable writes.",
+            "Write operations on schema '{}' are not allowed in multi-database mode. Set MYSQL_MULTI_DB_WRITE_MODE=true to enable writes.",
             target_schema.unwrap_or("<unknown>")
         );
     }

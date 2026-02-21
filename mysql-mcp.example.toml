@@ -38,6 +38,31 @@ connect_timeout_ms = 10000
 # Set to 0 to disable caching
 cache_ttl_secs = 60
 
+# Maximum number of rows returned per query (default: 1000).
+# Acts as a safety limit to prevent runaway queries from returning huge result sets.
+# Set to a large number like 10000 for effectively unlimited rows.
+# max_rows = 1000
+
+# Number of connections to pre-open at startup (default: 1).
+# Reduces latency on the first real queries by establishing connections in the background.
+# warmup_connections = 1
+
+# Wrap every SELECT in SET TRANSACTION READ ONLY (default: false).
+# Provides an additional database-level guarantee that no writes can occur during SELECT.
+# When false (the default), the server uses the faster single-round-trip path.
+# readonly_transaction = false
+
+# Performance hints control automatic EXPLAIN analysis (default: "none").
+# Valid values:
+#   "none"   — never run EXPLAIN automatically (default)
+#   "auto"   — run EXPLAIN on queries that exceed slow_query_threshold_ms
+#   "always" — run EXPLAIN before every SELECT and include the plan in the response
+# performance_hints = "none"
+
+# Threshold (ms) for automatic EXPLAIN when performance_hints = "auto" (default: 500).
+# Queries that take longer than this will have their query plan included in the response.
+# slow_query_threshold_ms = 500
+
 [security]
 # Allow INSERT operations (default: false)
 allow_insert = false
@@ -50,10 +75,6 @@ allow_delete = false
 
 # Allow DDL operations (CREATE, ALTER, DROP, TRUNCATE) (default: false)
 allow_ddl = false
-
-# Disable read-only transaction wrapper for DDL (MySQL requires this for DDL)
-# Only needed when allow_ddl = true (default: false)
-disable_read_only_transactions = false
 
 # Require SSL for MySQL connections (default: false)
 ssl = false
@@ -77,17 +98,6 @@ multi_db_write_mode = false
 # allow_update = true
 # allow_delete = false
 # allow_ddl = false
-
-[remote]
-# Enable HTTP remote transport mode (default: false)
-# When true, serves MCP over HTTP instead of stdio
-enabled = false
-
-# Secret key for Bearer token authentication in remote mode
-# secret_key = "your-secret-key-here"
-
-# Port to listen on in remote mode (default: 3000)
-port = 3000
 
 [monitoring]
 # Enable request logging (default: true)

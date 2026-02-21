@@ -2,14 +2,12 @@ use anyhow::Result;
 use crate::config::Config;
 use crate::config::toml_config::load_default_config;
 use crate::config::env_config::load_env_config;
-use crate::config::cli_parser::parse_mysql_cli_string;
 
 /// Load the final merged config:
 /// 1. Load dotenv if .env exists
 /// 2. Load TOML base config
 /// 3. Load env var overrides
 /// 4. Apply overrides onto base
-/// 5. If connection_string looks like a CLI string, parse and apply it
 pub fn load_config() -> Result<Config> {
     // 1. Load .env if present
     if std::path::Path::new(".env").exists() {
@@ -23,31 +21,7 @@ pub fn load_config() -> Result<Config> {
     let env = load_env_config();
 
     // 4. Merge
-    let mut config = env.apply_to(base);
-
-    // 5. If connection_string is set and looks like a CLI string, parse it
-    if let Some(cs) = config.connection.connection_string.clone() {
-        if cs.trim_start().starts_with('-') {
-            let parsed = parse_mysql_cli_string(&cs);
-            if let Some(h) = parsed.host {
-                config.connection.host = h;
-            }
-            if let Some(p) = parsed.port {
-                config.connection.port = p;
-            }
-            if let Some(u) = parsed.user {
-                config.connection.user = u;
-            }
-            if let Some(pw) = parsed.password {
-                config.connection.password = pw;
-            }
-            if let Some(db) = parsed.database {
-                config.connection.database = Some(db);
-            }
-            // Clear the connection_string so db.rs won't try to use it as a URL
-            config.connection.connection_string = None;
-        }
-    }
+    let config = env.apply_to(base);
 
     Ok(config)
 }
@@ -146,34 +120,6 @@ allow_update = false
         let perms = config.security.schema_permissions.get("mydb").unwrap();
         assert_eq!(perms.allow_insert, Some(true));
         assert_eq!(perms.allow_update, Some(false));
-    }
-
-    #[test]
-    fn test_cli_string_parsing_via_load_config_logic() {
-        // Test the CLI string parsing inline (simulates what load_config does)
-        let mut config = Config::default();
-        let cs = "-hlocalhost -P3307 -uadmin -psecret mydb".to_string();
-        config.connection.connection_string = Some(cs.clone());
-
-        // Simulate the connection_string CLI parsing logic
-        if let Some(cs_val) = config.connection.connection_string.clone() {
-            if cs_val.trim_start().starts_with('-') {
-                let parsed = crate::config::cli_parser::parse_mysql_cli_string(&cs_val);
-                if let Some(h) = parsed.host { config.connection.host = h; }
-                if let Some(p) = parsed.port { config.connection.port = p; }
-                if let Some(u) = parsed.user { config.connection.user = u; }
-                if let Some(pw) = parsed.password { config.connection.password = pw; }
-                if let Some(db) = parsed.database { config.connection.database = Some(db); }
-                config.connection.connection_string = None;
-            }
-        }
-
-        assert_eq!(config.connection.host, "localhost");
-        assert_eq!(config.connection.port, 3307);
-        assert_eq!(config.connection.user, "admin");
-        assert_eq!(config.connection.password, "secret");
-        assert_eq!(config.connection.database, Some("mydb".to_string()));
-        assert!(config.connection.connection_string.is_none());
     }
 
     #[test]

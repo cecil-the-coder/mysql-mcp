@@ -140,14 +140,14 @@ A `.env` file in the working directory is loaded automatically if present.
 
 | TOML key | Environment variable | Type | Default | Description |
 |---|---|---|---|---|
-| `security.allow_insert` | `ALLOW_INSERT_OPERATION` | bool | `false` | Permit INSERT statements |
-| `security.allow_update` | `ALLOW_UPDATE_OPERATION` | bool | `false` | Permit UPDATE statements |
-| `security.allow_delete` | `ALLOW_DELETE_OPERATION` | bool | `false` | Permit DELETE statements |
-| `security.allow_ddl` | `ALLOW_DDL_OPERATION` | bool | `false` | Permit DDL statements (CREATE, ALTER, DROP, TRUNCATE) |
+| `security.allow_insert` | `MYSQL_ALLOW_INSERT` | bool | `false` | Permit INSERT statements |
+| `security.allow_update` | `MYSQL_ALLOW_UPDATE` | bool | `false` | Permit UPDATE statements |
+| `security.allow_delete` | `MYSQL_ALLOW_DELETE` | bool | `false` | Permit DELETE statements |
+| `security.allow_ddl` | `MYSQL_ALLOW_DDL` | bool | `false` | Permit DDL statements (CREATE, ALTER, DROP, TRUNCATE) |
 | `security.ssl` | `MYSQL_SSL` | bool | `false` | Require SSL/TLS for the connection |
 | `security.ssl_accept_invalid_certs` | `MYSQL_SSL_ACCEPT_INVALID_CERTS` | bool | `false` | Skip certificate validation (useful for self-signed certs; not for production) |
-| `security.schema_permissions` | `SCHEMA_<NAME>_PERMISSIONS` | map | `{}` | Per-schema write permission overrides (see below) |
-| `security.multi_db_write_mode` | `MULTI_DB_WRITE_MODE` | bool | `false` | Allow writes when no default database is set (multi-DB mode) |
+| `security.schema_permissions` | `MYSQL_SCHEMA_<NAME>_PERMISSIONS` | map | `{}` | Per-schema write permission overrides (see below) |
+| `security.multi_db_write_mode` | `MYSQL_MULTI_DB_WRITE_MODE` | bool | `false` | Allow writes when no default database is set (multi-DB mode) |
 | `security.allow_runtime_connections` | `MYSQL_ALLOW_RUNTIME_CONNECTIONS` | bool | `false` | Allow `mysql_connect` to accept raw credentials at runtime; when `false` only preset-based connections are permitted |
 | `security.max_sessions` | `MYSQL_MAX_SESSIONS` | u32 | `50` | Maximum number of concurrent named sessions (not counting the default session); prevents unbounded session creation when `allow_runtime_connections` is `true` |
 
@@ -385,10 +385,10 @@ By default (`readonly_transaction = false`), SELECT/SHOW/EXPLAIN run as bare `fe
 By default, only read-only statements are permitted. Enable writes explicitly:
 
 ```bash
-ALLOW_INSERT_OPERATION=true
-ALLOW_UPDATE_OPERATION=true
-ALLOW_DELETE_OPERATION=true
-ALLOW_DDL_OPERATION=true
+MYSQL_ALLOW_INSERT=true
+MYSQL_ALLOW_UPDATE=true
+MYSQL_ALLOW_DELETE=true
+MYSQL_ALLOW_DDL=true
 ```
 
 Or in TOML:
@@ -408,9 +408,9 @@ Override write permissions for individual databases without affecting the global
 **Environment variable** (comma-separated list of allowed operations):
 
 ```bash
-ALLOW_INSERT_OPERATION=false
-SCHEMA_APP_DB_PERMISSIONS=insert,update
-SCHEMA_ARCHIVE_DB_PERMISSIONS=
+MYSQL_ALLOW_INSERT=false
+MYSQL_SCHEMA_APP_DB_PERMISSIONS=insert,update
+MYSQL_SCHEMA_ARCHIVE_DB_PERMISSIONS=
 ```
 
 This allows INSERT and UPDATE only on `app_db`; no writes on `archive_db`; global default (false) applies to everything else.
@@ -425,11 +425,11 @@ allow_delete = false
 allow_ddl = false
 ```
 
-Schema names in TOML are lowercase. The `SCHEMA_<NAME>_PERMISSIONS` env var name is case-insensitive in the `<NAME>` portion.
+Schema names in TOML are lowercase. The `MYSQL_SCHEMA_<NAME>_PERMISSIONS` env var name is case-insensitive in the `<NAME>` portion.
 
 ### Multi-database mode
 
-When `connection.database` is not set, the server operates in multi-database mode: it lists tables from all non-system databases and accepts fully-qualified names (`SELECT * FROM mydb.users`). Writes in this mode require `multi_db_write_mode = true` (or `MULTI_DB_WRITE_MODE=true`) in addition to the relevant `allow_*` flags.
+When `connection.database` is not set, the server operates in multi-database mode: it lists tables from all non-system databases and accepts fully-qualified names (`SELECT * FROM mydb.users`). Writes in this mode require `multi_db_write_mode = true` (or `MYSQL_MULTI_DB_WRITE_MODE=true`) in addition to the relevant `allow_*` flags.
 
 ### SSL
 
