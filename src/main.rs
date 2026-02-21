@@ -19,8 +19,12 @@ mod perf_tests;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
+    // Initialize tracing — MUST write to stderr, not stdout.
+    // The MCP server uses stdout as the JSON-RPC transport; any log line on stdout
+    // would corrupt the protocol stream and appear as malformed input to the client.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
     info!("mysql-mcp starting");
 
     // Load configuration

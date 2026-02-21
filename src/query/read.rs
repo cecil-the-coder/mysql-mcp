@@ -249,22 +249,26 @@ fn column_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col: &sqlx::mysql::My
         // Temporal types: MySQL binary protocol sends these as binary-encoded bytes, not text.
         // String decoding fails even with try_get_unchecked. Use chrono types (already in Cargo.toml
         // via sqlx "chrono" feature) which have registered binary decoders.
+        //
+        // Use try_get_unchecked (same pattern as DECIMAL) to bypass sqlx's accepts() check,
+        // which may reject computed-expression columns (e.g. NOW()) in MySQL 9.6+ where the
+        // column type ID doesn't exactly match the expected ColumnType::Datetime enum variant.
         "DATETIME" | "TIMESTAMP" => {
-            if let Ok(v) = row.try_get::<Option<chrono::NaiveDateTime>, _>(idx) {
+            if let Ok(v) = row.try_get_unchecked::<Option<chrono::NaiveDateTime>, _>(idx) {
                 return v
                     .map(|dt| Value::String(dt.format("%Y-%m-%d %H:%M:%S").to_string()))
                     .unwrap_or(Value::Null);
             }
         }
         "DATE" => {
-            if let Ok(v) = row.try_get::<Option<chrono::NaiveDate>, _>(idx) {
+            if let Ok(v) = row.try_get_unchecked::<Option<chrono::NaiveDate>, _>(idx) {
                 return v
                     .map(|d| Value::String(d.format("%Y-%m-%d").to_string()))
                     .unwrap_or(Value::Null);
             }
         }
         "TIME" => {
-            if let Ok(v) = row.try_get::<Option<chrono::NaiveTime>, _>(idx) {
+            if let Ok(v) = row.try_get_unchecked::<Option<chrono::NaiveTime>, _>(idx) {
                 return v
                     .map(|t| Value::String(t.format("%H:%M:%S").to_string()))
                     .unwrap_or(Value::Null);
@@ -333,5 +337,21 @@ mod integration_tests {
         let Some(test_db) = setup_test_db().await else { return; };
         let result = execute_read_query(&test_db.pool, "SELECT 1", &StatementType::Select, false, 0, "none", 0).await.unwrap();
         assert!(result.execution_time_ms < 5000);
+    }
+
+    #[tokio::test]
+    async fn test_datetime_serialization() {
+        let Some(test_db) = setup_test_db().await else { return; };
+        let result = execute_read_query(
+            &test_db.pool,
+            "SELECT NOW() as now, CURDATE() as today, CURTIME() as t",
+            &StatementType::Select,
+            false, 0, "none", 0,
+        ).await.unwrap();
+        assert_eq!(result.row_count, 1);
+        let row = &result.rows[0];
+        assert!(row["now"].is_string(),   "NOW() must serialize as string, got {:?}", row["now"]);
+        assert!(row["today"].is_string(), "CURDATE() must serialize as string, got {:?}", row["today"]);
+        assert!(row["t"].is_string(),     "CURTIME() must serialize as string, got {:?}", row["t"]);
     }
 }
