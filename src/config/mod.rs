@@ -4,7 +4,6 @@ use std::collections::HashMap;
 pub mod toml_config;
 pub mod env_config;
 pub mod merge;
-pub mod cli_parser;
 #[cfg(test)]
 mod tests;
 
@@ -15,7 +14,6 @@ pub struct Config {
     pub connection: ConnectionConfig,
     pub pool: PoolConfig,
     pub security: SecurityConfig,
-    pub remote: RemoteConfig,
     pub monitoring: MonitoringConfig,
     pub timezone: Option<String>,
     pub date_strings: bool,
@@ -80,14 +78,11 @@ pub struct SchemaPermissions {
     pub allow_ddl: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
-pub struct RemoteConfig {
-    pub enabled: bool,
-    pub secret_key: Option<String>,
-    pub port: u16,
-}
-
+/// Monitoring settings.
+///
+/// Note: these fields are configurable and validated, but none are currently read by
+/// production code (main.rs does not use `config.monitoring`). They exist for future use
+/// and to keep the TOML schema stable. Safe to extend without breaking existing behaviour.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct MonitoringConfig {
@@ -102,7 +97,6 @@ impl Default for Config {
             connection: ConnectionConfig::default(),
             pool: PoolConfig::default(),
             security: SecurityConfig::default(),
-            remote: RemoteConfig::default(),
             monitoring: MonitoringConfig::default(),
             timezone: None,
             date_strings: false,
@@ -154,16 +148,6 @@ impl Default for SecurityConfig {
             multi_db_write_mode: false,
             allow_runtime_connections: false,
             max_sessions: 50,
-        }
-    }
-}
-
-impl Default for RemoteConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            secret_key: None,
-            port: 3000,
         }
     }
 }
@@ -221,23 +205,6 @@ impl Config {
 
         if self.security.max_sessions == 0 {
             anyhow::bail!("security.max_sessions must be >= 1");
-        }
-
-        // Remote mode requires a non-empty secret key
-        if self.remote.enabled {
-            match &self.remote.secret_key {
-                None => {
-                    anyhow::bail!(
-                        "Config error: remote mode is enabled but remote.secret_key / MYSQL_REMOTE_SECRET is not set"
-                    );
-                }
-                Some(s) if s.is_empty() => {
-                    anyhow::bail!(
-                        "Config error: remote mode is enabled but remote.secret_key / MYSQL_REMOTE_SECRET is not set"
-                    );
-                }
-                _ => {}
-            }
         }
 
         Ok(())

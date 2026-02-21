@@ -84,7 +84,7 @@ mod perf_tests {
             let _permit = crate::test_helpers::db_semaphore()
                 .acquire().await.expect("DB semaphore closed");
             for _ in 0..WARMUP {
-                crate::query::read::execute_read_query(pool, "SELECT 1", &crate::sql_parser::StatementType::Select, false, 0, "none", 0).await.unwrap();
+                crate::query::read::execute_read_query(pool, "SELECT 1", &crate::sql_parser::parse_sql("SELECT 1").unwrap(), false, 0, "none", 0).await.unwrap();
             }
         }
 
@@ -92,7 +92,7 @@ mod perf_tests {
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(pool, "SELECT 1", &crate::sql_parser::StatementType::Select, false, 0, "none", 0).await.unwrap();
+            crate::query::read::execute_read_query(pool, "SELECT 1", &crate::sql_parser::parse_sql("SELECT 1").unwrap(), false, 0, "none", 0).await.unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
@@ -138,7 +138,7 @@ mod perf_tests {
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(pool, sql, &crate::sql_parser::StatementType::Select, false, 0, "none", 0).await.unwrap();
+            crate::query::read::execute_read_query(pool, sql, &crate::sql_parser::parse_sql(sql).unwrap(), false, 0, "none", 0).await.unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
@@ -189,7 +189,7 @@ mod perf_tests {
                 let mut v = Vec::with_capacity(PER_TASK);
                 for _ in 0..PER_TASK {
                     let t = Instant::now();
-                    crate::query::read::execute_read_query(&pool, "SELECT 1", &crate::sql_parser::StatementType::Select, false, 0, "none", 0).await.unwrap();
+                    crate::query::read::execute_read_query(&pool, "SELECT 1", &crate::sql_parser::parse_sql("SELECT 1").unwrap(), false, 0, "none", 0).await.unwrap();
                     v.push(t.elapsed().as_secs_f64() * 1000.0);
                 }
                 v
@@ -364,7 +364,7 @@ mod perf_tests {
                 let mut v = Vec::with_capacity(PER_TASK);
                 for _ in 0..PER_TASK {
                     let t = Instant::now();
-                    crate::query::read::execute_read_query(&pool, "SELECT 1", &crate::sql_parser::StatementType::Select, false, 0, "none", 0).await.unwrap();
+                    crate::query::read::execute_read_query(&pool, "SELECT 1", &crate::sql_parser::parse_sql("SELECT 1").unwrap(), false, 0, "none", 0).await.unwrap();
                     v.push(t.elapsed().as_secs_f64() * 1000.0);
                 }
                 v
@@ -399,7 +399,7 @@ mod perf_tests {
             let _permit = crate::test_helpers::db_semaphore()
                 .acquire().await.expect("DB semaphore closed");
             for _ in 0..3 {
-                crate::query::read::execute_read_query(pool, "SELECT 1", &crate::sql_parser::StatementType::Select, false, 0, "none", 0).await.unwrap();
+                crate::query::read::execute_read_query(pool, "SELECT 1", &crate::sql_parser::parse_sql("SELECT 1").unwrap(), false, 0, "none", 0).await.unwrap();
             }
         }
 
@@ -408,7 +408,7 @@ mod perf_tests {
         let mut with_tx_ms = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(pool, "SELECT 1", &crate::sql_parser::StatementType::Select, true, 0, "none", 0).await.unwrap();
+            crate::query::read::execute_read_query(pool, "SELECT 1", &crate::sql_parser::parse_sql("SELECT 1").unwrap(), true, 0, "none", 0).await.unwrap();
             with_tx_ms.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let wall_with_ms = wall_with.elapsed().as_secs_f64() * 1000.0;
@@ -418,7 +418,7 @@ mod perf_tests {
         let mut no_tx_ms = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(pool, "SELECT 1", &crate::sql_parser::StatementType::Select, false, 0, "none", 0).await.unwrap();
+            crate::query::read::execute_read_query(pool, "SELECT 1", &crate::sql_parser::parse_sql("SELECT 1").unwrap(), false, 0, "none", 0).await.unwrap();
             no_tx_ms.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let wall_without_ms = wall_without.elapsed().as_secs_f64() * 1000.0;
@@ -497,7 +497,7 @@ mod perf_tests {
         let result_1000 = crate::query::read::execute_read_query(
             pool,
             "SELECT * FROM perf_ser_test LIMIT 1000",
-            &crate::sql_parser::StatementType::Select,
+            &crate::sql_parser::parse_sql("SELECT * FROM perf_ser_test LIMIT 1000").unwrap(),
             false,
             0,
             "none",
@@ -508,7 +508,7 @@ mod perf_tests {
         let result_100 = crate::query::read::execute_read_query(
             pool,
             "SELECT * FROM perf_ser_test LIMIT 100",
-            &crate::sql_parser::StatementType::Select,
+            &crate::sql_parser::parse_sql("SELECT * FROM perf_ser_test LIMIT 100").unwrap(),
             false,
             0,
             "none",

@@ -83,6 +83,23 @@ pub struct ParsedStatement {
     pub target_table: Option<String>,
     /// The original SQL string (used for heuristic-based analysis)
     pub sql: String,
+
+    // Cached AST-derived fields populated once during parse_sql().
+    // These allow parse_warnings(), check_limit_presence(), and extract_where_columns()
+    // to reuse parse results rather than re-invoking the sqlparser crate.
+
+    /// True if the outermost SELECT (or Query) has a LIMIT clause.
+    /// Only meaningful for Select statements; false otherwise.
+    pub has_limit: bool,
+    /// True if the outermost SELECT has a WHERE clause.
+    /// Only meaningful for Select/Update/Delete statements.
+    pub has_where: bool,
+    /// True if the SELECT projection contains a wildcard (* or table.*).
+    /// Only meaningful for Select statements.
+    pub has_wildcard: bool,
+    /// Column names referenced in the WHERE clause (deduplicated, order preserved).
+    /// Only meaningful for Select statements; empty otherwise.
+    pub where_columns: Vec<String>,
 }
 
 /// Parse a SQL string and return the statement type and target schema.
@@ -105,9 +122,29 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
 }
 
 fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedStatement> {
+    // For SELECT queries we extract cached analysis fields from the AST here so that
+    // callers (parse_warnings, execute_read_query, extract_where_columns) don't need to
+    // re-invoke the sqlparser crate.
+    let mut has_limit = false;
+    let mut has_where = false;
+    let mut has_wildcard = false;
+    let mut where_columns: Vec<String> = vec![];
+
     let (statement_type, target_schema, target_table) = match stmt {
         Statement::Query(query) => {
             let tname = extract_first_from_table_name(query);
+            // Cache limit/where/wildcard/where_columns from the already-parsed AST.
+            has_limit = query.limit.is_some();
+            if let Some(select) = extract_select(query) {
+                has_where = select.selection.is_some();
+                has_wildcard = select.projection.iter().any(|item| {
+                    matches!(item, SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _))
+                });
+                if let Some(selection) = &select.selection {
+                    let mut seen = std::collections::HashSet::new();
+                    collect_where_columns(selection, &mut where_columns, &mut seen);
+                }
+            }
             (StatementType::Select, None, tname)
         }
 
@@ -116,8 +153,9 @@ fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedStatement> {
             (StatementType::Insert, schema, None)
         }
 
-        Statement::Update { table, .. } => {
+        Statement::Update { table, selection, .. } => {
             let schema = extract_schema_from_table_factor(&table.relation);
+            has_where = selection.is_some();
             (StatementType::Update, schema, None)
         }
 
@@ -127,6 +165,7 @@ fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedStatement> {
                     .first()
                     .and_then(|t| extract_schema_from_table_factor(&t.relation)),
             };
+            has_where = delete.selection.is_some();
             (StatementType::Delete, schema, None)
         }
 
@@ -215,11 +254,17 @@ fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedStatement> {
         target_schema,
         target_table,
         sql: sql.to_string(),
+        has_limit,
+        has_where,
+        has_wildcard,
+        where_columns,
     })
 }
 
 /// Inspect a parsed write statement and return safety warnings.
 /// Detects dangerous patterns: UPDATE/DELETE without WHERE, TRUNCATE.
+///
+/// Uses pre-parsed `has_where` from `ParsedStatement` to avoid re-invoking the SQL parser.
 pub fn parse_write_warnings(parsed: &ParsedStatement) -> Vec<String> {
     let mut warnings = Vec::new();
 
@@ -229,55 +274,17 @@ pub fn parse_write_warnings(parsed: &ParsedStatement) -> Vec<String> {
                 "TRUNCATE will delete ALL rows without transaction log — cannot be rolled back"
                     .to_string(),
             );
-            return warnings;
         }
-        StatementType::Update | StatementType::Delete => {}
-        _ => return warnings,
-    }
-
-    // Re-parse to inspect the AST for WHERE clause presence
-    let dialect = MySqlDialect {};
-    let statements = match Parser::parse_sql(&dialect, &parsed.sql) {
-        Ok(s) => s,
-        Err(_) => {
-            // Fallback: use string heuristics
-            let upper = parsed.sql.to_uppercase();
-            let trimmed = upper.trim();
-            if parsed.statement_type == StatementType::Update {
-                if !trimmed.contains("WHERE") {
-                    warnings.push(
-                        "UPDATE has no WHERE clause — this will affect ALL rows in the table"
-                            .to_string(),
-                    );
-                }
-            } else if parsed.statement_type == StatementType::Delete {
-                if !trimmed.contains("WHERE") {
-                    warnings.push(
-                        "DELETE has no WHERE clause — this will delete ALL rows in the table"
-                            .to_string(),
-                    );
-                }
-            }
-            return warnings;
-        }
-    };
-
-    let stmt = match statements.into_iter().next() {
-        Some(s) => s,
-        None => return warnings,
-    };
-
-    match stmt {
-        Statement::Update { selection, .. } => {
-            if selection.is_none() {
+        StatementType::Update => {
+            if !parsed.has_where {
                 warnings.push(
                     "UPDATE has no WHERE clause — this will affect ALL rows in the table"
                         .to_string(),
                 );
             }
         }
-        Statement::Delete(delete) => {
-            if delete.selection.is_none() {
+        StatementType::Delete => {
+            if !parsed.has_where {
                 warnings.push(
                     "DELETE has no WHERE clause — this will delete ALL rows in the table"
                         .to_string(),
@@ -292,11 +299,23 @@ pub fn parse_write_warnings(parsed: &ParsedStatement) -> Vec<String> {
 
 /// Inspect a parsed SELECT statement and return human-readable performance warnings.
 /// Only meaningful for SELECT statements; returns empty vec for other statement types.
+///
+/// Uses pre-parsed fields from `ParsedStatement` (has_limit, has_where, has_wildcard) to
+/// avoid re-invoking the SQL parser. The join count and group-by checks still need the AST
+/// and re-parse only for those; has_leading_wildcard_like uses a cheap string heuristic.
 pub fn parse_warnings(parsed: &ParsedStatement) -> Vec<String> {
     if parsed.statement_type != StatementType::Select {
         return vec![];
     }
 
+    let mut warnings = Vec::new();
+
+    let has_limit = parsed.has_limit;
+    let has_where = parsed.has_where;
+    let has_wildcard = parsed.has_wildcard;
+
+    // We still need the AST for: has_named_table, join count, group-by, aggregate detection.
+    // Re-parse once here; this is the only remaining parse call for read queries.
     let dialect = MySqlDialect {};
     let statements = match Parser::parse_sql(&dialect, &parsed.sql) {
         Ok(s) => s,
@@ -317,18 +336,10 @@ pub fn parse_warnings(parsed: &ParsedStatement) -> Vec<String> {
         None => return vec![],
     };
 
-    let mut warnings = Vec::new();
-
-    // Compute shared flags used by multiple checks below.
-    let has_limit = query.limit.is_some();
     let has_named_table = select.from.iter().any(|t| is_named_table(&t.relation));
-    let has_where = select.selection.is_some();
 
     // 1. SELECT * (wildcard projection) — only warn when querying a real table without LIMIT,
     //    because `SELECT * FROM t LIMIT 10` is a reasonable exploration query.
-    let has_wildcard = select.projection.iter().any(|item| {
-        matches!(item, SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _))
-    });
     if has_wildcard && has_named_table && !has_limit {
         warnings.push(
             "SELECT * returns all columns — specify needed columns for efficiency".to_string(),
@@ -479,35 +490,10 @@ fn extract_first_from_table_name(query: &Query) -> Option<String> {
 /// Extract column names referenced in the WHERE clause of a SELECT statement.
 /// Returns simple column names (last segment of compound identifiers).
 /// Returns an empty vec if the SQL is not a SELECT, has no WHERE clause, or parsing fails.
+///
+/// Uses the `where_columns` field pre-populated by `parse_sql()` — no re-parse required.
 pub fn extract_where_columns(parsed: &ParsedStatement) -> Vec<String> {
-    if parsed.statement_type != StatementType::Select {
-        return vec![];
-    }
-    let dialect = MySqlDialect {};
-    let statements = match Parser::parse_sql(&dialect, &parsed.sql) {
-        Ok(s) => s,
-        Err(_) => return vec![],
-    };
-    let stmt = match statements.into_iter().next() {
-        Some(s) => s,
-        None => return vec![],
-    };
-    let query = match stmt {
-        Statement::Query(q) => q,
-        _ => return vec![],
-    };
-    let select = match query.body.as_ref() {
-        SetExpr::Select(s) => s,
-        _ => return vec![],
-    };
-    let selection = match &select.selection {
-        Some(expr) => expr,
-        None => return vec![],
-    };
-    let mut cols: Vec<String> = vec![];
-    let mut seen: HashSet<String> = HashSet::new();
-    collect_where_columns(selection, &mut cols, &mut seen);
-    cols
+    parsed.where_columns.clone()
 }
 
 /// Recursively walk an expression tree and collect column name identifiers.

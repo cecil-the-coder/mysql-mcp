@@ -3,8 +3,6 @@ use anyhow::Result;
 use sqlx::{MySqlPool, Row, Column, TypeInfo, Acquire};
 use serde_json::{Value, Map};
 use crate::sql_parser::{StatementType, ParsedStatement};
-use sqlparser::dialect::MySqlDialect;
-use sqlparser::parser::Parser as SqlParser;
 
 pub struct QueryResult {
     pub rows: Vec<Map<String, Value>>,
@@ -30,23 +28,19 @@ pub struct QueryResult {
 pub async fn execute_read_query(
     pool: &MySqlPool,
     sql: &str,
-    stmt_type: &StatementType,
+    parsed: &ParsedStatement,
     force_readonly_transaction: bool,
     max_rows: u32,
     performance_hints: &str,
     slow_query_threshold_ms: u64,
 ) -> Result<QueryResult> {
+    let stmt_type = &parsed.statement_type;
+
     // Compute parse-time warnings before the DB phase so the field is always present.
+    // parse_warnings uses pre-cached fields from ParsedStatement — no re-parse needed
+    // for the has_limit / has_where / has_wildcard checks.
     let warnings = if performance_hints != "none" {
-        // Reconstruct a ParsedStatement from the SQL string and known type so we can
-        // call parse_warnings without re-running the full parse pipeline externally.
-        let pseudo_parsed = ParsedStatement {
-            statement_type: stmt_type.clone(),
-            target_schema: None,
-            target_table: None,
-            sql: sql.to_string(),
-        };
-        crate::sql_parser::parse_warnings(&pseudo_parsed)
+        crate::sql_parser::parse_warnings(parsed)
     } else {
         vec![]
     };
@@ -57,23 +51,9 @@ pub async fn execute_read_query(
     );
 
     // Apply max_rows cap: append LIMIT only for SELECT statements (SHOW/EXPLAIN do not
-    // support LIMIT in MySQL). Track whether we injected a LIMIT so we can determine
-    // after execution whether the result was actually truncated.
-    //
-    // Use an AST-based check to detect whether the top-level query already has a LIMIT
-    // clause. A string match on "LIMIT" is unreliable — it is fooled by the word
-    // appearing in comments, CTEs, or subqueries.
-    let has_limit = {
-        let dialect = MySqlDialect {};
-        SqlParser::parse_sql(&dialect, sql)
-            .ok()
-            .and_then(|stmts| stmts.into_iter().next())
-            .map(|stmt| match stmt {
-                sqlparser::ast::Statement::Query(q) => q.limit.is_some(),
-                _ => false,
-            })
-            .unwrap_or(false)
-    };
+    // support LIMIT in MySQL). Use the pre-cached has_limit from ParsedStatement — no
+    // re-parse needed here.
+    let has_limit = parsed.has_limit;
     let added_limit = max_rows > 0
         && matches!(stmt_type, StatementType::Select)
         && !has_limit;
@@ -295,11 +275,18 @@ fn column_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col: &sqlx::mysql::My
 mod integration_tests {
     use super::*;
     use crate::test_helpers::setup_test_db;
+    use crate::sql_parser::parse_sql;
+
+    /// Helper: parse SQL and call execute_read_query with the full ParsedStatement.
+    async fn read_query(pool: &sqlx::MySqlPool, sql: &str, force_ro: bool, max_rows: u32, hints: &str, slow_ms: u64) -> anyhow::Result<QueryResult> {
+        let parsed = parse_sql(sql).map_err(|e| anyhow::anyhow!(e))?;
+        execute_read_query(pool, sql, &parsed, force_ro, max_rows, hints, slow_ms).await
+    }
 
     #[tokio::test]
     async fn test_select_basic() {
         let Some(test_db) = setup_test_db().await else { return; };
-        let result = execute_read_query(&test_db.pool, "SELECT 1 AS one", &StatementType::Select, false, 0, "none", 0).await;
+        let result = read_query(&test_db.pool, "SELECT 1 AS one", false, 0, "none", 0).await;
         assert!(result.is_ok(), "SELECT should succeed: {:?}", result.err());
         assert_eq!(result.unwrap().row_count, 1);
     }
@@ -307,38 +294,37 @@ mod integration_tests {
     #[tokio::test]
     async fn test_null_values() {
         let Some(test_db) = setup_test_db().await else { return; };
-        let result = execute_read_query(&test_db.pool, "SELECT NULL AS null_col", &StatementType::Select, false, 0, "none", 0).await.unwrap();
+        let result = read_query(&test_db.pool, "SELECT NULL AS null_col", false, 0, "none", 0).await.unwrap();
         assert_eq!(result.rows[0]["null_col"], serde_json::Value::Null);
     }
 
     #[tokio::test]
     async fn test_empty_result_set() {
         let Some(test_db) = setup_test_db().await else { return; };
-        let result = execute_read_query(&test_db.pool, "SELECT 1 WHERE 1=0", &StatementType::Select, false, 0, "none", 0).await.unwrap();
+        let result = read_query(&test_db.pool, "SELECT 1 WHERE 1=0", false, 0, "none", 0).await.unwrap();
         assert_eq!(result.row_count, 0);
     }
 
     #[tokio::test]
     async fn test_show_tables() {
         let Some(test_db) = setup_test_db().await else { return; };
-        let result = execute_read_query(&test_db.pool, "SHOW TABLES", &StatementType::Show, false, 0, "none", 0).await;
+        let result = read_query(&test_db.pool, "SHOW TABLES", false, 0, "none", 0).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     async fn test_execution_time_tracked() {
         let Some(test_db) = setup_test_db().await else { return; };
-        let result = execute_read_query(&test_db.pool, "SELECT 1", &StatementType::Select, false, 0, "none", 0).await.unwrap();
+        let result = read_query(&test_db.pool, "SELECT 1", false, 0, "none", 0).await.unwrap();
         assert!(result.execution_time_ms < 5000);
     }
 
     #[tokio::test]
     async fn test_datetime_serialization() {
         let Some(test_db) = setup_test_db().await else { return; };
-        let result = execute_read_query(
+        let result = read_query(
             &test_db.pool,
             "SELECT NOW() as now, CURDATE() as today, CURTIME() as t",
-            &StatementType::Select,
             false, 0, "none", 0,
         ).await.unwrap();
         assert_eq!(result.row_count, 1);

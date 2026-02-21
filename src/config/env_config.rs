@@ -54,19 +54,16 @@ pub fn load_env_config() -> EnvConfig {
         query_timeout_ms: parse_env_num::<u64>("MYSQL_QUERY_TIMEOUT"),
         connect_timeout_ms: parse_env_num::<u64>("MYSQL_CONNECT_TIMEOUT"),
         cache_ttl_secs: parse_env_num::<u64>("MYSQL_CACHE_TTL"),
-        allow_insert: parse_bool_env("ALLOW_INSERT_OPERATION"),
-        allow_update: parse_bool_env("ALLOW_UPDATE_OPERATION"),
-        allow_delete: parse_bool_env("ALLOW_DELETE_OPERATION"),
-        allow_ddl: parse_bool_env("ALLOW_DDL_OPERATION"),
+        allow_insert: parse_bool_env("MYSQL_ALLOW_INSERT"),
+        allow_update: parse_bool_env("MYSQL_ALLOW_UPDATE"),
+        allow_delete: parse_bool_env("MYSQL_ALLOW_DELETE"),
+        allow_ddl: parse_bool_env("MYSQL_ALLOW_DDL"),
         readonly_transaction: parse_bool_env("MYSQL_READONLY_TRANSACTION"),
         ssl: parse_bool_env("MYSQL_SSL"),
         ssl_accept_invalid_certs: parse_bool_env("MYSQL_SSL_ACCEPT_INVALID_CERTS"),
         ssl_ca: std::env::var("MYSQL_SSL_CA").ok().filter(|s| !s.is_empty()),
-        multi_db_write_mode: parse_bool_env("MULTI_DB_WRITE_MODE"),
+        multi_db_write_mode: parse_bool_env("MYSQL_MULTI_DB_WRITE_MODE"),
         allow_runtime_connections: parse_bool_env("MYSQL_ALLOW_RUNTIME_CONNECTIONS"),
-        remote_enabled: parse_bool_env("IS_REMOTE_MCP"),
-        remote_secret_key: std::env::var("REMOTE_SECRET_KEY").ok(),
-        remote_port: parse_env_num::<u16>("PORT"),
         logging: parse_bool_env("MYSQL_ENABLE_LOGGING"),
         log_level: std::env::var("MYSQL_LOG_LEVEL").ok(),
         metrics_enabled: parse_bool_env("MYSQL_METRICS_ENABLED"),
@@ -81,12 +78,12 @@ pub fn load_env_config() -> EnvConfig {
     }
 }
 
-/// Parse SCHEMA_<NAME>_PERMISSIONS env vars.
-/// Format: SCHEMA_mydb_PERMISSIONS=insert,update (comma-separated allowed ops)
+/// Parse MYSQL_SCHEMA_<NAME>_PERMISSIONS env vars.
+/// Format: MYSQL_SCHEMA_mydb_PERMISSIONS=insert,update (comma-separated allowed ops)
 fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
     let mut map = HashMap::new();
     for (key, val) in std::env::vars() {
-        if let Some(schema_name) = key.strip_prefix("SCHEMA_").and_then(|s| s.strip_suffix("_PERMISSIONS")) {
+        if let Some(schema_name) = key.strip_prefix("MYSQL_SCHEMA_").and_then(|s| s.strip_suffix("_PERMISSIONS")) {
             let schema_name = schema_name.to_lowercase();
             let ops: Vec<&str> = val.split(',').map(str::trim).collect();
             let perms = SchemaPermissions {
@@ -101,7 +98,30 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
     map
 }
 
-/// All env var overrides (None = not set, don't override)
+/// All env var overrides (None = not set, don't override).
+///
+/// # Simplification note (mysql-mcp-p0y)
+///
+/// This struct duplicates every field of `Config` as `Option<T>` to enable the 3-layer
+/// merge pattern (defaults → TOML → env vars). The duplication is the main boilerplate
+/// cost: adding a new config field requires touching `Config` (mod.rs), `EnvConfig` here,
+/// `load_env_config()` here, and `apply_to()` here.
+///
+/// The simplest safe alternatives would be:
+///
+/// A) A proc-macro that auto-generates the `Option<T>` parallel struct and `apply_to()` body
+///    from `#[env_override(...)]` annotations on `Config` fields.
+///
+/// B) The `figment` crate, which handles layered configs declaratively with no intermediate
+///    struct needed.
+///
+/// C) Replacing `EnvConfig` with a `Config::apply_env_overrides(&mut self)` method that reads
+///    env vars directly. This would break the existing `EnvConfig`-based unit tests in
+///    `merge.rs` (which construct `EnvConfig { field: Some(val), ..Default::default() }` to
+///    test field-by-field override behavior).
+///
+/// None of these were implemented at this time because they each either require new
+/// dependencies or would change the tested public interface of the config module.
 #[derive(Debug, Default)]
 pub struct EnvConfig {
     pub host: Option<String>,
@@ -125,9 +145,6 @@ pub struct EnvConfig {
     pub ssl_ca: Option<String>,
     pub multi_db_write_mode: Option<bool>,
     pub allow_runtime_connections: Option<bool>,
-    pub remote_enabled: Option<bool>,
-    pub remote_secret_key: Option<String>,
-    pub remote_port: Option<u16>,
     pub logging: Option<bool>,
     pub log_level: Option<String>,
     pub metrics_enabled: Option<bool>,
@@ -168,9 +185,6 @@ impl EnvConfig {
         if !self.schema_permissions.is_empty() {
             base.security.schema_permissions.extend(self.schema_permissions.clone());
         }
-        if let Some(v) = self.remote_enabled { base.remote.enabled = v; }
-        if let Some(v) = &self.remote_secret_key { base.remote.secret_key = Some(v.clone()); }
-        if let Some(v) = self.remote_port { base.remote.port = v; }
         if let Some(v) = self.logging { base.monitoring.logging = v; }
         if let Some(v) = &self.log_level { base.monitoring.log_level = v.clone(); }
         if let Some(v) = self.metrics_enabled { base.monitoring.metrics_enabled = v; }
