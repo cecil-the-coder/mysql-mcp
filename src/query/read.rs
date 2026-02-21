@@ -180,12 +180,26 @@ fn column_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col: &sqlx::mysql::My
                 return serde_json::json!(v);
             }
         }
-        "FLOAT" | "DOUBLE" | "DECIMAL" | "NUMERIC" => {
+        "FLOAT" | "DOUBLE" => {
             if let Ok(v) = row.try_get::<f64, _>(idx) {
                 return serde_json::Number::from_f64(v)
                     .map(Value::Number)
                     .unwrap_or(Value::Null);
             }
+        }
+        // MySQL sends DECIMAL/NUMERIC as text over the wire even in binary protocol.
+        // sqlx's type compatibility check rejects String decode for DECIMAL column types,
+        // so use try_get_unchecked to bypass it and decode the raw text value.
+        "DECIMAL" | "NUMERIC" | "NEWDECIMAL" => {
+            if let Ok(Some(s)) = row.try_get_unchecked::<Option<String>, _>(idx) {
+                if let Ok(f) = s.parse::<f64>() {
+                    return serde_json::Number::from_f64(f)
+                        .map(Value::Number)
+                        .unwrap_or(Value::String(s));
+                }
+                return Value::String(s);
+            }
+            return Value::Null;
         }
         _ => {}
     }
