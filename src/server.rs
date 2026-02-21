@@ -36,13 +36,15 @@ struct Session {
 
 fn is_private_host(host: &str) -> bool {
     use std::net::IpAddr;
-    // Try to parse as IP; if it's a hostname, allow it (DNS is the operator's responsibility)
+    // Try to parse as IP; if it's a hostname, allow it (DNS is the operator's responsibility).
+    // Block loopback and link-local (169.254.x — cloud metadata endpoint 169.254.169.254).
+    // RFC 1918 private ranges (10/8, 172.16/12, 192.168/16) are intentionally ALLOWED:
+    // database servers legitimately live at those addresses in private networks.
     if let Ok(ip) = host.parse::<IpAddr>() {
         match ip {
             IpAddr::V4(v4) => {
-                v4.is_loopback()           // 127.0.0.0/8
-                || v4.is_private()         // 10/8, 172.16/12, 192.168/16
-                || v4.is_link_local()      // 169.254/16
+                v4.is_loopback()           // 127.0.0.0/8 — localhost services
+                || v4.is_link_local()      // 169.254.0.0/16 — cloud metadata (169.254.169.254)
                 || v4.is_broadcast()       // 255.255.255.255
                 || v4.is_unspecified()     // 0.0.0.0
             }
@@ -415,7 +417,7 @@ impl ServerHandler for McpServer {
                 };
                 if is_private_host(&host) {
                     return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Connecting to private/loopback IP addresses is not allowed: {}", host
+                        "Connecting to loopback/link-local IP addresses is not allowed: {}", host
                     ))]));
                 }
                 let port = args.get("port").and_then(|v| v.as_u64()).unwrap_or(3306) as u16;
