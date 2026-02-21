@@ -409,16 +409,16 @@ impl ServerHandler for McpServer {
 
             if request.name == "mysql_server_info" {
                 let rows = sqlx::query(
-                    "SELECT VERSION() AS version, CURRENT_USER() AS current_user, DATABASE() AS current_database"
+                    "SELECT VERSION() AS mysql_version, CURRENT_USER() AS db_user, DATABASE() AS db_name"
                 ).fetch_all(self.db.pool()).await;
 
                 return match rows {
                     Ok(rows) if !rows.is_empty() => {
                         use sqlx::Row;
                         let row = &rows[0];
-                        let version: String = row.try_get("version").unwrap_or_default();
-                        let user: String = row.try_get("current_user").unwrap_or_default();
-                        let db: Option<String> = row.try_get("current_database").ok().flatten();
+                        let version: String = row.try_get("mysql_version").unwrap_or_default();
+                        let user: String = row.try_get("db_user").unwrap_or_default();
+                        let db: Option<String> = row.try_get("db_name").ok().flatten();
 
                         let mut accessible_features = vec!["SELECT", "SHOW", "EXPLAIN"];
                         if self.config.security.allow_insert { accessible_features.push("INSERT"); }

@@ -246,9 +246,33 @@ fn column_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col: &sqlx::mysql::My
                 return v.map(Value::String).unwrap_or(Value::Null);
             }
         }
+        // Temporal types: MySQL binary protocol sends these as binary-encoded bytes, not text.
+        // String decoding fails even with try_get_unchecked. Use chrono types (already in Cargo.toml
+        // via sqlx "chrono" feature) which have registered binary decoders.
+        "DATETIME" | "TIMESTAMP" => {
+            if let Ok(v) = row.try_get::<Option<chrono::NaiveDateTime>, _>(idx) {
+                return v
+                    .map(|dt| Value::String(dt.format("%Y-%m-%d %H:%M:%S").to_string()))
+                    .unwrap_or(Value::Null);
+            }
+        }
+        "DATE" => {
+            if let Ok(v) = row.try_get::<Option<chrono::NaiveDate>, _>(idx) {
+                return v
+                    .map(|d| Value::String(d.format("%Y-%m-%d").to_string()))
+                    .unwrap_or(Value::Null);
+            }
+        }
+        "TIME" => {
+            if let Ok(v) = row.try_get::<Option<chrono::NaiveTime>, _>(idx) {
+                return v
+                    .map(|t| Value::String(t.format("%H:%M:%S").to_string()))
+                    .unwrap_or(Value::Null);
+            }
+        }
         _ => {}
     }
-    // Try string for everything else (VARCHAR, TEXT, CHAR, DATE, TIME, DATETIME, etc.)
+    // Try string for everything else (VARCHAR, TEXT, CHAR, etc.)
     if let Ok(v) = row.try_get::<Option<String>, _>(idx) {
         return v.map(Value::String).unwrap_or(Value::Null);
     }
