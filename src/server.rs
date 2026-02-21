@@ -843,7 +843,7 @@ impl ServerHandler for McpServer {
                 };
                 let rows = sqlx::query(
                     "SELECT VERSION() AS mysql_version,
-                            CURRENT_USER() AS current_user,
+                            CURRENT_USER() AS `current_user`,
                             DATABASE() AS current_database,
                             @@sql_mode AS sql_mode,
                             @@character_set_connection AS character_set,

@@ -67,6 +67,7 @@ mod e2e_tests {
             .env("MYSQL_DB", cfg.connection.database.as_deref().unwrap_or(""))
             .env("MYSQL_SSL", if cfg.security.ssl { "true" } else { "false" })
             .env("MYSQL_SSL_ACCEPT_INVALID_CERTS", if cfg.security.ssl_accept_invalid_certs { "true" } else { "false" })
+            .env("MYSQL_SSL_CA", cfg.security.ssl_ca.as_deref().unwrap_or(""))
             // Give the binary generous connection headroom: the production
             // default (10 s) can be exhausted on high-latency remote DBs when
             // other tests are simultaneously establishing connections.
@@ -440,6 +441,7 @@ mod e2e_tests {
                     "password": cfg.connection.password,
                     "database": cfg.connection.database,
                     "ssl": cfg.security.ssl,
+                    "ssl_ca": cfg.security.ssl_ca,
                 }
             }
         })).await;
@@ -604,6 +606,7 @@ mod e2e_tests {
                     "password": cfg.connection.password,
                     "database": cfg.connection.database,
                     "ssl": cfg.security.ssl,
+                    "ssl_ca": cfg.security.ssl_ca,
                 }
             }
         })).await;
