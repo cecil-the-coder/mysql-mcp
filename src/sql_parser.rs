@@ -362,7 +362,10 @@ pub fn parse_warnings(parsed: &ParsedStatement) -> Vec<String> {
     }
 
     // 4. No LIMIT on a non-aggregate SELECT
-    let has_group_by = !matches!(&select.group_by, sqlparser::ast::GroupByExpr::Expressions(exprs, _) if exprs.is_empty());
+    let has_group_by = match &select.group_by {
+        sqlparser::ast::GroupByExpr::Expressions(exprs, _) => !exprs.is_empty(),
+        _ => true,  // GroupByExpr::All or any future variant counts as having GROUP BY
+    };
     let has_aggregate = has_aggregate_function(&select.projection);
     if !has_limit && !has_group_by && !has_aggregate {
         warnings.push("No LIMIT clause — query may return unbounded rows".to_string());

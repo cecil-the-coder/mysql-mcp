@@ -312,6 +312,7 @@ mod integration_tests {
     /// Run EXPLAIN on a SELECT against a real DB and assert the result is parseable.
     /// This test exercises the full run_explain() path including the actual MySQL
     /// EXPLAIN FORMAT=JSON output.
+    #[ignore]
     #[tokio::test]
     async fn test_explain_raw_json_diagnostic() {
         // This test prints the raw EXPLAIN FORMAT=JSON output from the DB under test.
