@@ -134,7 +134,6 @@ pub async fn execute_read_query(
                     "efficiency": explain_result.efficiency,
                     "extra_flags": explain_result.extra_flags,
                     "tier": explain_result.tier,
-                    "db_elapsed_ms": db_elapsed,
                 }))
             }
             Err(_) => None,
