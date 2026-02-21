@@ -27,6 +27,27 @@ pub struct ColumnInfo {
     pub extra: Option<String>,
 }
 
+/// Represents one index on a table: its name and the ordered list of column names.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexDef {
+    pub name: String,
+    pub unique: bool,
+    pub columns: Vec<String>,
+}
+
+/// Returns true if the given MySQL data type has inherently low cardinality,
+/// meaning it can take only a small number of distinct values (e.g. boolean,
+/// enum, set, or bit(1)). An index on such a column alone often has poor
+/// selectivity and the optimizer may choose a full table scan instead.
+pub fn is_low_cardinality_type(data_type: &str) -> bool {
+    let dt = data_type.to_lowercase();
+    // TINYINT(1) is used as BOOLEAN in MySQL; BOOL/BOOLEAN are aliases.
+    // ENUM and SET have a fixed, typically small value domain.
+    // BIT columns are usually 1-bit flags.
+    matches!(dt.as_str(), "tinyint" | "bool" | "boolean" | "enum" | "set" | "bit")
+        || dt.starts_with("tinyint(1)")
+}
+
 struct CacheEntry<T> {
     data: T,
     fetched_at: Instant,
@@ -72,10 +93,14 @@ struct Inner {
     cache_ttl: Duration,
     tables_cache: Mutex<Option<CacheEntry<Vec<TableInfo>>>>,
     columns_cache: Mutex<HashMap<String, CacheEntry<Vec<ColumnInfo>>>>,
+    /// Cache for list_indexed_columns() results, keyed by "{database}.{table}".
+    indexed_columns_cache: Mutex<HashMap<String, CacheEntry<Vec<String>>>>,
     /// Prevents concurrent background refreshes of the tables cache.
     tables_refreshing: AtomicBool,
     /// Tracks which column cache keys are currently being refreshed in the background.
     columns_refreshing: Mutex<HashSet<String>>,
+    /// Tracks which indexed_columns cache keys are currently being refreshed in the background.
+    indexed_columns_refreshing: Mutex<HashSet<String>>,
 }
 
 pub struct SchemaIntrospector {
@@ -90,8 +115,10 @@ impl SchemaIntrospector {
                 cache_ttl: Duration::from_secs(cache_ttl_secs),
                 tables_cache: Mutex::new(None),
                 columns_cache: Mutex::new(HashMap::new()),
+                indexed_columns_cache: Mutex::new(HashMap::new()),
                 tables_refreshing: AtomicBool::new(false),
                 columns_refreshing: Mutex::new(HashSet::new()),
+                indexed_columns_refreshing: Mutex::new(HashSet::new()),
             }),
         }
     }
@@ -154,22 +181,211 @@ impl SchemaIntrospector {
 
     /// Return all columns that have at least one index on the given table.
     /// Runs `SHOW INDEX FROM {table}` (qualified with database if provided).
-    /// No caching — this is only called when EXPLAIN already detected a problem.
+    /// Results are cached with the same TTL as the column cache, using a
+    /// stale-while-revalidate strategy identical to `get_columns`.
     pub async fn list_indexed_columns(&self, table: &str, database: Option<&str>) -> Result<Vec<String>> {
-        let qualified = match database {
-            Some(db) => format!("`{}`.`{}`", escape_mysql_identifier(db), escape_mysql_identifier(table)),
-            None => format!("`{}`", escape_mysql_identifier(table)),
-        };
-        let sql = format!("SHOW INDEX FROM {}", qualified);
-        let rows = sqlx::query(&sql).fetch_all(self.inner.pool.as_ref()).await?;
-        let mut cols: Vec<String> = Vec::new();
-        for row in &rows {
-            let col_name = is_col_str(row, "Column_name");
-            if !col_name.is_empty() && !cols.iter().any(|c: &String| c.eq_ignore_ascii_case(&col_name)) {
-                cols.push(col_name);
+        let cache_key = format!("{}.{}", database.unwrap_or(""), table);
+
+        {
+            let cache = self.inner.indexed_columns_cache.lock().await;
+            if let Some(entry) = cache.get(&cache_key) {
+                if entry.fetched_at.elapsed() < self.inner.cache_ttl {
+                    // Cache hit within TTL: return immediately.
+                    return Ok(entry.data.clone());
+                }
+                // Cache is stale but has a value.
+                if self.inner.cache_ttl > Duration::ZERO {
+                    let stale_data = entry.data.clone();
+                    let mut refreshing = self.inner.indexed_columns_refreshing.lock().await;
+                    if !refreshing.contains(&cache_key) {
+                        refreshing.insert(cache_key.clone());
+                        drop(refreshing);
+                        let inner = Arc::clone(&self.inner);
+                        let owned_table = table.to_owned();
+                        let owned_database = database.map(|s| s.to_owned());
+                        let owned_key = cache_key.clone();
+                        tokio::spawn(async move {
+                            let db_ref = owned_database.as_deref();
+                            match Inner::fetch_indexed_columns(&inner.pool, &owned_table, db_ref).await {
+                                Ok(cols) => {
+                                    let mut cache = inner.indexed_columns_cache.lock().await;
+                                    cache.insert(owned_key.clone(), CacheEntry {
+                                        data: cols,
+                                        fetched_at: Instant::now(),
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Schema cache refresh failed for indexed columns ({}.{}): {}",
+                                        owned_database.as_deref().unwrap_or(""), owned_table, e
+                                    );
+                                }
+                            }
+                            let mut refreshing = inner.indexed_columns_refreshing.lock().await;
+                            refreshing.remove(&owned_key);
+                        });
+                    }
+                    return Ok(stale_data);
+                }
             }
         }
+
+        // Cold start or TTL==0: fetch synchronously.
+        let cols = Inner::fetch_indexed_columns(&self.inner.pool, table, database).await?;
+
+        {
+            let mut cache = self.inner.indexed_columns_cache.lock().await;
+            cache.insert(cache_key, CacheEntry { data: cols.clone(), fetched_at: Instant::now() });
+        }
+
         Ok(cols)
+    }
+
+    /// Return composite index information for the given table.
+    /// Each entry represents one index: a named, ordered list of columns.
+    /// Columns are ordered by their position within the index (SEQ_IN_INDEX).
+    /// The PRIMARY key is included.
+    /// Results are cached with the same TTL and strategy as `list_indexed_columns`.
+    pub async fn list_composite_indexes(&self, table: &str, database: Option<&str>) -> Result<Vec<IndexDef>> {
+        let cache_key = format!("cidx.{}.{}", database.unwrap_or(""), table);
+
+        {
+            let cache = self.inner.indexed_columns_cache.lock().await;
+            // Reuse the same cache store — store composite index data under a "cidx." prefix
+            // to keep it separated from the flat column list entries.
+            if let Some(entry) = cache.get(&cache_key) {
+                if entry.fetched_at.elapsed() < self.inner.cache_ttl {
+                    // Deserialize from the stored JSON-encoded form.
+                    let indexes: Vec<IndexDef> = serde_json::from_str(&entry.data.join(" ")).unwrap_or_default();
+                    return Ok(indexes);
+                }
+            }
+        }
+
+        let indexes = Inner::fetch_composite_indexes(&self.inner.pool, table, database).await?;
+
+        // Serialize to a Vec<String> by encoding as JSON lines (one per index).
+        let serialized: Vec<String> = indexes.iter()
+            .map(|idx| serde_json::to_string(idx).unwrap_or_default())
+            .collect();
+
+        {
+            let mut cache = self.inner.indexed_columns_cache.lock().await;
+            cache.insert(cache_key, CacheEntry { data: serialized, fetched_at: Instant::now() });
+        }
+
+        Ok(indexes)
+    }
+
+    /// Generate schema-aware index suggestions for a query with a full table scan.
+    ///
+    /// Takes the list of WHERE-clause column names and the table name/database, and
+    /// returns a list of human-readable suggestion strings.
+    ///
+    /// Handles two cases beyond the basic single-column index hint:
+    ///
+    /// 1. **Composite indexes**: if multiple WHERE columns are already covered by a
+    ///    single existing composite index, suggest using that index rather than
+    ///    creating individual single-column indexes.
+    ///
+    /// 2. **Low-cardinality columns**: if a WHERE column has a type with very few
+    ///    distinct values (TINYINT(1)/BOOLEAN, ENUM, SET, BIT), add a note that an
+    ///    index on that column alone may not improve performance because the optimizer
+    ///    may prefer a full scan when the selectivity is too low.
+    pub async fn generate_index_suggestions(
+        &self,
+        table: &str,
+        database: Option<&str>,
+        where_cols: &[String],
+    ) -> Vec<String> {
+        if where_cols.is_empty() {
+            return vec![];
+        }
+
+        // Fetch existing indexed columns (flat list) and composite indexes in parallel.
+        let indexed_cols_result = self.list_indexed_columns(table, database).await;
+        let composite_idx_result = self.list_composite_indexes(table, database).await;
+        let columns_result = self.get_columns(table, database).await;
+
+        let indexed_cols = indexed_cols_result.unwrap_or_default();
+        let composite_indexes = composite_idx_result.unwrap_or_default();
+        let col_info: std::collections::HashMap<String, ColumnInfo> = columns_result
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| (c.name.to_lowercase(), c))
+            .collect();
+
+        let mut suggestions: Vec<String> = Vec::new();
+
+        // Build a set of WHERE columns that are not yet individually indexed.
+        let unindexed_cols: Vec<&String> = where_cols.iter()
+            .filter(|col| !indexed_cols.iter().any(|ic| ic.eq_ignore_ascii_case(col)))
+            .collect();
+
+        // --- Case 1: Composite index detection ---
+        // If there are multiple WHERE columns and at least 2 are unindexed, check whether
+        // a single composite index would cover them all instead of N individual indexes.
+        if unindexed_cols.len() >= 2 {
+            // Check if any existing composite index already covers all WHERE columns.
+            let covered_by_existing = composite_indexes.iter().any(|idx| {
+                where_cols.iter().all(|wc| {
+                    idx.columns.iter().any(|ic| ic.eq_ignore_ascii_case(wc))
+                })
+            });
+
+            if !covered_by_existing {
+                // Suggest a composite index covering all unindexed WHERE columns.
+                let col_list = unindexed_cols.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", ");
+                let idx_suffix = unindexed_cols.iter().map(|c| c.as_str()).collect::<Vec<_>>().join("_");
+                suggestions.push(format!(
+                    "Multiple unindexed WHERE columns on `{}`: [{}].                      Consider a composite index: CREATE INDEX idx_{}_{} ON {}({});",
+                    table, col_list, table, idx_suffix, table, col_list
+                ));
+            } else {
+                suggestions.push(format!(
+                    "WHERE columns on `{}` are covered by an existing composite index.                      Ensure the query uses the index by putting the leading column first in the WHERE clause.",
+                    table
+                ));
+            }
+        } else {
+            // Single unindexed column: emit the standard per-column suggestion.
+            for col in &unindexed_cols {
+                let low_card = col_info.get(&col.to_lowercase())
+                    .map(|ci| is_low_cardinality_type(&ci.data_type))
+                    .unwrap_or(false);
+
+                if low_card {
+                    suggestions.push(format!(
+                        "Column `{}` in WHERE clause on table `{}` has no index,                          but its type has low cardinality (few distinct values).                          An index may not improve performance — the optimizer may prefer                          a full table scan. Consider filtering on a higher-cardinality                          column instead, or use a partial/functional index.",
+                        col, table
+                    ));
+                } else {
+                    suggestions.push(format!(
+                        "Column `{}` in WHERE clause on table `{}` has no index.                          Consider: CREATE INDEX idx_{}_{} ON {}({});",
+                        col, table, table, col, table, col
+                    ));
+                }
+            }
+        }
+
+        // --- Case 2: Low-cardinality hint for individually indexed columns ---
+        // Even for already-indexed columns, warn if the type is low-cardinality.
+        for col in where_cols {
+            let already_noted = suggestions.iter().any(|s| s.contains(&format!("`{}`", col)));
+            if already_noted { continue; }
+            let low_card = col_info.get(&col.to_lowercase())
+                .map(|ci| is_low_cardinality_type(&ci.data_type))
+                .unwrap_or(false);
+            if low_card && indexed_cols.iter().any(|ic| ic.eq_ignore_ascii_case(col)) {
+                suggestions.push(format!(
+                    "Column `{}` on table `{}` is indexed but has low cardinality (type: {}).                      The optimizer may skip this index and perform a full scan.                      Consider reviewing query selectivity.",
+                    col, table,
+                    col_info.get(&col.to_lowercase()).map(|ci| ci.data_type.as_str()).unwrap_or("unknown")
+                ));
+            }
+        }
+
+        suggestions
     }
 
     /// Invalidate cached column data for a specific table (case-insensitive match on the
@@ -188,6 +404,12 @@ impl SchemaIntrospector {
             let key_table = key.splitn(2, '.').nth(1).unwrap_or(key.as_str());
             !key_table.eq_ignore_ascii_case(table)
         });
+        // Also clear the indexed columns cache for this table.
+        let mut idx_cache = self.inner.indexed_columns_cache.lock().await;
+        idx_cache.retain(|key, _| {
+            let key_table = key.splitn(2, '.').nth(1).unwrap_or(key.as_str());
+            !key_table.eq_ignore_ascii_case(table)
+        });
         // Also clear the tables list so row-count / existence info is refreshed.
         let mut tables_cache = self.inner.tables_cache.lock().await;
         *tables_cache = None;
@@ -203,6 +425,10 @@ impl SchemaIntrospector {
         {
             let mut columns_cache = self.inner.columns_cache.lock().await;
             columns_cache.clear();
+        }
+        {
+            let mut idx_cache = self.inner.indexed_columns_cache.lock().await;
+            idx_cache.clear();
         }
     }
 
@@ -377,6 +603,60 @@ impl Inner {
         }).collect();
 
         Ok(columns)
+    }
+
+    async fn fetch_indexed_columns(pool: &MySqlPool, table: &str, database: Option<&str>) -> Result<Vec<String>> {
+        let qualified = match database {
+            Some(db) => format!("`{}`.`{}`", escape_mysql_identifier(db), escape_mysql_identifier(table)),
+            None => format!("`{}`", escape_mysql_identifier(table)),
+        };
+        let sql = format!("SHOW INDEX FROM {}", qualified);
+        let rows = sqlx::query(&sql).fetch_all(pool).await?;
+        let mut cols: Vec<String> = Vec::new();
+        for row in &rows {
+            let col_name = is_col_str(row, "Column_name");
+            if !col_name.is_empty() && !cols.iter().any(|c: &String| c.eq_ignore_ascii_case(&col_name)) {
+                cols.push(col_name);
+            }
+        }
+        Ok(cols)
+    }
+
+    async fn fetch_composite_indexes(pool: &MySqlPool, table: &str, database: Option<&str>) -> Result<Vec<IndexDef>> {
+        let rows = if let Some(db) = database {
+            sqlx::query(
+                "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME                  FROM information_schema.STATISTICS                  WHERE TABLE_NAME = ? AND TABLE_SCHEMA = ?                  ORDER BY INDEX_NAME, SEQ_IN_INDEX"
+            )
+            .bind(table)
+            .bind(db)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME                  FROM information_schema.STATISTICS                  WHERE TABLE_NAME = ?                  ORDER BY INDEX_NAME, SEQ_IN_INDEX"
+            )
+            .bind(table)
+            .fetch_all(pool)
+            .await?
+        };
+
+        let mut index_map: std::collections::BTreeMap<String, IndexDef> = std::collections::BTreeMap::new();
+        for row in &rows {
+            use sqlx::Row;
+            let name = is_col_str(row, "INDEX_NAME");
+            let non_unique: i64 = row.try_get("NON_UNIQUE").unwrap_or(1);
+            let col = is_col_str(row, "COLUMN_NAME");
+            let entry = index_map.entry(name.clone()).or_insert_with(|| IndexDef {
+                name: name.clone(),
+                unique: non_unique == 0,
+                columns: Vec::new(),
+            });
+            if !col.is_empty() {
+                entry.columns.push(col);
+            }
+        }
+
+        Ok(index_map.into_values().collect())
     }
 }
 
@@ -637,5 +917,200 @@ mod integration_tests {
     #[tokio::test]
     async fn test_pool_concurrent_queries_stub() {
         eprintln!("TODO: requires special setup (concurrent load testing with controlled pool size)");
+    }
+
+    // mysql-mcp-8r8: list_indexed_columns() caching - cache returns same data on second call
+    #[tokio::test]
+    async fn test_indexed_columns_cache_hit() {
+        let Some(test_db) = setup_test_db().await else { return; };
+        let pool = Arc::new(test_db.pool.clone());
+        let db = test_db.config.connection.database.as_deref();
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS test_indexed_cache (id INT PRIMARY KEY, val VARCHAR(50), INDEX idx_val (val))"
+        )
+        .execute(pool.as_ref()).await.unwrap();
+
+        let introspector = SchemaIntrospector::new(pool.clone(), 60);
+
+        let first = introspector.list_indexed_columns("test_indexed_cache", db).await.unwrap();
+        let second = introspector.list_indexed_columns("test_indexed_cache", db).await.unwrap();
+        assert_eq!(first, second, "cached result must equal first fetch");
+        assert!(first.iter().any(|c| c.eq_ignore_ascii_case("val")), "idx_val should be in indexed cols");
+        assert!(first.iter().any(|c| c.eq_ignore_ascii_case("id")), "PRIMARY should be in indexed cols");
+
+        sqlx::query("DROP TABLE IF EXISTS test_indexed_cache").execute(pool.as_ref()).await.ok();
+    }
+
+    // mysql-mcp-8r8: invalidate_table clears indexed_columns_cache
+    #[tokio::test]
+    async fn test_indexed_columns_cache_invalidated_on_ddl() {
+        let Some(test_db) = setup_test_db().await else { return; };
+        let pool = Arc::new(test_db.pool.clone());
+        let db = test_db.config.connection.database.as_deref();
+
+        // Start with TTL=0 so every real fetch goes to DB, allowing us to test invalidation behavior.
+        let introspector = SchemaIntrospector::new(pool.clone(), 0);
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS test_idx_inval (id INT PRIMARY KEY, val VARCHAR(50))"
+        )
+        .execute(pool.as_ref()).await.unwrap();
+
+        let before = introspector.list_indexed_columns("test_idx_inval", db).await.unwrap();
+        assert!(!before.iter().any(|c| c.eq_ignore_ascii_case("val")), "val should not be indexed yet");
+
+        sqlx::query("ALTER TABLE test_idx_inval ADD INDEX idx_val_inval (val)")
+            .execute(pool.as_ref()).await.unwrap();
+
+        // With TTL=0 the cache never serves stale data, so the next call should see the new index.
+        introspector.invalidate_table("test_idx_inval").await;
+        let after = introspector.list_indexed_columns("test_idx_inval", db).await.unwrap();
+        assert!(after.iter().any(|c| c.eq_ignore_ascii_case("val")), "val should be indexed after ALTER");
+
+        sqlx::query("DROP TABLE IF EXISTS test_idx_inval").execute(pool.as_ref()).await.ok();
+    }
+
+    // mysql-mcp-7f3: list_composite_indexes returns index structure
+    #[tokio::test]
+    async fn test_list_composite_indexes() {
+        let Some(test_db) = setup_test_db().await else { return; };
+        let pool = Arc::new(test_db.pool.clone());
+        let db = test_db.config.connection.database.as_deref();
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS test_composite_idx (
+                id INT PRIMARY KEY,
+                first_name VARCHAR(50),
+                last_name VARCHAR(50),
+                email VARCHAR(100),
+                INDEX idx_name (last_name, first_name),
+                UNIQUE INDEX idx_email (email)
+            )"
+        )
+        .execute(pool.as_ref()).await.unwrap();
+
+        let introspector = SchemaIntrospector::new(pool.clone(), 60);
+        let indexes = introspector.list_composite_indexes("test_composite_idx", db).await.unwrap();
+
+        let name_idx = indexes.iter().find(|i| i.name.eq_ignore_ascii_case("idx_name"));
+        assert!(name_idx.is_some(), "idx_name composite index should be found");
+        let name_idx = name_idx.unwrap();
+        assert_eq!(name_idx.columns.len(), 2, "composite index should have 2 columns");
+        assert!(name_idx.columns[0].eq_ignore_ascii_case("last_name"), "first column of composite index");
+        assert!(name_idx.columns[1].eq_ignore_ascii_case("first_name"), "second column of composite index");
+
+        let email_idx = indexes.iter().find(|i| i.name.eq_ignore_ascii_case("idx_email"));
+        assert!(email_idx.is_some(), "idx_email unique index should be found");
+        assert!(email_idx.unwrap().unique, "idx_email should be unique");
+
+        sqlx::query("DROP TABLE IF EXISTS test_composite_idx").execute(pool.as_ref()).await.ok();
+    }
+
+    // mysql-mcp-7f3: generate_index_suggestions - single unindexed column
+    #[tokio::test]
+    async fn test_generate_suggestions_single_unindexed() {
+        let Some(test_db) = setup_test_db().await else { return; };
+        let pool = Arc::new(test_db.pool.clone());
+        let db = test_db.config.connection.database.as_deref();
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS test_suggest_single (
+                id INT PRIMARY KEY,
+                category VARCHAR(50)
+            )"
+        )
+        .execute(pool.as_ref()).await.unwrap();
+
+        let introspector = SchemaIntrospector::new(pool.clone(), 60);
+        let suggestions = introspector.generate_index_suggestions(
+            "test_suggest_single",
+            db,
+            &["category".to_string()],
+        ).await;
+
+        assert!(!suggestions.is_empty(), "should generate a suggestion for unindexed column");
+        assert!(suggestions[0].contains("category"), "suggestion should mention the column");
+        assert!(suggestions[0].contains("CREATE INDEX"), "suggestion should include CREATE INDEX");
+
+        sqlx::query("DROP TABLE IF EXISTS test_suggest_single").execute(pool.as_ref()).await.ok();
+    }
+
+    // mysql-mcp-7f3: generate_index_suggestions - composite index suggestion for multiple unindexed columns
+    #[tokio::test]
+    async fn test_generate_suggestions_composite_index() {
+        let Some(test_db) = setup_test_db().await else { return; };
+        let pool = Arc::new(test_db.pool.clone());
+        let db = test_db.config.connection.database.as_deref();
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS test_suggest_composite (
+                id INT PRIMARY KEY,
+                first_name VARCHAR(50),
+                last_name VARCHAR(50)
+            )"
+        )
+        .execute(pool.as_ref()).await.unwrap();
+
+        let introspector = SchemaIntrospector::new(pool.clone(), 60);
+        let suggestions = introspector.generate_index_suggestions(
+            "test_suggest_composite",
+            db,
+            &["first_name".to_string(), "last_name".to_string()],
+        ).await;
+
+        assert!(!suggestions.is_empty(), "should generate suggestion for multiple unindexed columns");
+        // Should suggest a composite index, not two individual ones
+        assert!(suggestions[0].contains("composite"), "should mention composite index");
+        assert!(suggestions.len() == 1, "should be a single composite suggestion, not per-column");
+
+        sqlx::query("DROP TABLE IF EXISTS test_suggest_composite").execute(pool.as_ref()).await.ok();
+    }
+
+    // mysql-mcp-7f3: generate_index_suggestions - low-cardinality column warning
+    #[tokio::test]
+    async fn test_generate_suggestions_low_cardinality() {
+        let Some(test_db) = setup_test_db().await else { return; };
+        let pool = Arc::new(test_db.pool.clone());
+        let db = test_db.config.connection.database.as_deref();
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS test_suggest_lowcard (
+                id INT PRIMARY KEY,
+                active TINYINT(1)
+            )"
+        )
+        .execute(pool.as_ref()).await.unwrap();
+
+        let introspector = SchemaIntrospector::new(pool.clone(), 60);
+        let suggestions = introspector.generate_index_suggestions(
+            "test_suggest_lowcard",
+            db,
+            &["active".to_string()],
+        ).await;
+
+        assert!(!suggestions.is_empty(), "should generate a suggestion for unindexed low-cardinality column");
+        assert!(suggestions[0].contains("low cardinality") || suggestions[0].contains("cardinality"),
+            "suggestion should mention low cardinality: {}", suggestions[0]);
+
+        sqlx::query("DROP TABLE IF EXISTS test_suggest_lowcard").execute(pool.as_ref()).await.ok();
+    }
+
+    // mysql-mcp-7f3: is_low_cardinality_type helper function
+    #[test]
+    fn test_is_low_cardinality_type() {
+        assert!(is_low_cardinality_type("tinyint"), "tinyint is low cardinality");
+        assert!(is_low_cardinality_type("bool"), "bool is low cardinality");
+        assert!(is_low_cardinality_type("boolean"), "boolean is low cardinality");
+        assert!(is_low_cardinality_type("enum"), "enum is low cardinality");
+        assert!(is_low_cardinality_type("set"), "set is low cardinality");
+        assert!(is_low_cardinality_type("bit"), "bit is low cardinality");
+        assert!(is_low_cardinality_type("TINYINT"), "TINYINT case-insensitive");
+        assert!(is_low_cardinality_type("ENUM"), "ENUM case-insensitive");
+
+        assert!(!is_low_cardinality_type("int"), "int is not low cardinality");
+        assert!(!is_low_cardinality_type("varchar"), "varchar is not low cardinality");
+        assert!(!is_low_cardinality_type("bigint"), "bigint is not low cardinality");
+        assert!(!is_low_cardinality_type("datetime"), "datetime is not low cardinality");
     }
 }
