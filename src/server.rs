@@ -34,6 +34,13 @@ struct Session {
     database: Option<String>,
 }
 
+/// Named context returned by get_session(): pool, schema introspector, and optional database.
+struct SessionContext {
+    pool: sqlx::MySqlPool,
+    schema: Arc<SchemaIntrospector>,
+    database: Option<String>,
+}
+
 fn is_private_host(host: &str) -> bool {
     use std::net::IpAddr;
     // Try to parse as IP; if it's a hostname, allow it (DNS is the operator's responsibility).
@@ -112,21 +119,29 @@ impl McpServer {
         Ok(())
     }
 
-    /// Resolve a session name to (pool, introspector, database).
+    /// Resolve a session name to a SessionContext (pool, introspector, database).
     /// Updates last_used on non-default sessions.
     /// Returns Err with a user-friendly message if not found.
     async fn get_session(
         &self,
         name: &str,
-    ) -> std::result::Result<(sqlx::MySqlPool, Arc<SchemaIntrospector>, Option<String>), String> {
+    ) -> std::result::Result<SessionContext, String> {
         if name == "default" || name.is_empty() {
-            return Ok((self.db.pool().clone(), self.introspector.clone(), self.config.connection.database.clone()));
+            return Ok(SessionContext {
+                pool: self.db.pool().clone(),
+                schema: self.introspector.clone(),
+                database: self.config.connection.database.clone(),
+            });
         }
         let mut map = self.sessions.lock().await;
         match map.get_mut(name) {
             Some(session) => {
                 session.last_used = std::time::Instant::now();
-                Ok((session.pool.clone(), session.introspector.clone(), session.database.clone()))
+                Ok(SessionContext {
+                    pool: session.pool.clone(),
+                    schema: session.introspector.clone(),
+                    database: session.database.clone(),
+                })
             }
             None => Err(format!(
                 "Session '{}' not found. Use mysql_connect to create it, or omit 'session' to use the default connection.",
@@ -153,6 +168,129 @@ impl McpServer {
         map.insert(key, Arc::clone(&new_intr));
         new_intr
     }
+}
+
+/// Serialize a JSON value to pretty-printed text and wrap in a successful CallToolResult.
+/// Returns a CallToolResult::error on serialization failure.
+fn serialize_response(value: &serde_json::Value) -> CallToolResult {
+    match serde_json::to_string_pretty(value) {
+        Ok(s) => CallToolResult::success(vec![Content::text(s)]),
+        Err(e) => {
+            tracing::error!("Failed to serialize response: {}", e);
+            CallToolResult::error(vec![Content::text(format!(
+                "Internal error: failed to serialize response: {}", e
+            ))])
+        }
+    }
+}
+
+
+// ============================================================
+// Tool input schemas — defined at module level to keep list_tools() concise.
+// Each function builds and returns the JSON schema for its tool.
+// ============================================================
+
+fn mysql_query_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(json!({
+        "type": "object",
+        "properties": {
+            "sql": {
+                "type": "string",
+                "description": "The SQL query to execute"
+            },
+            "explain": {
+                "type": "boolean",
+                "description": "Set to true when investigating a slow query — returns full execution plan including index usage, rows examined, and optimization suggestions. Overrides the server performance_hints setting for this call."
+            },
+            "session": {
+                "type": "string",
+                "description": "Named session to route this query to (omit for default connection)"
+            }
+        },
+        "required": ["sql"]
+    })))
+}
+
+fn mysql_schema_info_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "table": { "type": "string", "description": "Table name" },
+            "database": { "type": "string", "description": "Database/schema name (optional, uses connected database if omitted)" },
+            "include": {
+                "type": "array",
+                "items": { "type": "string", "enum": ["indexes", "foreign_keys", "size"] },
+                "description": "Additional metadata to include. Default: just columns. Options: 'indexes' (all indexes with columns), 'foreign_keys' (FK constraints), 'size' (estimated row count and byte sizes)."
+            },
+            "session": {
+                "type": "string",
+                "description": "Named session to use (omit for default connection)"
+            }
+        },
+        "required": ["table"]
+    })))
+}
+
+fn mysql_server_info_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "session": { "type": "string", "description": "Named session to use (omit for default connection)" }
+        },
+        "required": []
+    })))
+}
+
+fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string", "description": "Session identifier (alphanumeric, underscore, hyphen; max 64 chars). 'default' is reserved." },
+            "host": { "type": "string", "description": "MySQL host (required unless using preset)" },
+            "port": { "type": "integer", "description": "MySQL port (default: 3306)." },
+            "user": { "type": "string", "description": "MySQL username" },
+            "password": { "type": "string", "description": "MySQL password (optional; use empty string for passwordless login)." },
+            "database": { "type": "string", "description": "Default database to use" },
+            "ssl": { "type": "boolean", "description": "Enable SSL/TLS (default: false). When true and ssl_ca is omitted, uses VerifyIdentity mode (full cert+hostname check)." },
+            "ssl_ca": { "type": "string", "description": "Path to PEM CA certificate file for SSL verification. When set, uses VerifyCa mode (validates cert chain without hostname check)." }
+        },
+        "required": ["name", "host", "user"]
+    })))
+}
+
+fn mysql_disconnect_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(serde_json::json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string", "description": "Session name to disconnect" }
+        },
+        "required": ["name"]
+    })))
+}
+
+fn mysql_list_sessions_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(serde_json::json!({
+        "type": "object",
+        "properties": {},
+        "required": []
+    })))
+}
+
+fn mysql_explain_plan_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(json!({
+        "type": "object",
+        "properties": {
+            "sql": {
+                "type": "string",
+                "description": "The SELECT statement to explain. Must be a single SELECT (not INSERT/UPDATE/DDL)."
+            },
+            "session": {
+                "type": "string",
+                "description": "Named session to use (default: 'default')."
+            }
+        },
+        "required": ["sql"]
+    })))
 }
 
 impl ServerHandler for McpServer {
@@ -183,25 +321,6 @@ impl ServerHandler for McpServer {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         async move {
-            let schema = Arc::new(rmcp::model::object(json!({
-                "type": "object",
-                "properties": {
-                    "sql": {
-                        "type": "string",
-                        "description": "The SQL query to execute"
-                    },
-                    "explain": {
-                        "type": "boolean",
-                        "description": "Set to true when investigating a slow query — returns full execution plan including index usage, rows examined, and optimization suggestions. Overrides the server performance_hints setting for this call."
-                    },
-                    "session": {
-                        "type": "string",
-                        "description": "Named session to route this query to (omit for default connection)"
-                    }
-                },
-                "required": ["sql"]
-            })));
-
             let tool = Tool::new(
                 "mysql_query",
                 concat!(
@@ -212,54 +331,8 @@ impl ServerHandler for McpServer {
                     "suggestions (only when a full table scan is detected). ",
                     "Supports SELECT, SHOW, EXPLAIN, and (if configured) INSERT, UPDATE, DELETE, DDL.",
                 ),
-                schema,
+                mysql_query_schema(),
             );
-
-            let multi_schema = Arc::new(rmcp::model::object(json!({
-                "type": "object",
-                "properties": {
-                    "queries": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "SQL statements to execute in parallel. Must all be read-only (SELECT, SHOW, EXPLAIN)."
-                    },
-                    "session": {
-                        "type": "string",
-                        "description": "Named session to route these queries to (omit for default connection)"
-                    }
-                },
-                "required": ["queries"]
-            })));
-            let multi_tool = Tool::new(
-                "mysql_multi_query",
-                concat!(
-                    "Execute 2+ independent read-only SQL queries in parallel (SELECT, SHOW, EXPLAIN only). ",
-                    "Saves N-1 round trips vs sequential mysql_query calls. ",
-                    "Response: results[] (each with sql, rows, row_count, execution_time_ms, capped, optionally parse_warnings/plan/next_offset/capped_hint) ",
-                    "plus wall_time_ms and summary (slowest_query_index, slowest_query_ms, queries_with_full_scans). ",
-                    "Check summary first to identify problematic queries before parsing all results.",
-                ),
-                multi_schema,
-            );
-
-
-            let schema_info_schema = Arc::new(rmcp::model::object(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "table": { "type": "string", "description": "Table name" },
-                    "database": { "type": "string", "description": "Database/schema name (optional, uses connected database if omitted)" },
-                    "include": {
-                        "type": "array",
-                        "items": { "type": "string", "enum": ["indexes", "foreign_keys", "size"] },
-                        "description": "Additional metadata to include. Default: just columns. Options: 'indexes' (all indexes with columns), 'foreign_keys' (FK constraints), 'size' (estimated row count and byte sizes)."
-                    },
-                    "session": {
-                        "type": "string",
-                        "description": "Named session to use (omit for default connection)"
-                    }
-                },
-                "required": ["table"]
-            })));
             let schema_info_tool = Tool::new(
                 "mysql_schema_info",
                 concat!(
@@ -270,36 +343,13 @@ impl ServerHandler for McpServer {
                     "include:[size]: also returns estimated row count and byte sizes. ",
                     "Combine any subset, e.g. include:[indexes,foreign_keys,size] for full detail.",
                 ),
-                schema_info_schema,
+                mysql_schema_info_schema(),
             );
-
-            let server_info_schema = Arc::new(rmcp::model::object(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "session": { "type": "string", "description": "Named session to use (omit for default connection)" }
-                },
-                "required": []
-            })));
             let server_info_tool = Tool::new(
                 "mysql_server_info",
                 "Get MySQL server metadata: version, current_database, current_user, sql_mode, character_set, collation, time_zone, read_only flag, and which write operations are enabled by server config. Use to understand the environment before writing queries or when diagnosing connection issues.",
-                server_info_schema,
+                mysql_server_info_schema(),
             );
-
-            let connect_schema = Arc::new(rmcp::model::object(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": { "type": "string", "description": "Session identifier (alphanumeric, underscore, hyphen; max 64 chars). 'default' is reserved." },
-                    "host": { "type": "string", "description": "MySQL host (required unless using preset)" },
-                    "port": { "type": "integer", "description": "MySQL port (default: 3306)." },
-                    "user": { "type": "string", "description": "MySQL username" },
-                    "password": { "type": "string", "description": "MySQL password (optional; use empty string for passwordless login)." },
-                    "database": { "type": "string", "description": "Default database to use" },
-                    "ssl": { "type": "boolean", "description": "Enable SSL/TLS (default: false). When true and ssl_ca is omitted, uses VerifyIdentity mode (full cert+hostname check)." },
-                    "ssl_ca": { "type": "string", "description": "Path to PEM CA certificate file for SSL verification. When set, uses VerifyCa mode (validates cert chain without hostname check)." }
-                },
-                "required": ["name", "host", "user"]
-            })));
             let connect_tool = Tool::new(
                 "mysql_connect",
                 concat!(
@@ -310,58 +360,28 @@ impl ServerHandler for McpServer {
                     "Sessions idle for >10 minutes are automatically closed. ",
                     "Pass the session name to other tools via the 'session' parameter.",
                 ),
-                connect_schema,
+                mysql_connect_schema(),
             );
-
-            let disconnect_schema = Arc::new(rmcp::model::object(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": { "type": "string", "description": "Session name to disconnect" }
-                },
-                "required": ["name"]
-            })));
             let disconnect_tool = Tool::new(
                 "mysql_disconnect",
                 "Explicitly close a named database session. The default session cannot be closed.",
-                disconnect_schema,
+                mysql_disconnect_schema(),
             );
-
-            let list_sessions_schema = Arc::new(rmcp::model::object(serde_json::json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            })));
             let list_sessions_tool = Tool::new(
                 "mysql_list_sessions",
                 "List all active named database sessions with host, database, and idle time. The default session is omitted when it is the only active session.",
-                list_sessions_schema,
+                mysql_list_sessions_schema(),
             );
-
-            let explain_plan_schema = Arc::new(rmcp::model::object(json!({
-                "type": "object",
-                "properties": {
-                    "sql": {
-                        "type": "string",
-                        "description": "The SELECT statement to explain. Must be a single SELECT (not INSERT/UPDATE/DDL)."
-                    },
-                    "session": {
-                        "type": "string",
-                        "description": "Named session to use (default: 'default')."
-                    }
-                },
-                "required": ["sql"]
-            })));
             let explain_plan_tool = Tool::new(
                 "mysql_explain_plan",
                 "Get the execution plan for a SELECT query without running it. Returns index usage, rows examined estimate, and optimization tier. Use this before executing a potentially expensive query to check efficiency.",
-                explain_plan_schema,
+                mysql_explain_plan_schema(),
             );
 
             Ok(ListToolsResult {
                 meta: None,
                 tools: vec![
                     tool,
-                    multi_tool,
                     schema_info_tool,
                     server_info_tool,
                     connect_tool,
@@ -485,17 +505,7 @@ impl ServerHandler for McpServer {
                             "host": host,
                             "database": database,
                         });
-                        return Ok(CallToolResult::success(vec![
-                            Content::text(match serde_json::to_string_pretty(&info) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    tracing::error!("Failed to serialize response: {}", e);
-                                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                                        "Internal error: failed to serialize response: {}", e
-                                    ))]));
-                                }
-                            }),
-                        ]));
+                        return Ok(serialize_response(&info));
                     }
                     Err(e) => {
                         return Ok(CallToolResult::error(vec![
@@ -564,226 +574,7 @@ impl ServerHandler for McpServer {
                     }));
                 }
 
-                return Ok(CallToolResult::success(vec![
-                    Content::text(match serde_json::to_string_pretty(&json!({"sessions": list})) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            tracing::error!("Failed to serialize response: {}", e);
-                            return Ok(CallToolResult::error(vec![Content::text(format!(
-                                "Internal error: failed to serialize response: {}", e
-                            ))]));
-                        }
-                    }),
-                ]));
-            }
-
-            if request.name == "mysql_multi_query" {
-                let args = request.arguments.unwrap_or_default();
-                let queries: Vec<String> = match args.get("queries").and_then(|v| v.as_array()) {
-                    Some(arr) => {
-                        let mut out = Vec::with_capacity(arr.len());
-                        for v in arr {
-                            match v.as_str() {
-                                Some(s) => out.push(s.to_string()),
-                                None => {
-                                    return Ok(CallToolResult::error(vec![
-                                        Content::text("Each entry in 'queries' must be a string"),
-                                    ]));
-                                }
-                            }
-                        }
-                        out
-                    }
-                    None => {
-                        return Ok(CallToolResult::error(vec![
-                            Content::text("Missing required argument: queries"),
-                        ]));
-                    }
-                };
-
-                const MAX_QUERIES: usize = 100;
-                if queries.len() > MAX_QUERIES {
-                    return Ok(CallToolResult::error(vec![
-                        Content::text(format!("Too many queries: {} (max {})", queries.len(), MAX_QUERIES)),
-                    ]));
-                }
-
-                // Parse and validate all queries up-front (all must be read-only)
-                let mut parsed_queries = Vec::with_capacity(queries.len());
-                for sql in &queries {
-                    let parsed = match crate::sql_parser::parse_sql(sql) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            return Ok(CallToolResult::error(vec![
-                                Content::text(format!("SQL parse error for '{}': {}", sql, e)),
-                            ]));
-                        }
-                    };
-                    if let Err(e) = crate::permissions::check_permission(
-                        &self.config,
-                        &parsed.statement_type,
-                        parsed.target_schema.as_deref(),
-                    ) {
-                        return Ok(CallToolResult::error(vec![
-                            Content::text(format!("Permission denied for '{}': {}", sql, e)),
-                        ]));
-                    }
-                    if !parsed.statement_type.is_read_only() {
-                        return Ok(CallToolResult::error(vec![
-                            Content::text(format!(
-                                "Query is not read-only: '{}'. mysql_multi_query only supports SELECT, SHOW, EXPLAIN.",
-                                sql
-                            )),
-                        ]));
-                    }
-                    parsed_queries.push(parsed);
-                }
-
-                let session_name = args.get("session").and_then(|v| v.as_str()).unwrap_or("default");
-                let (pool, _introspector, _session_db) = match self.get_session(session_name).await {
-                    Ok(pair) => pair,
-                    Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
-                };
-                let readonly_transaction = self.config.pool.readonly_transaction;
-                let max_rows = self.config.pool.max_rows;
-                let multi_hints = self.config.pool.performance_hints.clone();
-
-                let wall_start = std::time::Instant::now();
-                let mut join_set = tokio::task::JoinSet::new();
-
-                for (sql, parsed) in queries.iter().zip(parsed_queries.iter()) {
-                    let pool_clone = pool.clone();
-                    let sql_clone = sql.clone();
-                    let stmt_type = parsed.statement_type.clone();
-                    let hints_clone = multi_hints.clone();
-                    join_set.spawn(async move {
-                        let result = crate::query::read::execute_read_query(
-                            &pool_clone,
-                            &sql_clone,
-                            &stmt_type,
-                            readonly_transaction,
-                            max_rows,
-                            &hints_clone,
-                            0,
-                        ).await;
-                        (sql_clone, result)
-                    });
-                }
-
-                let mut results: Vec<(String, std::result::Result<crate::query::read::QueryResult, anyhow::Error>)> = Vec::new();
-                while let Some(join_result) = join_set.join_next().await {
-                    match join_result {
-                        Ok(pair) => results.push(pair),
-                        Err(e) => results.push(("(unknown)".to_string(), Err(anyhow::anyhow!("Task panicked: {}", e)))),
-                    }
-                }
-
-                let wall_time_ms = wall_start.elapsed().as_millis() as u64;
-
-                // Re-order results to match the original query order
-                let mut ordered: Vec<serde_json::Value> = queries.iter().map(|_| serde_json::Value::Null).collect();
-                for (sql, result) in results {
-                    let idx = queries.iter().position(|q| q == &sql).unwrap_or(0);
-                    ordered[idx] = match result {
-                        Ok(r) => {
-                            let mut entry = json!({
-                                "sql": sql,
-                                "rows": r.rows,
-                                "row_count": r.row_count,
-                                "execution_time_ms": r.execution_time_ms,
-                                "serialization_time_ms": r.serialization_time_ms,
-                            });
-                            if r.capped {
-                                entry["capped"] = json!(true);
-                            }
-                            if !r.parse_warnings.is_empty() {
-                                entry["parse_warnings"] = json!(r.parse_warnings);
-                            }
-                            if let Some(plan) = r.plan {
-                                entry["plan"] = plan;
-                            }
-                            entry
-                        }
-                        Err(e) => {
-                            json!({
-                                "sql": sql,
-                                "error": e.to_string(),
-                            })
-                        }
-                    };
-                }
-
-                // Structured performance log for multi-query (issue mysql-mcp-881)
-                {
-                    let slow_threshold = self.config.pool.slow_query_threshold_ms;
-                    // Determine if any individual query was slow (or wall_time is slow)
-                    let any_slow = ordered.iter().any(|entry| {
-                        entry.get("execution_time_ms")
-                            .and_then(|v| v.as_u64())
-                            .map(|ms| ms >= slow_threshold)
-                            .unwrap_or(false)
-                    });
-                    let per_query: Vec<_> = queries.iter().zip(ordered.iter()).map(|(sql, entry)| {
-                        let sql_truncated = if sql.len() > 200 { &sql[..200] } else { sql.as_str() };
-                        json!({
-                            "sql": sql_truncated,
-                            "execution_time_ms": entry.get("execution_time_ms"),
-                            "row_count": entry.get("row_count"),
-                        })
-                    }).collect();
-                    if any_slow {
-                        tracing::info!(
-                            wall_time_ms = wall_time_ms,
-                            queries = ?per_query,
-                            "slow multi-query"
-                        );
-                    } else {
-                        tracing::debug!(
-                            wall_time_ms = wall_time_ms,
-                            queries = ?per_query,
-                            "multi-query executed"
-                        );
-                    }
-                }
-
-                let slowest_idx = ordered.iter()
-                    .enumerate()
-                    .filter_map(|(i, entry)| {
-                        entry.get("execution_time_ms")
-                            .and_then(|v| v.as_u64())
-                            .map(|ms| (i, ms))
-                    })
-                    .max_by_key(|(_, ms)| *ms);
-                let queries_with_full_scans = ordered.iter()
-                    .filter(|entry| {
-                        entry.get("plan")
-                            .and_then(|p| p.get("full_table_scan"))
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false)
-                    })
-                    .count();
-                let summary = json!({
-                    "total_queries": ordered.len(),
-                    "slowest_query_index": slowest_idx.map(|(i, _)| i),
-                    "slowest_execution_time_ms": slowest_idx.map(|(_, ms)| ms),
-                    "queries_with_full_scans": queries_with_full_scans,
-                });
-                let output = json!({
-                    "results": ordered,
-                    "summary": summary,
-                    "wall_time_ms": wall_time_ms,
-                });
-                return Ok(CallToolResult::success(vec![
-                    Content::text(match serde_json::to_string_pretty(&output) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            tracing::error!("Failed to serialize response: {}", e);
-                            return Ok(CallToolResult::error(vec![Content::text(format!(
-                                "Internal error: failed to serialize response: {}", e
-                            ))]));
-                        }
-                    }),
-                ]));
+                return Ok(serialize_response(&json!({"sessions": list})));
             }
 
             if request.name == "mysql_schema_info" {
@@ -802,13 +593,13 @@ impl ServerHandler for McpServer {
                 let include_size = include.contains(&"size".to_string());
 
                 let session_name = args.get("session").and_then(|v: &serde_json::Value| v.as_str()).unwrap_or("default");
-                let (session_pool, _introspector, _session_db) = match self.get_session(session_name).await {
-                    Ok(pair) => pair,
+                let ctx = match self.get_session(session_name).await {
+                    Ok(c) => c,
                     Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
                 };
 
                 let result = crate::schema::get_schema_info(
-                    &session_pool,
+                    &ctx.pool,
                     &table,
                     database.as_deref(),
                     include_indexes,
@@ -817,17 +608,7 @@ impl ServerHandler for McpServer {
                 ).await;
 
                 return match result {
-                    Ok(info) => Ok(CallToolResult::success(vec![
-                        Content::text(match serde_json::to_string_pretty(&info) {
-                            Ok(s) => s,
-                            Err(e) => {
-                                tracing::error!("Failed to serialize response: {}", e);
-                                return Ok(CallToolResult::error(vec![Content::text(format!(
-                                    "Internal error: failed to serialize response: {}", e
-                                ))]));
-                            }
-                        }),
-                    ])),
+                    Ok(info) => Ok(serialize_response(&info)),
                     Err(e) => Ok(CallToolResult::error(vec![
                         Content::text(format!("Schema info error for '{}': {}", table, e)),
                     ])),
@@ -837,8 +618,8 @@ impl ServerHandler for McpServer {
             if request.name == "mysql_server_info" {
                 let args = request.arguments.clone().unwrap_or_default();
                 let session_name = args.get("session").and_then(|v: &serde_json::Value| v.as_str()).unwrap_or("default");
-                let (session_pool, _introspector, _session_db) = match self.get_session(session_name).await {
-                    Ok(pair) => pair,
+                let ctx = match self.get_session(session_name).await {
+                    Ok(c) => c,
                     Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
                 };
                 let rows = sqlx::query(
@@ -850,7 +631,7 @@ impl ServerHandler for McpServer {
                             @@collation_connection AS collation,
                             @@time_zone AS time_zone,
                             @@read_only AS read_only"
-                ).fetch_all(&session_pool).await;
+                ).fetch_all(&ctx.pool).await;
 
                 return match rows {
                     Ok(rows) if !rows.is_empty() => {
@@ -883,17 +664,7 @@ impl ServerHandler for McpServer {
                             "read_only": read_only,
                             "accessible_features": accessible_features,
                         });
-                        Ok(CallToolResult::success(vec![
-                            Content::text(match serde_json::to_string_pretty(&info) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    tracing::error!("Failed to serialize response: {}", e);
-                                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                                        "Internal error: failed to serialize response: {}", e
-                                    ))]));
-                                }
-                            }),
-                        ]))
+                        Ok(serialize_response(&info))
                     }
                     Ok(_) => Ok(CallToolResult::error(vec![Content::text("No response from server")])),
                     Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Server info error: {}", e))])),
@@ -932,11 +703,11 @@ impl ServerHandler for McpServer {
                     ]));
                 }
                 let session_name = args.get("session").and_then(|v| v.as_str()).unwrap_or("default");
-                let (pool, _introspector, _session_db) = match self.get_session(session_name).await {
-                    Ok(pair) => pair,
+                let ctx = match self.get_session(session_name).await {
+                    Ok(c) => c,
                     Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
                 };
-                match crate::query::explain::run_explain(&pool, &sql).await {
+                match crate::query::explain::run_explain(&ctx.pool, &sql).await {
                     Ok(plan) => {
                         let rows = plan.rows_examined_estimate;
                         let full_table_scan = plan.full_table_scan;
@@ -956,17 +727,7 @@ impl ServerHandler for McpServer {
                             "tier": tier,
                             "note": "Execution plan only — query was not executed"
                         });
-                        return Ok(CallToolResult::success(vec![
-                            Content::text(match serde_json::to_string_pretty(&output) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    tracing::error!("Failed to serialize explain response: {}", e);
-                                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                                        "Internal error: failed to serialize response: {}", e
-                                    ))]));
-                                }
-                            }),
-                        ]));
+                        return Ok(serialize_response(&output));
                     }
                     Err(e) => {
                         return Ok(CallToolResult::error(vec![
@@ -1008,10 +769,13 @@ impl ServerHandler for McpServer {
 
             // Session routing: resolve pool and introspector for this request
             let session_name = args.get("session").and_then(|v| v.as_str()).unwrap_or("default");
-            let (query_pool, query_introspector, session_db) = match self.get_session(session_name).await {
-                Ok(pair) => pair,
+            let ctx = match self.get_session(session_name).await {
+                Ok(c) => c,
                 Err(e) => return Ok(CallToolResult::error(vec![Content::text(e)])),
             };
+            let query_pool = ctx.pool;
+            let query_introspector = ctx.schema;
+            let session_db = ctx.database;
 
             // Parse and check permissions
             let parsed = match crate::sql_parser::parse_sql(&sql) {
@@ -1156,17 +920,7 @@ impl ServerHandler for McpServer {
                         if !suggestions.is_empty() {
                             output["suggestions"] = json!(suggestions);
                         }
-                        Ok(CallToolResult::success(vec![
-                            Content::text(match serde_json::to_string_pretty(&output) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    tracing::error!("Failed to serialize response: {}", e);
-                                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                                        "Internal error: failed to serialize response: {}", e
-                                    ))]));
-                                }
-                            }),
-                        ]))
+                        Ok(serialize_response(&output))
                     }
                     Err(e) => Ok(CallToolResult::error(vec![
                         Content::text(format!("Query error: {}", e)),
@@ -1202,17 +956,7 @@ impl ServerHandler for McpServer {
                         if !result.parse_warnings.is_empty() {
                             output["parse_warnings"] = json!(result.parse_warnings);
                         }
-                        Ok(CallToolResult::success(vec![
-                            Content::text(match serde_json::to_string_pretty(&output) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    tracing::error!("Failed to serialize response: {}", e);
-                                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                                        "Internal error: failed to serialize response: {}", e
-                                    ))]));
-                                }
-                            }),
-                        ]))
+                        Ok(serialize_response(&output))
                     }
                     Err(e) => Ok(CallToolResult::error(vec![
                         Content::text(format!("Query error: {}", e)),
@@ -1231,17 +975,7 @@ impl ServerHandler for McpServer {
                         if !result.parse_warnings.is_empty() {
                             output["parse_warnings"] = json!(result.parse_warnings);
                         }
-                        Ok(CallToolResult::success(vec![
-                            Content::text(match serde_json::to_string_pretty(&output) {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    tracing::error!("Failed to serialize response: {}", e);
-                                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                                        "Internal error: failed to serialize response: {}", e
-                                    ))]));
-                                }
-                            }),
-                        ]))
+                        Ok(serialize_response(&output))
                     }
                     Err(e) => Ok(CallToolResult::error(vec![
                         Content::text(format!("Query error: {}", e)),
