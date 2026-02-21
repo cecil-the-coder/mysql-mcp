@@ -64,9 +64,6 @@ pub fn load_env_config() -> EnvConfig {
         ssl_ca: std::env::var("MYSQL_SSL_CA").ok().filter(|s| !s.is_empty()),
         multi_db_write_mode: parse_bool_env("MYSQL_MULTI_DB_WRITE_MODE"),
         allow_runtime_connections: parse_bool_env("MYSQL_ALLOW_RUNTIME_CONNECTIONS"),
-        logging: parse_bool_env("MYSQL_ENABLE_LOGGING"),
-        log_level: std::env::var("MYSQL_LOG_LEVEL").ok(),
-        metrics_enabled: parse_bool_env("MYSQL_METRICS_ENABLED"),
         timezone: std::env::var("MYSQL_TIMEZONE").ok(),
         date_strings: parse_bool_env("MYSQL_DATE_STRINGS"),
         schema_permissions: parse_schema_permissions(),
@@ -145,9 +142,6 @@ pub struct EnvConfig {
     pub ssl_ca: Option<String>,
     pub multi_db_write_mode: Option<bool>,
     pub allow_runtime_connections: Option<bool>,
-    pub logging: Option<bool>,
-    pub log_level: Option<String>,
-    pub metrics_enabled: Option<bool>,
     pub timezone: Option<String>,
     pub date_strings: Option<bool>,
     pub schema_permissions: HashMap<String, SchemaPermissions>,
@@ -185,9 +179,6 @@ impl EnvConfig {
         if !self.schema_permissions.is_empty() {
             base.security.schema_permissions.extend(self.schema_permissions.clone());
         }
-        if let Some(v) = self.logging { base.monitoring.logging = v; }
-        if let Some(v) = &self.log_level { base.monitoring.log_level = v.clone(); }
-        if let Some(v) = self.metrics_enabled { base.monitoring.metrics_enabled = v; }
         if let Some(v) = &self.timezone { base.timezone = Some(v.clone()); }
         if let Some(v) = self.date_strings { base.date_strings = v; }
         if let Some(v) = &self.performance_hints { base.pool.performance_hints = v.clone(); }

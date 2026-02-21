@@ -78,24 +78,6 @@ allow_insert = true
         assert!(config.security.schema_permissions.is_empty());
     }
 
-    // Test: remote config defaults
-    #[test]
-    fn test_remote_config_defaults() {
-        let config = Config::default();
-        assert!(!config.remote.enabled);
-        assert!(config.remote.secret_key.is_none());
-        assert_eq!(config.remote.port, 3000);
-    }
-
-    // Test: monitoring config defaults
-    #[test]
-    fn test_monitoring_config_defaults() {
-        let config = Config::default();
-        assert!(config.monitoring.logging);
-        assert_eq!(config.monitoring.log_level, "info");
-        assert!(!config.monitoring.metrics_enabled);
-    }
-
     // Test: multiple schema permissions in a single toml
     #[test]
     fn test_multiple_schema_permissions_in_toml() {

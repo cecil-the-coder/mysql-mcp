@@ -14,7 +14,6 @@ pub struct Config {
     pub connection: ConnectionConfig,
     pub pool: PoolConfig,
     pub security: SecurityConfig,
-    pub monitoring: MonitoringConfig,
     pub timezone: Option<String>,
     pub date_strings: bool,
 }
@@ -78,26 +77,12 @@ pub struct SchemaPermissions {
     pub allow_ddl: Option<bool>,
 }
 
-/// Monitoring settings.
-///
-/// Note: these fields are configurable and validated, but none are currently read by
-/// production code (main.rs does not use `config.monitoring`). They exist for future use
-/// and to keep the TOML schema stable. Safe to extend without breaking existing behaviour.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
-pub struct MonitoringConfig {
-    pub logging: bool,
-    pub log_level: String,
-    pub metrics_enabled: bool,
-}
-
 impl Default for Config {
     fn default() -> Self {
         Self {
             connection: ConnectionConfig::default(),
             pool: PoolConfig::default(),
             security: SecurityConfig::default(),
-            monitoring: MonitoringConfig::default(),
             timezone: None,
             date_strings: false,
         }
@@ -148,16 +133,6 @@ impl Default for SecurityConfig {
             multi_db_write_mode: false,
             allow_runtime_connections: false,
             max_sessions: 50,
-        }
-    }
-}
-
-impl Default for MonitoringConfig {
-    fn default() -> Self {
-        Self {
-            logging: true,
-            log_level: "info".to_string(),
-            metrics_enabled: false,
         }
     }
 }

@@ -23,8 +23,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 sqlparser = { version = "0.53", features = [] }
-axum = "0.8"
-tower = "0.5"
 
 [dev-dependencies]
 testcontainers-modules = { version = "0.14.0", features = ["mysql"] }
