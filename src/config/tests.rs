@@ -159,7 +159,76 @@ host = "myhost"
         assert_eq!(config.connection.host, "myhost");
         // Defaults for everything else
         assert_eq!(config.connection.port, 3306);
-        assert_eq!(config.pool.size, 10);
+        assert_eq!(config.pool.size, 20);
         assert!(!config.security.allow_insert);
+    }
+
+    // Test: allow_runtime_connections defaults to false
+    #[test]
+    fn test_allow_runtime_connections_default_false() {
+        let config = Config::default();
+        assert!(!config.security.allow_runtime_connections,
+            "allow_runtime_connections must default to false (security)");
+    }
+
+    // Test: max_sessions defaults to 50
+    #[test]
+    fn test_max_sessions_default() {
+        let config = Config::default();
+        assert_eq!(config.security.max_sessions, 50);
+    }
+
+    // Test: max_rows=0 fails validation and error mentions max_rows
+    #[test]
+    fn test_max_rows_zero_fails_validation() {
+        let mut config = Config::default();
+        config.pool.max_rows = 0;
+        assert!(config.validate().is_err(), "max_rows=0 should fail validation");
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("max_rows"), "error should mention max_rows");
+    }
+
+    // Test: warmup_connections > pool size fails validation
+    #[test]
+    fn test_warmup_connections_exceeds_pool_size_fails() {
+        let mut config = Config::default();
+        config.pool.warmup_connections = config.pool.size + 1;
+        assert!(config.validate().is_err());
+    }
+
+    // Test: max_sessions=0 fails validation
+    #[test]
+    fn test_max_sessions_zero_fails_validation() {
+        let mut config = Config::default();
+        config.security.max_sessions = 0;
+        assert!(config.validate().is_err());
+    }
+
+    // Test: MYSQL_MAX_SESSIONS env var overrides max_sessions
+    #[test]
+    fn test_env_max_sessions_override() {
+        use crate::config::env_config::load_env_config;
+
+        std::env::set_var("MYSQL_MAX_SESSIONS", "5");
+        let env = load_env_config();
+        let config = env.apply_to(Config::default());
+        std::env::remove_var("MYSQL_MAX_SESSIONS");
+
+        assert_eq!(config.security.max_sessions, 5);
+    }
+
+    // Test: readonly_transaction defaults to false
+    #[test]
+    fn test_readonly_transaction_default() {
+        let config = Config::default();
+        assert!(!config.pool.readonly_transaction,
+            "readonly_transaction should default to false (prefer 1-RTT path)");
+    }
+
+    // Test: pool size defaults to 20
+    #[test]
+    fn test_pool_size_default() {
+        let config = Config::default();
+        assert_eq!(config.pool.size, 20, "pool size should default to 20");
     }
 }

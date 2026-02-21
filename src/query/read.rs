@@ -158,7 +158,10 @@ pub async fn execute_read_query(
                     "tier": explain_result.tier,
                 }))
             }
-            Err(_) => None,
+            Err(e) => {
+                tracing::warn!(sql = %&sql[..sql.len().min(200)], error = %e, "EXPLAIN failed; continuing without plan");
+                None
+            }
         }
     } else {
         None

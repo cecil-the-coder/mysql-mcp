@@ -22,9 +22,13 @@ impl DbPool {
 }
 
 async fn build_pool(config: &Config) -> Result<MySqlPool> {
+    // statement cache: 100 per connection; only effective when using sqlx prepared statement macros
     let connect_options = build_connect_options_from_config(config)?
-        .statement_cache_capacity(config.pool.statement_cache_capacity as usize);
+        .statement_cache_capacity(100);
 
+    // sqlx manages its own internal connection queue; there is no queue_limit API.
+    // Backpressure is provided by acquire_timeout: callers that cannot obtain a
+    // connection within that window receive an error rather than queuing forever.
     let pool = MySqlPoolOptions::new()
         .max_connections(config.pool.size)
         .acquire_timeout(Duration::from_millis(config.pool.connect_timeout_ms))

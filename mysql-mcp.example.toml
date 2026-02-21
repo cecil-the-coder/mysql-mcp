@@ -25,17 +25,14 @@ password = ""
 # connection_string = "mysql://user:pass@host:3306/database"
 
 [pool]
-# Maximum number of connections in the pool (default: 10)
-size = 10
+# Maximum number of connections in the pool (default: 20)
+size = 20
 
 # Maximum time (ms) to wait for a query to complete (default: 30000)
 query_timeout_ms = 30000
 
 # Maximum time (ms) to wait for a connection to be established (default: 10000)
 connect_timeout_ms = 10000
-
-# Maximum number of queries to queue waiting for a connection (default: 100)
-queue_limit = 100
 
 # How long (seconds) to cache schema introspection results (default: 60)
 # Set to 0 to disable caching
@@ -64,6 +61,11 @@ ssl = false
 # Allow write operations when operating in multi-database mode (no database set)
 # (default: false)
 multi_db_write_mode = false
+
+# Maximum number of concurrent named sessions (not counting the default session).
+# Prevents unbounded session creation when allow_runtime_connections is true.
+# (default: 50)
+# max_sessions = 50
 
 # Per-schema permission overrides
 # These take precedence over the global settings above.

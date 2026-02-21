@@ -53,7 +53,6 @@ pub fn load_env_config() -> EnvConfig {
         pool_size: parse_env_num::<u32>("MYSQL_POOL_SIZE"),
         query_timeout_ms: parse_env_num::<u64>("MYSQL_QUERY_TIMEOUT"),
         connect_timeout_ms: parse_env_num::<u64>("MYSQL_CONNECT_TIMEOUT"),
-        queue_limit: parse_env_num::<u32>("MYSQL_QUEUE_LIMIT"),
         cache_ttl_secs: parse_env_num::<u64>("MYSQL_CACHE_TTL"),
         allow_insert: parse_bool_env("ALLOW_INSERT_OPERATION"),
         allow_update: parse_bool_env("ALLOW_UPDATE_OPERATION"),
@@ -77,8 +76,8 @@ pub fn load_env_config() -> EnvConfig {
         performance_hints: std::env::var("MYSQL_PERFORMANCE_HINTS").ok(),
         slow_query_threshold_ms: parse_env_num::<u64>("MYSQL_SLOW_QUERY_THRESHOLD_MS"),
         warmup_connections: parse_env_num::<u32>("MYSQL_POOL_WARMUP"),
-        statement_cache_capacity: parse_env_num::<u32>("MYSQL_STATEMENT_CACHE_CAPACITY"),
         max_rows: parse_env_num::<u32>("MYSQL_MAX_ROWS"),
+        max_sessions: parse_env_num::<u32>("MYSQL_MAX_SESSIONS"),
     }
 }
 
@@ -115,7 +114,6 @@ pub struct EnvConfig {
     pub pool_size: Option<u32>,
     pub query_timeout_ms: Option<u64>,
     pub connect_timeout_ms: Option<u64>,
-    pub queue_limit: Option<u32>,
     pub cache_ttl_secs: Option<u64>,
     pub allow_insert: Option<bool>,
     pub allow_update: Option<bool>,
@@ -139,8 +137,8 @@ pub struct EnvConfig {
     pub performance_hints: Option<String>,
     pub slow_query_threshold_ms: Option<u64>,
     pub warmup_connections: Option<u32>,
-    pub statement_cache_capacity: Option<u32>,
     pub max_rows: Option<u32>,
+    pub max_sessions: Option<u32>,
 }
 
 impl EnvConfig {
@@ -156,7 +154,6 @@ impl EnvConfig {
         if let Some(v) = self.pool_size { base.pool.size = v; }
         if let Some(v) = self.query_timeout_ms { base.pool.query_timeout_ms = v; }
         if let Some(v) = self.connect_timeout_ms { base.pool.connect_timeout_ms = v; }
-        if let Some(v) = self.queue_limit { base.pool.queue_limit = v; }
         if let Some(v) = self.cache_ttl_secs { base.pool.cache_ttl_secs = v; }
         if let Some(v) = self.allow_insert { base.security.allow_insert = v; }
         if let Some(v) = self.allow_update { base.security.allow_update = v; }
@@ -182,8 +179,8 @@ impl EnvConfig {
         if let Some(v) = &self.performance_hints { base.pool.performance_hints = v.clone(); }
         if let Some(v) = self.slow_query_threshold_ms { base.pool.slow_query_threshold_ms = v; }
         if let Some(v) = self.warmup_connections { base.pool.warmup_connections = v; }
-        if let Some(v) = self.statement_cache_capacity { base.pool.statement_cache_capacity = v; }
         if let Some(v) = self.max_rows { base.pool.max_rows = v; }
+        if let Some(v) = self.max_sessions { base.security.max_sessions = v; }
         base
     }
 }

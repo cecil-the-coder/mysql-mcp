@@ -91,7 +91,7 @@ password = "mypassword"
 database = "mydatabase"
 
 [pool]
-size = 10
+size = 20
 max_rows = 1000
 
 [security]
@@ -126,16 +126,14 @@ A `.env` file in the working directory is loaded automatically if present.
 
 | TOML key | Environment variable | Type | Default | Description |
 |---|---|---|---|---|
-| `pool.size` | `MYSQL_POOL_SIZE` | u32 | `10` | Maximum number of pooled connections |
+| `pool.size` | `MYSQL_POOL_SIZE` | u32 | `20` | Maximum number of pooled connections |
 | `pool.query_timeout_ms` | `MYSQL_QUERY_TIMEOUT` | u64 | `30000` | Per-query timeout in milliseconds |
-| `pool.connect_timeout_ms` | `MYSQL_CONNECT_TIMEOUT` | u64 | `10000` | Connection establishment timeout in milliseconds |
-| `pool.queue_limit` | `MYSQL_QUEUE_LIMIT` | u32 | `100` | Maximum number of requests waiting for a pool connection |
+| `pool.connect_timeout_ms` | `MYSQL_CONNECT_TIMEOUT` | u64 | `10000` | Connection establishment timeout in milliseconds; also serves as the acquire timeout — callers that cannot obtain a connection within this window receive an error |
 | `pool.readonly_transaction` | `MYSQL_READONLY_TRANSACTION` | bool | `false` | Wrap every SELECT in a `SET TRANSACTION READ ONLY` + `BEGIN` + `COMMIT` (4-RTT). Leave `false` for bare 1-RTT fetches |
 | `pool.performance_hints` | `MYSQL_PERFORMANCE_HINTS` | string | `none` | When to run EXPLAIN: `none`, `auto` (only when query exceeds `slow_query_threshold_ms`), or `always` |
 | `pool.slow_query_threshold_ms` | `MYSQL_SLOW_QUERY_THRESHOLD_MS` | u64 | `500` | Threshold used by `performance_hints=auto` |
 | `pool.max_rows` | `MYSQL_MAX_ROWS` | u32 | `1000` | Cap on rows returned per query; `LIMIT {max_rows}` is appended when the query has no LIMIT. `0` disables the cap |
 | `pool.warmup_connections` | `MYSQL_POOL_WARMUP` | u32 | `1` | Number of connections to pre-open at startup |
-| `pool.statement_cache_capacity` | `MYSQL_STATEMENT_CACHE_CAPACITY` | u32 | `100` | Prepared-statement cache size per connection |
 | `pool.cache_ttl_secs` | `MYSQL_CACHE_TTL` | u64 | `60` | Schema introspection cache TTL in seconds (`0` disables caching) |
 
 ### Security
@@ -150,6 +148,8 @@ A `.env` file in the working directory is loaded automatically if present.
 | `security.ssl_accept_invalid_certs` | `MYSQL_SSL_ACCEPT_INVALID_CERTS` | bool | `false` | Skip certificate validation (useful for self-signed certs; not for production) |
 | `security.schema_permissions` | `SCHEMA_<NAME>_PERMISSIONS` | map | `{}` | Per-schema write permission overrides (see below) |
 | `security.multi_db_write_mode` | `MULTI_DB_WRITE_MODE` | bool | `false` | Allow writes when no default database is set (multi-DB mode) |
+| `security.allow_runtime_connections` | `MYSQL_ALLOW_RUNTIME_CONNECTIONS` | bool | `false` | Allow `mysql_connect` to accept raw credentials at runtime; when `false` only preset-based connections are permitted |
+| `security.max_sessions` | `MYSQL_MAX_SESSIONS` | u32 | `50` | Maximum number of concurrent named sessions (not counting the default session); prevents unbounded session creation when `allow_runtime_connections` is `true` |
 
 ### Monitoring
 

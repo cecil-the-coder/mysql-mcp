@@ -319,21 +319,28 @@ pub fn parse_warnings(parsed: &ParsedStatement) -> Vec<String> {
 
     let mut warnings = Vec::new();
 
-    // 1. SELECT * (wildcard projection)
+    // Compute shared flags used by multiple checks below.
+    let has_limit = query.limit.is_some();
+    let has_named_table = select.from.iter().any(|t| is_named_table(&t.relation));
+    let has_where = select.selection.is_some();
+
+    // 1. SELECT * (wildcard projection) — only warn when querying a real table without LIMIT,
+    //    because `SELECT * FROM t LIMIT 10` is a reasonable exploration query.
     let has_wildcard = select.projection.iter().any(|item| {
         matches!(item, SelectItem::Wildcard(_) | SelectItem::QualifiedWildcard(_, _))
     });
-    if has_wildcard {
+    if has_wildcard && has_named_table && !has_limit {
         warnings.push(
             "SELECT * returns all columns — specify needed columns for efficiency".to_string(),
         );
     }
 
-    // 2. SELECT from a named table with no WHERE clause
-    let has_named_table = select.from.iter().any(|t| is_named_table(&t.relation));
-    let has_where = select.selection.is_some();
-    if has_named_table && !has_where {
-        warnings.push("No WHERE clause — full table scan likely".to_string());
+    // 2. SELECT from a named table with no WHERE clause and no LIMIT — a LIMIT prevents
+    //    unbounded data return, making the query acceptable for exploration.
+    if has_named_table && !has_where && !has_limit {
+        warnings.push(
+            "No WHERE clause and no LIMIT — query will scan the entire table".to_string(),
+        );
     }
 
     // 3. LIKE with a leading wildcard — use SQL string heuristic (handles all LIKE forms)
@@ -344,7 +351,6 @@ pub fn parse_warnings(parsed: &ParsedStatement) -> Vec<String> {
     }
 
     // 4. No LIMIT on a non-aggregate SELECT
-    let has_limit = query.limit.is_some();
     let has_group_by = !matches!(&select.group_by, sqlparser::ast::GroupByExpr::Expressions(exprs, _) if exprs.is_empty());
     let has_aggregate = has_aggregate_function(&select.projection);
     if !has_limit && !has_group_by && !has_aggregate {

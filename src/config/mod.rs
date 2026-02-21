@@ -40,13 +40,11 @@ pub struct PoolConfig {
     pub size: u32,
     pub query_timeout_ms: u64,
     pub connect_timeout_ms: u64,
-    pub queue_limit: u32,
     pub cache_ttl_secs: u64,
     pub readonly_transaction: bool,
     pub performance_hints: String,
     pub slow_query_threshold_ms: u64,
     pub warmup_connections: u32,
-    pub statement_cache_capacity: u32,
     pub max_rows: u32,
 }
 
@@ -68,6 +66,9 @@ pub struct SecurityConfig {
     /// Allow mysql_connect to accept raw credentials at runtime.
     /// When false (default), only preset-based connections are allowed.
     pub allow_runtime_connections: bool,
+    /// Maximum number of concurrent named sessions (not counting the default session).
+    /// Prevents unbounded session creation when allow_runtime_connections is true.
+    pub max_sessions: u32,
 }
 
 /// Per-schema permission overrides
@@ -126,16 +127,14 @@ impl Default for ConnectionConfig {
 impl Default for PoolConfig {
     fn default() -> Self {
         Self {
-            size: 10,
+            size: 20,
             query_timeout_ms: 30_000,
             connect_timeout_ms: 10_000,
-            queue_limit: 100,
             cache_ttl_secs: 60,
             readonly_transaction: false,
             performance_hints: "none".to_string(),
             slow_query_threshold_ms: 500,
             warmup_connections: 1,
-            statement_cache_capacity: 100,
             max_rows: 1000,
         }
     }
@@ -154,6 +153,7 @@ impl Default for SecurityConfig {
             schema_permissions: HashMap::new(),
             multi_db_write_mode: false,
             allow_runtime_connections: false,
+            max_sessions: 50,
         }
     }
 }
@@ -203,6 +203,24 @@ impl Config {
                 "Config error: MYSQL_CONNECT_TIMEOUT must be at least 100ms (got {}ms)",
                 self.pool.connect_timeout_ms
             );
+        }
+
+        // max_rows must be at least 1
+        if self.pool.max_rows == 0 {
+            anyhow::bail!("pool.max_rows must be >= 1 (set to a large number like 10000 for effectively unlimited rows)");
+        }
+
+        // warmup_connections cannot exceed the pool size
+        if self.pool.warmup_connections > self.pool.size {
+            anyhow::bail!(
+                "pool.warmup_connections ({}) cannot exceed pool.size ({})",
+                self.pool.warmup_connections,
+                self.pool.size
+            );
+        }
+
+        if self.security.max_sessions == 0 {
+            anyhow::bail!("security.max_sessions must be >= 1");
         }
 
         // Remote mode requires a non-empty secret key

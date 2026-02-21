@@ -26,7 +26,8 @@ fn connect_options_from_config(config: &Config) -> sqlx::mysql::MySqlConnectOpti
     if let Some(ca_path) = &config.security.ssl_ca {
         opts = opts.ssl_ca(ca_path);
     }
-    opts.statement_cache_capacity(config.pool.statement_cache_capacity as usize)
+    // statement cache: 100 per connection; only effective when using sqlx prepared statement macros
+    opts.statement_cache_capacity(100)
 }
 
 /// Global semaphore that limits how many tests may CREATE a new MySQL connection

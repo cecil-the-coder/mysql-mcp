@@ -59,10 +59,10 @@ fn is_col_str_opt(row: &sqlx::mysql::MySqlRow, col: &str) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
-/// Escape a string value for use in a MySQL string literal (between single quotes).
-/// Doubles single quotes to prevent SQL injection.
-fn escape_sql_string(s: &str) -> String {
-    s.replace('\'', "''")
+/// Escape a MySQL identifier for use in backtick-quoted contexts.
+/// Doubles any backtick characters within the name.
+fn escape_mysql_identifier(name: &str) -> String {
+    name.replace('`', "``")
 }
 
 /// Shared inner state for SchemaIntrospector, kept behind Arc so it can be
@@ -157,8 +157,8 @@ impl SchemaIntrospector {
     /// No caching — this is only called when EXPLAIN already detected a problem.
     pub async fn list_indexed_columns(&self, table: &str, database: Option<&str>) -> Result<Vec<String>> {
         let qualified = match database {
-            Some(db) => format!("`{}`.`{}`", db, table),
-            None => format!("`{}`", table),
+            Some(db) => format!("`{}`.`{}`", escape_mysql_identifier(db), escape_mysql_identifier(table)),
+            None => format!("`{}`", escape_mysql_identifier(table)),
         };
         let sql = format!("SHOW INDEX FROM {}", qualified);
         let rows = sqlx::query(&sql).fetch_all(self.inner.pool.as_ref()).await?;
@@ -170,6 +170,40 @@ impl SchemaIntrospector {
             }
         }
         Ok(cols)
+    }
+
+    /// Invalidate cached column data for a specific table (case-insensitive match on the
+    /// table-name segment of the cache key, ignoring the database qualifier).
+    /// Use after DDL that targets a known table (CREATE TABLE, ALTER TABLE, TRUNCATE).
+    pub async fn invalidate_table(&self, table: &str) {
+        if table.is_empty() {
+            // No table name known — fall back to full invalidation.
+            self.invalidate_all().await;
+            return;
+        }
+        let mut cache = self.inner.columns_cache.lock().await;
+        // Cache keys have the form "{database}.{table}" where database may be empty.
+        // We remove every entry whose table-name segment (after the first '.') matches.
+        cache.retain(|key, _| {
+            let key_table = key.splitn(2, '.').nth(1).unwrap_or(key.as_str());
+            !key_table.eq_ignore_ascii_case(table)
+        });
+        // Also clear the tables list so row-count / existence info is refreshed.
+        let mut tables_cache = self.inner.tables_cache.lock().await;
+        *tables_cache = None;
+    }
+
+    /// Invalidate ALL cached schema data (tables list + all column caches).
+    /// Use after DDL that may affect multiple tables (e.g., DROP DATABASE, DROP TABLE).
+    pub async fn invalidate_all(&self) {
+        {
+            let mut tables_cache = self.inner.tables_cache.lock().await;
+            *tables_cache = None;
+        }
+        {
+            let mut columns_cache = self.inner.columns_cache.lock().await;
+            columns_cache.clear();
+        }
     }
 
     pub async fn get_columns(&self, table_name: &str, database: Option<&str>) -> Result<Vec<ColumnInfo>> {
@@ -238,12 +272,9 @@ impl SchemaIntrospector {
 
 impl Inner {
     async fn fetch_tables(pool: &MySqlPool, database: Option<&str>) -> Result<Vec<TableInfo>> {
-        let db_filter = database
-            .map(|d| format!("AND table_schema = '{}'", escape_sql_string(d)))
-            .unwrap_or_else(|| "AND table_schema NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')".to_string());
-
-        let sql = format!(
-            r#"SELECT
+        let rows = if let Some(db) = database {
+            sqlx::query(
+                r#"SELECT
                 TABLE_NAME as name,
                 TABLE_SCHEMA as `schema`,
                 TABLE_ROWS as row_count,
@@ -252,12 +283,29 @@ impl Inner {
                 UPDATE_TIME as update_time
             FROM information_schema.TABLES
             WHERE TABLE_TYPE = 'BASE TABLE'
-            {}
+            AND table_schema = ?
             ORDER BY TABLE_SCHEMA, TABLE_NAME"#,
-            db_filter
-        );
-
-        let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            )
+            .bind(db)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"SELECT
+                TABLE_NAME as name,
+                TABLE_SCHEMA as `schema`,
+                TABLE_ROWS as row_count,
+                DATA_LENGTH as data_size_bytes,
+                CREATE_TIME as create_time,
+                UPDATE_TIME as update_time
+            FROM information_schema.TABLES
+            WHERE TABLE_TYPE = 'BASE TABLE'
+            AND table_schema NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')
+            ORDER BY TABLE_SCHEMA, TABLE_NAME"#,
+            )
+            .fetch_all(pool)
+            .await?
+        };
 
         let tables = rows.iter().map(|row| {
             use sqlx::Row;
@@ -277,12 +325,9 @@ impl Inner {
     }
 
     async fn fetch_columns(pool: &MySqlPool, table_name: &str, database: Option<&str>) -> Result<Vec<ColumnInfo>> {
-        let db_filter = database
-            .map(|d| format!("AND TABLE_SCHEMA = '{}'", escape_sql_string(d)))
-            .unwrap_or_default();
-
-        let sql = format!(
-            r#"SELECT
+        let rows = if let Some(db) = database {
+            sqlx::query(
+                r#"SELECT
                 COLUMN_NAME as name,
                 DATA_TYPE as data_type,
                 IS_NULLABLE as is_nullable,
@@ -290,13 +335,31 @@ impl Inner {
                 COLUMN_KEY as column_key,
                 EXTRA as extra
             FROM information_schema.COLUMNS
-            WHERE TABLE_NAME = '{}'
-            {}
+            WHERE TABLE_NAME = ?
+            AND TABLE_SCHEMA = ?
             ORDER BY ORDINAL_POSITION"#,
-            escape_sql_string(table_name), db_filter
-        );
-
-        let rows = sqlx::query(&sql).fetch_all(pool).await?;
+            )
+            .bind(table_name)
+            .bind(db)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"SELECT
+                COLUMN_NAME as name,
+                DATA_TYPE as data_type,
+                IS_NULLABLE as is_nullable,
+                COLUMN_DEFAULT as column_default,
+                COLUMN_KEY as column_key,
+                EXTRA as extra
+            FROM information_schema.COLUMNS
+            WHERE TABLE_NAME = ?
+            ORDER BY ORDINAL_POSITION"#,
+            )
+            .bind(table_name)
+            .fetch_all(pool)
+            .await?
+        };
 
         let columns = rows.iter().map(|row| {
             let nullable_str = is_col_str(row, "is_nullable");
@@ -330,23 +393,30 @@ pub async fn get_schema_info(
     // Columns (always included)
     let columns = Inner::fetch_columns(pool, table_name, database).await?;
 
-    let db_clause = database
-        .map(|d| format!("AND TABLE_SCHEMA = '{}'", escape_sql_string(d)))
-        .unwrap_or_default();
-    let db_clause_fk = database
-        .map(|d| format!("AND kcu.TABLE_SCHEMA = '{}'", escape_sql_string(d)))
-        .unwrap_or_default();
-    let db_clause_size = database
-        .map(|d| format!("AND TABLE_SCHEMA = '{}'", escape_sql_string(d)))
-        .unwrap_or_default();
-
     // Indexes
     let indexes: serde_json::Value = if include_indexes {
-        let sql = format!(
-            "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE, NULLABLE              FROM information_schema.STATISTICS              WHERE TABLE_NAME = '{}' {}              ORDER BY INDEX_NAME, SEQ_IN_INDEX",
-            escape_sql_string(table_name), db_clause
-        );
-        let rows = sqlx::query(&sql).fetch_all(pool).await?;
+        let rows = if let Some(db) = database {
+            sqlx::query(
+                "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE, NULLABLE \
+                 FROM information_schema.STATISTICS \
+                 WHERE TABLE_NAME = ? AND TABLE_SCHEMA = ? \
+                 ORDER BY INDEX_NAME, SEQ_IN_INDEX",
+            )
+            .bind(table_name)
+            .bind(db)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE, NULLABLE \
+                 FROM information_schema.STATISTICS \
+                 WHERE TABLE_NAME = ? \
+                 ORDER BY INDEX_NAME, SEQ_IN_INDEX",
+            )
+            .bind(table_name)
+            .fetch_all(pool)
+            .await?
+        };
         let mut idx_map: std::collections::BTreeMap<String, serde_json::Value> = std::collections::BTreeMap::new();
         for row in &rows {
             use sqlx::Row;
@@ -375,11 +445,36 @@ pub async fn get_schema_info(
 
     // Foreign keys
     let foreign_keys: serde_json::Value = if include_foreign_keys {
-        let sql = format!(
-            "SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME,                     kcu.REFERENCED_COLUMN_NAME, rc.UPDATE_RULE, rc.DELETE_RULE              FROM information_schema.KEY_COLUMN_USAGE kcu              JOIN information_schema.REFERENTIAL_CONSTRAINTS rc                ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME               AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA              WHERE kcu.TABLE_NAME = '{}' {}                AND kcu.REFERENCED_TABLE_NAME IS NOT NULL",
-            escape_sql_string(table_name), db_clause_fk
-        );
-        let rows = sqlx::query(&sql).fetch_all(pool).await?;
+        let rows = if let Some(db) = database {
+            sqlx::query(
+                "SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME, \
+                        kcu.REFERENCED_COLUMN_NAME, rc.UPDATE_RULE, rc.DELETE_RULE \
+                 FROM information_schema.KEY_COLUMN_USAGE kcu \
+                 JOIN information_schema.REFERENTIAL_CONSTRAINTS rc \
+                   ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME \
+                  AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA \
+                 WHERE kcu.TABLE_NAME = ? AND kcu.TABLE_SCHEMA = ? \
+                   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL",
+            )
+            .bind(table_name)
+            .bind(db)
+            .fetch_all(pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME, \
+                        kcu.REFERENCED_COLUMN_NAME, rc.UPDATE_RULE, rc.DELETE_RULE \
+                 FROM information_schema.KEY_COLUMN_USAGE kcu \
+                 JOIN information_schema.REFERENTIAL_CONSTRAINTS rc \
+                   ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME \
+                  AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA \
+                 WHERE kcu.TABLE_NAME = ? \
+                   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL",
+            )
+            .bind(table_name)
+            .fetch_all(pool)
+            .await?
+        };
         let fks: Vec<serde_json::Value> = rows.iter().map(|row| {
             serde_json::json!({
                 "constraint": is_col_str(row, "CONSTRAINT_NAME"),
@@ -397,11 +492,27 @@ pub async fn get_schema_info(
 
     // Table size estimate
     let size: serde_json::Value = if include_size {
-        let sql = format!(
-            "SELECT TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH              FROM information_schema.TABLES              WHERE TABLE_NAME = '{}' {}",
-            escape_sql_string(table_name), db_clause_size
-        );
-        if let Ok(row) = sqlx::query(&sql).fetch_one(pool).await {
+        let size_result = if let Some(db) = database {
+            sqlx::query(
+                "SELECT TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH \
+                 FROM information_schema.TABLES \
+                 WHERE TABLE_NAME = ? AND TABLE_SCHEMA = ?",
+            )
+            .bind(table_name)
+            .bind(db)
+            .fetch_one(pool)
+            .await
+        } else {
+            sqlx::query(
+                "SELECT TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH \
+                 FROM information_schema.TABLES \
+                 WHERE TABLE_NAME = ?",
+            )
+            .bind(table_name)
+            .fetch_one(pool)
+            .await
+        };
+        if let Ok(row) = size_result {
             use sqlx::Row;
             let table_rows: Option<u64> = row.try_get("TABLE_ROWS").ok();
             let data_len: Option<u64> = row.try_get("DATA_LENGTH").ok();

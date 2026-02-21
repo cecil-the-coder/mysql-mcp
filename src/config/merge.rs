@@ -63,7 +63,7 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.connection.host, "localhost");
         assert_eq!(config.connection.port, 3306);
-        assert_eq!(config.pool.size, 10);
+        assert_eq!(config.pool.size, 20);
         assert!(!config.security.allow_insert);
         assert!(!config.security.allow_update);
         assert!(!config.security.allow_delete);
