@@ -8,10 +8,11 @@ use testcontainers_modules::{
 /// Build MySqlConnectOptions from a Config, applying the correct SSL mode.
 fn connect_options_from_config(config: &Config) -> sqlx::mysql::MySqlConnectOptions {
     use sqlx::mysql::{MySqlConnectOptions, MySqlSslMode};
-    let ssl_mode = match (config.security.ssl, config.security.ssl_accept_invalid_certs) {
-        (false, _) => MySqlSslMode::Disabled,
-        (true, true) => MySqlSslMode::Required,
-        (true, false) => MySqlSslMode::VerifyIdentity,
+    let ssl_mode = match (config.security.ssl, config.security.ssl_accept_invalid_certs, config.security.ssl_ca.is_some()) {
+        (false, _, _)        => MySqlSslMode::Disabled,
+        (true, true, _)      => MySqlSslMode::Required,
+        (true, false, true)  => MySqlSslMode::VerifyCa,
+        (true, false, false) => MySqlSslMode::VerifyIdentity,
     };
     let mut opts = MySqlConnectOptions::new()
         .host(&config.connection.host)
@@ -21,6 +22,9 @@ fn connect_options_from_config(config: &Config) -> sqlx::mysql::MySqlConnectOpti
         .ssl_mode(ssl_mode);
     if let Some(db) = &config.connection.database {
         opts = opts.database(db);
+    }
+    if let Some(ca_path) = &config.security.ssl_ca {
+        opts = opts.ssl_ca(ca_path);
     }
     opts.statement_cache_capacity(config.pool.statement_cache_capacity as usize)
 }
