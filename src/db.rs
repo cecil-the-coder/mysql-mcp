@@ -23,7 +23,7 @@ impl DbPool {
 
 async fn build_pool(config: &Config) -> Result<MySqlPool> {
     // statement cache: 100 per connection; only effective when using sqlx prepared statement macros
-    let connect_options = build_connect_options_from_config(config)?
+    let connect_options = build_connect_options(config)?
         .statement_cache_capacity(100);
 
     // sqlx manages its own internal connection queue; there is no queue_limit API.
@@ -80,7 +80,7 @@ pub async fn build_session_pool(
     Ok(pool)
 }
 
-fn build_connect_options_from_config(config: &Config) -> Result<MySqlConnectOptions> {
+pub fn build_connect_options(config: &Config) -> Result<MySqlConnectOptions> {
     let conn = &config.connection;
 
     // If a full mysql:// URL is given, parse it directly

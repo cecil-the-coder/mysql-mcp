@@ -6,28 +6,13 @@ use testcontainers_modules::{
 };
 
 /// Build MySqlConnectOptions from a Config, applying the correct SSL mode.
+/// Delegates to `crate::db::build_connect_options` to avoid duplicating SSL logic.
 fn connect_options_from_config(config: &Config) -> sqlx::mysql::MySqlConnectOptions {
-    use sqlx::mysql::{MySqlConnectOptions, MySqlSslMode};
-    let ssl_mode = match (config.security.ssl, config.security.ssl_accept_invalid_certs, config.security.ssl_ca.is_some()) {
-        (false, _, _)        => MySqlSslMode::Disabled,
-        (true, true, _)      => MySqlSslMode::Required,
-        (true, false, true)  => MySqlSslMode::VerifyCa,
-        (true, false, false) => MySqlSslMode::VerifyIdentity,
-    };
-    let mut opts = MySqlConnectOptions::new()
-        .host(&config.connection.host)
-        .port(config.connection.port)
-        .username(&config.connection.user)
-        .password(&config.connection.password)
-        .ssl_mode(ssl_mode);
-    if let Some(db) = &config.connection.database {
-        opts = opts.database(db);
-    }
-    if let Some(ca_path) = &config.security.ssl_ca {
-        opts = opts.ssl_ca(ca_path);
-    }
+    let mut opts = crate::db::build_connect_options(config)
+        .expect("build_connect_options failed in test helper");
     // statement cache: 100 per connection; only effective when using sqlx prepared statement macros
-    opts.statement_cache_capacity(100)
+    opts = opts.statement_cache_capacity(100);
+    opts
 }
 
 /// Global semaphore that limits how many tests may CREATE a new MySQL connection
