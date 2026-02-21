@@ -82,7 +82,7 @@ impl ServerHandler for McpServer {
                     },
                     "explain": {
                         "type": "boolean",
-                        "description": "Request EXPLAIN analysis for this query (overrides server performance_hints setting)"
+                        "description": "Set to true when investigating a slow query — returns full execution plan including index usage, rows examined, and optimization suggestions. Overrides the server performance_hints setting for this call."
                     }
                 },
                 "required": ["sql"]
@@ -90,7 +90,20 @@ impl ServerHandler for McpServer {
 
             let tool = Tool::new(
                 "mysql_query",
-                "Execute a SQL query against the MySQL database. Supports SELECT, SHOW, EXPLAIN, and (if configured) INSERT, UPDATE, DELETE, DDL statements.",
+                concat!(
+                    "Execute a SQL query against the MySQL database. ",
+                    "Supports SELECT, SHOW, EXPLAIN, and (if configured) INSERT, UPDATE, DELETE, DDL statements. ",
+                    "Response fields: ",
+                    "`rows` (result set), ",
+                    "`row_count` (number of rows returned), ",
+                    "`execution_time_ms` (DB execution time), ",
+                    "`serialization_time_ms` (time to serialize rows to JSON), ",
+                    "`capped` (true when result was truncated to max_rows limit), ",
+                    "`parse_warnings` (performance warnings, e.g. missing LIMIT — only present when non-empty), ",
+                    "`plan` (execution plan with tier, full_table_scan, index_used, rows_examined — only present when performance_hints config is enabled or explain:true is passed), ",
+                    "`suggestions` (index recommendations — only present when a full table scan is detected). ",
+                    "Use `explain: true` to force an execution plan even when performance_hints is disabled in server config.",
+                ),
                 schema,
             );
 
@@ -107,7 +120,12 @@ impl ServerHandler for McpServer {
             })));
             let multi_tool = Tool::new(
                 "mysql_multi_query",
-                "Execute multiple read-only SQL queries in parallel and return all results together. Use this when you need data from multiple independent tables or queries — it completes in ~1 RTT instead of N sequential RTTs.",
+                concat!(
+                    "Execute 2 or more independent read-only SQL queries in parallel, saving N-1 database round trips compared to sequential mysql_query calls. ",
+                    "Use this whenever you need results from multiple independent tables or queries at the same time — for example fetching user, orders, and settings in one shot. ",
+                    "All queries must be read-only (SELECT, SHOW, EXPLAIN); write statements are rejected. ",
+                    "Response: `results` array (one entry per query, each with sql, rows, row_count, execution_time_ms, capped, and optionally parse_warnings/plan) plus `wall_time_ms` (total elapsed time for all queries combined).",
+                ),
                 multi_schema,
             );
 
@@ -248,6 +266,39 @@ impl ServerHandler for McpServer {
                     };
                 }
 
+                // Structured performance log for multi-query (issue mysql-mcp-881)
+                {
+                    let slow_threshold = self.config.pool.slow_query_threshold_ms;
+                    // Determine if any individual query was slow (or wall_time is slow)
+                    let any_slow = ordered.iter().any(|entry| {
+                        entry.get("execution_time_ms")
+                            .and_then(|v| v.as_u64())
+                            .map(|ms| ms >= slow_threshold)
+                            .unwrap_or(false)
+                    });
+                    let per_query: Vec<_> = queries.iter().zip(ordered.iter()).map(|(sql, entry)| {
+                        let sql_truncated = if sql.len() > 200 { &sql[..200] } else { sql.as_str() };
+                        json!({
+                            "sql": sql_truncated,
+                            "execution_time_ms": entry.get("execution_time_ms"),
+                            "row_count": entry.get("row_count"),
+                        })
+                    }).collect();
+                    if any_slow {
+                        tracing::info!(
+                            wall_time_ms = wall_time_ms,
+                            queries = ?per_query,
+                            "slow multi-query"
+                        );
+                    } else {
+                        tracing::debug!(
+                            wall_time_ms = wall_time_ms,
+                            queries = ?per_query,
+                            "multi-query executed"
+                        );
+                    }
+                }
+
                 let output = json!({
                     "results": ordered,
                     "wall_time_ms": wall_time_ms,
@@ -341,6 +392,47 @@ impl ServerHandler for McpServer {
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        // Structured performance log (issue mysql-mcp-881)
+                        {
+                            let sql_truncated = if sql.len() > 200 { &sql[..200] } else { &sql };
+                            let plan_tier = result.plan.as_ref()
+                                .and_then(|p| p.get("tier"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("none");
+                            let full_table_scan = result.plan.as_ref()
+                                .and_then(|p| p.get("full_table_scan"))
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            let is_slow = result.execution_time_ms >= self.config.pool.slow_query_threshold_ms;
+                            if is_slow {
+                                tracing::info!(
+                                    sql = sql_truncated,
+                                    execution_time_ms = result.execution_time_ms,
+                                    serialization_time_ms = result.serialization_time_ms,
+                                    row_count = result.row_count,
+                                    capped = result.capped,
+                                    parse_warnings = ?result.parse_warnings,
+                                    plan_tier = plan_tier,
+                                    full_table_scan = full_table_scan,
+                                    suggestions = ?suggestions,
+                                    "slow query"
+                                );
+                            } else {
+                                tracing::debug!(
+                                    sql = sql_truncated,
+                                    execution_time_ms = result.execution_time_ms,
+                                    serialization_time_ms = result.serialization_time_ms,
+                                    row_count = result.row_count,
+                                    capped = result.capped,
+                                    parse_warnings = ?result.parse_warnings,
+                                    plan_tier = plan_tier,
+                                    full_table_scan = full_table_scan,
+                                    suggestions = ?suggestions,
+                                    "query executed"
+                                );
                             }
                         }
 

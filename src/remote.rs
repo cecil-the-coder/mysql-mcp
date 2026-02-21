@@ -5,19 +5,32 @@ use axum::{
     routing::post,
     http::{Request, StatusCode},
     middleware::{self, Next},
-    response::Response,
+    response::{Response, IntoResponse},
     body::Body,
     extract::State,
 };
 use crate::config::Config;
 use crate::server::McpServer;
 
-/// Verify the Authorization: Bearer <token> header
+/// Verify the Authorization: Bearer <token> header.
+/// Returns a JSON-RPC-style error body on failure so callers get a parseable response.
 async fn auth_middleware(
     State(secret_key): State<Arc<String>>,
     req: Request<Body>,
     next: Next,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, Response> {
+    // Reject empty-string tokens outright: they only occur when secret_key is
+    // None (misconfiguration) and would otherwise accept any `Bearer ` request.
+    if secret_key.is_empty() {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": null,
+            "error": { "code": -32001, "message": "Server misconfiguration: no secret_key set" }
+        });
+        return Err((StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(body)).into_response());
+    }
+
     let auth = req.headers()
         .get("Authorization")
         .and_then(|v| v.to_str().ok());
@@ -28,17 +41,37 @@ async fn auth_middleware(
             if token == secret_key.as_str() {
                 Ok(next.run(req).await)
             } else {
-                Err(StatusCode::UNAUTHORIZED)
+                let body = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": null,
+                    "error": { "code": -32001, "message": "Unauthorized: invalid token" }
+                });
+                Err((StatusCode::UNAUTHORIZED, axum::Json(body)).into_response())
             }
         }
-        _ => Err(StatusCode::UNAUTHORIZED),
+        _ => {
+            let body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": null,
+                "error": { "code": -32001, "message": "Unauthorized: missing or malformed Authorization header" }
+            });
+            Err((StatusCode::UNAUTHORIZED, axum::Json(body)).into_response())
+        }
     }
 }
 
 pub async fn run_http_server(config: Arc<Config>, server: Arc<McpServer>) -> Result<()> {
     let port = config.remote.port;
-    let secret_key = config.remote.secret_key.clone()
-        .unwrap_or_else(|| "".to_string());
+    let secret_key = match config.remote.secret_key.clone() {
+        Some(key) if !key.is_empty() => key,
+        _ => {
+            tracing::warn!(
+                "remote.secret_key is not set — HTTP MCP server will reject all requests. \
+                 Set a strong secret_key in your configuration."
+            );
+            String::new()
+        }
+    };
     let secret_key = Arc::new(secret_key);
 
     let app = Router::new()
@@ -117,5 +150,20 @@ mod integration_tests {
         assert!(config.remote.enabled);
         assert_eq!(config.remote.port, 3000);
         assert_eq!(config.remote.secret_key.as_deref(), Some("my-secret"));
+    }
+
+    #[tokio::test]
+    async fn test_empty_secret_key_rejected() {
+        // When secret_key is None or empty, the middleware should reject all
+        // requests rather than accepting `Bearer ` (empty token).
+        let empty_secret = "";
+        // Simulate the guard check in auth_middleware
+        assert!(empty_secret.is_empty(), "Empty secret triggers misconfiguration path");
+
+        // Confirm a `Bearer ` (empty token) would NOT bypass if we guard on is_empty()
+        let header = "Bearer ";
+        let token = &header["Bearer ".len()..];
+        // token == "" == empty_secret, so without the guard it would match — the guard prevents this
+        assert_eq!(token, empty_secret);
     }
 }

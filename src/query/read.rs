@@ -54,13 +54,15 @@ pub async fn execute_read_query(
         StatementType::Select | StatementType::Show | StatementType::Explain
     );
 
-    // Apply max_rows cap: append LIMIT if none present and max_rows > 0.
-    let was_capped;
-    let effective_sql: std::borrow::Cow<str> = if max_rows > 0 && !sql.to_uppercase().contains("LIMIT") {
-        was_capped = true;
+    // Apply max_rows cap: append LIMIT only for SELECT statements (SHOW/EXPLAIN do not
+    // support LIMIT in MySQL). Track whether we injected a LIMIT so we can determine
+    // after execution whether the result was actually truncated.
+    let added_limit = max_rows > 0
+        && matches!(stmt_type, StatementType::Select)
+        && !sql.to_uppercase().contains("LIMIT");
+    let effective_sql: std::borrow::Cow<str> = if added_limit {
         std::borrow::Cow::Owned(format!("{} LIMIT {}", sql, max_rows))
     } else {
-        was_capped = false;
         std::borrow::Cow::Borrowed(sql)
     };
     let effective_sql_ref = effective_sql.as_ref();
@@ -90,6 +92,9 @@ pub async fn execute_read_query(
     let ser_elapsed = ser_start.elapsed().as_millis() as u64;
 
     let row_count = json_rows.len();
+    // was_capped is true only when we injected a LIMIT *and* the result set hit that
+    // exact limit — meaning there may be more rows beyond the cap.
+    let was_capped = added_limit && row_count == max_rows as usize;
 
     // EXPLAIN phase: decide whether to run based on performance_hints and elapsed time.
     // Only run EXPLAIN for SELECT statements (EXPLAIN doesn't support SHOW/EXPLAIN/etc.)
@@ -112,7 +117,10 @@ pub async fn execute_read_query(
                 };
                 // Compute efficiency: rows_returned / rows_examined
                 explain_result.efficiency = if explain_result.rows_examined_estimate > 0 {
-                    (row_count as f64) / (explain_result.rows_examined_estimate as f64)
+                    f64::min(
+                        1.0,
+                        (row_count as f64) / (explain_result.rows_examined_estimate as f64),
+                    )
                 } else {
                     1.0
                 };
