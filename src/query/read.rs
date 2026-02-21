@@ -3,6 +3,8 @@ use anyhow::Result;
 use sqlx::{MySqlPool, Row, Column, TypeInfo, Acquire};
 use serde_json::{Value, Map};
 use crate::sql_parser::{StatementType, ParsedStatement};
+use sqlparser::dialect::MySqlDialect;
+use sqlparser::parser::Parser as SqlParser;
 
 pub struct QueryResult {
     pub rows: Vec<Map<String, Value>>,
@@ -57,9 +59,24 @@ pub async fn execute_read_query(
     // Apply max_rows cap: append LIMIT only for SELECT statements (SHOW/EXPLAIN do not
     // support LIMIT in MySQL). Track whether we injected a LIMIT so we can determine
     // after execution whether the result was actually truncated.
+    //
+    // Use an AST-based check to detect whether the top-level query already has a LIMIT
+    // clause. A string match on "LIMIT" is unreliable — it is fooled by the word
+    // appearing in comments, CTEs, or subqueries.
+    let has_limit = {
+        let dialect = MySqlDialect {};
+        SqlParser::parse_sql(&dialect, sql)
+            .ok()
+            .and_then(|stmts| stmts.into_iter().next())
+            .map(|stmt| match stmt {
+                sqlparser::ast::Statement::Query(q) => q.limit.is_some(),
+                _ => false,
+            })
+            .unwrap_or(false)
+    };
     let added_limit = max_rows > 0
         && matches!(stmt_type, StatementType::Select)
-        && !sql.to_uppercase().contains("LIMIT");
+        && !has_limit;
     let effective_sql: std::borrow::Cow<str> = if added_limit {
         std::borrow::Cow::Owned(format!("{} LIMIT {}", sql, max_rows))
     } else {
@@ -191,16 +208,43 @@ fn column_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col: &sqlx::mysql::My
         // MySQL sends DECIMAL/NUMERIC as text over the wire even in binary protocol.
         // sqlx's type compatibility check rejects String decode for DECIMAL column types,
         // so use try_get_unchecked to bypass it and decode the raw text value.
+        // Return as String to preserve full precision — f64 only has ~15 significant digits.
         "DECIMAL" | "NUMERIC" | "NEWDECIMAL" => {
             if let Ok(Some(s)) = row.try_get_unchecked::<Option<String>, _>(idx) {
-                if let Ok(f) = s.parse::<f64>() {
-                    return serde_json::Number::from_f64(f)
-                        .map(Value::Number)
-                        .unwrap_or(Value::String(s));
-                }
                 return Value::String(s);
             }
             return Value::Null;
+        }
+        "BIT" => {
+            // BIT columns: decode as u64 bitmask
+            if let Ok(v) = row.try_get::<u64, _>(idx) {
+                return serde_json::json!(v);
+            }
+            // single-bit BIT(1): try bool
+            if let Ok(v) = row.try_get::<bool, _>(idx) {
+                return Value::Bool(v);
+            }
+        }
+        "YEAR" => {
+            // YEAR(4): return as number
+            if let Ok(v) = row.try_get::<u16, _>(idx) {
+                return Value::Number(v.into());
+            }
+        }
+        "JSON" => {
+            // JSON columns: parse and return as structured JSON value
+            if let Ok(Some(s)) = row.try_get::<Option<String>, _>(idx) {
+                return serde_json::from_str::<Value>(&s)
+                    .unwrap_or(Value::String(s));
+            }
+            return Value::Null;
+        }
+        "ENUM" | "SET" => {
+            // ENUM and SET: return as string (already the default fallback,
+            // but make explicit here for clarity)
+            if let Ok(v) = row.try_get::<Option<String>, _>(idx) {
+                return v.map(Value::String).unwrap_or(Value::Null);
+            }
         }
         _ => {}
     }

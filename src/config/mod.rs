@@ -169,3 +169,51 @@ impl Default for MonitoringConfig {
         }
     }
 }
+
+impl Config {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        // Pool size must be 1..=1000
+        if self.pool.size == 0 {
+            anyhow::bail!("Config error: MYSQL_POOL_SIZE cannot be 0 (got 0)");
+        }
+        if self.pool.size > 1000 {
+            anyhow::bail!(
+                "Config error: MYSQL_POOL_SIZE unreasonably large: {} (max 1000)",
+                self.pool.size
+            );
+        }
+
+        // Timeouts must be at least 100ms
+        if self.pool.query_timeout_ms < 100 {
+            anyhow::bail!(
+                "Config error: MYSQL_QUERY_TIMEOUT must be at least 100ms (got {}ms)",
+                self.pool.query_timeout_ms
+            );
+        }
+        if self.pool.connect_timeout_ms < 100 {
+            anyhow::bail!(
+                "Config error: MYSQL_CONNECT_TIMEOUT must be at least 100ms (got {}ms)",
+                self.pool.connect_timeout_ms
+            );
+        }
+
+        // Remote mode requires a non-empty secret key
+        if self.remote.enabled {
+            match &self.remote.secret_key {
+                None => {
+                    anyhow::bail!(
+                        "Config error: remote mode is enabled but remote.secret_key / MYSQL_REMOTE_SECRET is not set"
+                    );
+                }
+                Some(s) if s.is_empty() => {
+                    anyhow::bail!(
+                        "Config error: remote mode is enabled but remote.secret_key / MYSQL_REMOTE_SECRET is not set"
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+}

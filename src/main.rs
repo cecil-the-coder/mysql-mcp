@@ -24,7 +24,9 @@ async fn main() -> Result<()> {
     info!("mysql-mcp starting");
 
     // Load configuration
-    let config = Arc::new(config::merge::load_config()?);
+    let raw_config = config::merge::load_config()?;
+    raw_config.validate()?;
+    let config = Arc::new(raw_config);
     info!("Configuration loaded");
 
     // Connect to the database

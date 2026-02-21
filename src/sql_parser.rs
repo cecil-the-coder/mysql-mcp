@@ -96,7 +96,10 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
         bail!("Empty SQL statement");
     }
 
-    // We only handle the first statement
+    if statements.len() > 1 {
+        bail!("Multi-statement SQL is not supported. Send one statement at a time.");
+    }
+
     let stmt = &statements[0];
     classify_statement(stmt, sql)
 }
@@ -866,5 +869,22 @@ mod tests {
         let parsed = parse_sql("SELECT * FROM users").unwrap();
         let warnings = parse_write_warnings(&parsed);
         assert!(warnings.is_empty(), "Expected no warnings for SELECT");
+    }
+
+    #[test]
+    fn test_multi_statement_rejected() {
+        // A multi-statement input must be rejected, regardless of what the
+        // first statement is — otherwise "SELECT 1; DROP TABLE t" would be
+        // misclassified as a read-only SELECT while MySQL would execute both.
+        let err = parse_sql("SELECT 1; DROP TABLE t").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Multi-statement"),
+            "Expected multi-statement error, got: {msg}"
+        );
+
+        // Two harmless SELECTs are also forbidden.
+        let err2 = parse_sql("SELECT 1; SELECT 2").unwrap_err();
+        assert!(err2.to_string().contains("Multi-statement"));
     }
 }

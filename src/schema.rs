@@ -59,6 +59,12 @@ fn is_col_str_opt(row: &sqlx::mysql::MySqlRow, col: &str) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+/// Escape a string value for use in a MySQL string literal (between single quotes).
+/// Doubles single quotes to prevent SQL injection.
+fn escape_sql_string(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
 /// Shared inner state for SchemaIntrospector, kept behind Arc so it can be
 /// moved into background tokio::spawn tasks.
 struct Inner {
@@ -119,7 +125,11 @@ impl SchemaIntrospector {
                                         fetched_at: Instant::now(),
                                     });
                                 }
-                                Err(_) => {
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Schema cache refresh failed for table list (db={:?}): {}",
+                                        owned_database, e
+                                    );
                                     // Leave the stale cache in place on error.
                                 }
                             }
@@ -197,7 +207,11 @@ impl SchemaIntrospector {
                                         fetched_at: Instant::now(),
                                     });
                                 }
-                                Err(_) => {
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Schema cache refresh failed for columns ({}.{}): {}",
+                                        owned_database.as_deref().unwrap_or(""), owned_table, e
+                                    );
                                     // Leave the stale cache in place on error.
                                 }
                             }
@@ -225,7 +239,7 @@ impl SchemaIntrospector {
 impl Inner {
     async fn fetch_tables(pool: &MySqlPool, database: Option<&str>) -> Result<Vec<TableInfo>> {
         let db_filter = database
-            .map(|d| format!("AND table_schema = '{}'", d))
+            .map(|d| format!("AND table_schema = '{}'", escape_sql_string(d)))
             .unwrap_or_else(|| "AND table_schema NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')".to_string());
 
         let sql = format!(
@@ -264,7 +278,7 @@ impl Inner {
 
     async fn fetch_columns(pool: &MySqlPool, table_name: &str, database: Option<&str>) -> Result<Vec<ColumnInfo>> {
         let db_filter = database
-            .map(|d| format!("AND TABLE_SCHEMA = '{}'", d))
+            .map(|d| format!("AND TABLE_SCHEMA = '{}'", escape_sql_string(d)))
             .unwrap_or_default();
 
         let sql = format!(
@@ -279,7 +293,7 @@ impl Inner {
             WHERE TABLE_NAME = '{}'
             {}
             ORDER BY ORDINAL_POSITION"#,
-            table_name, db_filter
+            escape_sql_string(table_name), db_filter
         );
 
         let rows = sqlx::query(&sql).fetch_all(pool).await?;
@@ -301,6 +315,133 @@ impl Inner {
 
         Ok(columns)
     }
+}
+
+
+/// Detailed schema metadata for a single table: columns, indexes, foreign keys, and size estimate.
+pub async fn get_schema_info(
+    pool: &sqlx::MySqlPool,
+    table_name: &str,
+    database: Option<&str>,
+    include_indexes: bool,
+    include_foreign_keys: bool,
+    include_size: bool,
+) -> anyhow::Result<serde_json::Value> {
+    // Columns (always included)
+    let columns = Inner::fetch_columns(pool, table_name, database).await?;
+
+    let db_clause = database
+        .map(|d| format!("AND TABLE_SCHEMA = '{}'", escape_sql_string(d)))
+        .unwrap_or_default();
+    let db_clause_fk = database
+        .map(|d| format!("AND kcu.TABLE_SCHEMA = '{}'", escape_sql_string(d)))
+        .unwrap_or_default();
+    let db_clause_size = database
+        .map(|d| format!("AND TABLE_SCHEMA = '{}'", escape_sql_string(d)))
+        .unwrap_or_default();
+
+    // Indexes
+    let indexes: serde_json::Value = if include_indexes {
+        let sql = format!(
+            "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE, NULLABLE              FROM information_schema.STATISTICS              WHERE TABLE_NAME = '{}' {}              ORDER BY INDEX_NAME, SEQ_IN_INDEX",
+            escape_sql_string(table_name), db_clause
+        );
+        let rows = sqlx::query(&sql).fetch_all(pool).await?;
+        let mut idx_map: std::collections::BTreeMap<String, serde_json::Value> = std::collections::BTreeMap::new();
+        for row in &rows {
+            use sqlx::Row;
+            let name: String = is_col_str(row, "INDEX_NAME");
+            let non_unique: i64 = row.try_get("NON_UNIQUE").unwrap_or(1);
+            let col: String = is_col_str(row, "COLUMN_NAME");
+            let idx_type: String = is_col_str(row, "INDEX_TYPE");
+            let nullable: String = is_col_str(row, "NULLABLE");
+            let entry = idx_map.entry(name.clone()).or_insert_with(|| serde_json::json!({
+                "name": name,
+                "unique": non_unique == 0,
+                "type": idx_type,
+                "columns": [],
+            }));
+            if let Some(cols) = entry.get_mut("columns").and_then(|v| v.as_array_mut()) {
+                cols.push(serde_json::json!({
+                    "column": col,
+                    "nullable": nullable == "YES",
+                }));
+            }
+        }
+        serde_json::Value::Array(idx_map.into_values().collect())
+    } else {
+        serde_json::Value::Null
+    };
+
+    // Foreign keys
+    let foreign_keys: serde_json::Value = if include_foreign_keys {
+        let sql = format!(
+            "SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME,                     kcu.REFERENCED_COLUMN_NAME, rc.UPDATE_RULE, rc.DELETE_RULE              FROM information_schema.KEY_COLUMN_USAGE kcu              JOIN information_schema.REFERENTIAL_CONSTRAINTS rc                ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME               AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA              WHERE kcu.TABLE_NAME = '{}' {}                AND kcu.REFERENCED_TABLE_NAME IS NOT NULL",
+            escape_sql_string(table_name), db_clause_fk
+        );
+        let rows = sqlx::query(&sql).fetch_all(pool).await?;
+        let fks: Vec<serde_json::Value> = rows.iter().map(|row| {
+            serde_json::json!({
+                "constraint": is_col_str(row, "CONSTRAINT_NAME"),
+                "column": is_col_str(row, "COLUMN_NAME"),
+                "references_table": is_col_str(row, "REFERENCED_TABLE_NAME"),
+                "references_column": is_col_str(row, "REFERENCED_COLUMN_NAME"),
+                "on_update": is_col_str(row, "UPDATE_RULE"),
+                "on_delete": is_col_str(row, "DELETE_RULE"),
+            })
+        }).collect();
+        serde_json::Value::Array(fks)
+    } else {
+        serde_json::Value::Null
+    };
+
+    // Table size estimate
+    let size: serde_json::Value = if include_size {
+        let sql = format!(
+            "SELECT TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH              FROM information_schema.TABLES              WHERE TABLE_NAME = '{}' {}",
+            escape_sql_string(table_name), db_clause_size
+        );
+        if let Ok(row) = sqlx::query(&sql).fetch_one(pool).await {
+            use sqlx::Row;
+            let table_rows: Option<u64> = row.try_get("TABLE_ROWS").ok();
+            let data_len: Option<u64> = row.try_get("DATA_LENGTH").ok();
+            let idx_len: Option<u64> = row.try_get("INDEX_LENGTH").ok();
+            serde_json::json!({
+                "estimated_rows": table_rows,
+                "data_bytes": data_len,
+                "index_bytes": idx_len,
+            })
+        } else {
+            serde_json::Value::Null
+        }
+    } else {
+        serde_json::Value::Null
+    };
+
+    // Build column JSON
+    let cols_json: Vec<serde_json::Value> = columns.iter().map(|c| serde_json::json!({
+        "name": c.name,
+        "type": c.data_type,
+        "nullable": c.is_nullable,
+        "default": c.column_default,
+        "key": c.column_key,
+        "extra": c.extra,
+    })).collect();
+
+    let mut result = serde_json::json!({
+        "table": table_name,
+        "columns": cols_json,
+    });
+    if !indexes.is_null() {
+        result["indexes"] = indexes;
+    }
+    if !foreign_keys.is_null() {
+        result["foreign_keys"] = foreign_keys;
+    }
+    if !size.is_null() {
+        result["size"] = size;
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

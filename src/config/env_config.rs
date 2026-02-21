@@ -1,22 +1,60 @@
 use std::collections::HashMap;
 use crate::config::{Config, SchemaPermissions};
 
+// ---------------------------------------------------------------------------
+// Helpers — use eprintln! because this runs before the logging system starts.
+// ---------------------------------------------------------------------------
+
+fn parse_env_num<T: std::str::FromStr>(key: &str) -> Option<T> {
+    match std::env::var(key) {
+        Ok(v) if !v.is_empty() => match v.parse::<T>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                eprintln!(
+                    "Warning: {} is set to {:?} but could not be parsed as a number; using default",
+                    key, v
+                );
+                None
+            }
+        },
+        _ => None,
+    }
+}
+
+fn parse_bool_env(key: &str) -> Option<bool> {
+    match std::env::var(key) {
+        Ok(v) if !v.is_empty() => match v.to_lowercase().as_str() {
+            "true" | "1" | "yes" => Some(true),
+            "false" | "0" | "no" => Some(false),
+            _ => {
+                eprintln!(
+                    "Warning: {} is set to {:?} but is not a recognized boolean \
+                     (true/false/1/0/yes/no); using default",
+                    key, v
+                );
+                None
+            }
+        },
+        _ => None,
+    }
+}
+
 /// Parse all environment variables and return a partial Config to merge over TOML base.
 /// Only sets fields where the env var is actually present.
 pub fn load_env_config() -> EnvConfig {
     EnvConfig {
         host: std::env::var("MYSQL_HOST").ok(),
-        port: std::env::var("MYSQL_PORT").ok().and_then(|v| v.parse().ok()),
+        port: parse_env_num::<u16>("MYSQL_PORT"),
         socket: std::env::var("MYSQL_SOCKET_PATH").ok(),
         user: std::env::var("MYSQL_USER").ok(),
         password: std::env::var("MYSQL_PASS").ok(),
         database: std::env::var("MYSQL_DB").ok(),
         connection_string: std::env::var("MYSQL_CONNECTION_STRING").ok(),
-        pool_size: std::env::var("MYSQL_POOL_SIZE").ok().and_then(|v| v.parse().ok()),
-        query_timeout_ms: std::env::var("MYSQL_QUERY_TIMEOUT").ok().and_then(|v| v.parse().ok()),
-        connect_timeout_ms: std::env::var("MYSQL_CONNECT_TIMEOUT").ok().and_then(|v| v.parse().ok()),
-        queue_limit: std::env::var("MYSQL_QUEUE_LIMIT").ok().and_then(|v| v.parse().ok()),
-        cache_ttl_secs: std::env::var("MYSQL_CACHE_TTL").ok().and_then(|v| v.parse().ok()),
+        pool_size: parse_env_num::<u32>("MYSQL_POOL_SIZE"),
+        query_timeout_ms: parse_env_num::<u64>("MYSQL_QUERY_TIMEOUT"),
+        connect_timeout_ms: parse_env_num::<u64>("MYSQL_CONNECT_TIMEOUT"),
+        queue_limit: parse_env_num::<u32>("MYSQL_QUEUE_LIMIT"),
+        cache_ttl_secs: parse_env_num::<u64>("MYSQL_CACHE_TTL"),
         allow_insert: parse_bool_env("ALLOW_INSERT_OPERATION"),
         allow_update: parse_bool_env("ALLOW_UPDATE_OPERATION"),
         allow_delete: parse_bool_env("ALLOW_DELETE_OPERATION"),
@@ -27,7 +65,7 @@ pub fn load_env_config() -> EnvConfig {
         multi_db_write_mode: parse_bool_env("MULTI_DB_WRITE_MODE"),
         remote_enabled: parse_bool_env("IS_REMOTE_MCP"),
         remote_secret_key: std::env::var("REMOTE_SECRET_KEY").ok(),
-        remote_port: std::env::var("PORT").ok().and_then(|v| v.parse().ok()),
+        remote_port: parse_env_num::<u16>("PORT"),
         logging: parse_bool_env("MYSQL_ENABLE_LOGGING"),
         log_level: std::env::var("MYSQL_LOG_LEVEL").ok(),
         metrics_enabled: parse_bool_env("MYSQL_METRICS_ENABLED"),
@@ -35,17 +73,11 @@ pub fn load_env_config() -> EnvConfig {
         date_strings: parse_bool_env("MYSQL_DATE_STRINGS"),
         schema_permissions: parse_schema_permissions(),
         performance_hints: std::env::var("MYSQL_PERFORMANCE_HINTS").ok(),
-        slow_query_threshold_ms: std::env::var("MYSQL_SLOW_QUERY_THRESHOLD_MS").ok().and_then(|v| v.parse().ok()),
-        warmup_connections: std::env::var("MYSQL_POOL_WARMUP").ok().and_then(|v| v.parse().ok()),
-        statement_cache_capacity: std::env::var("MYSQL_STATEMENT_CACHE_CAPACITY").ok().and_then(|v| v.parse().ok()),
-        max_rows: std::env::var("MYSQL_MAX_ROWS").ok().and_then(|v| v.parse().ok()),
+        slow_query_threshold_ms: parse_env_num::<u64>("MYSQL_SLOW_QUERY_THRESHOLD_MS"),
+        warmup_connections: parse_env_num::<u32>("MYSQL_POOL_WARMUP"),
+        statement_cache_capacity: parse_env_num::<u32>("MYSQL_STATEMENT_CACHE_CAPACITY"),
+        max_rows: parse_env_num::<u32>("MYSQL_MAX_ROWS"),
     }
-}
-
-fn parse_bool_env(key: &str) -> Option<bool> {
-    std::env::var(key).ok().map(|v| {
-        matches!(v.to_lowercase().as_str(), "true" | "1" | "yes")
-    })
 }
 
 /// Parse SCHEMA_<NAME>_PERMISSIONS env vars.

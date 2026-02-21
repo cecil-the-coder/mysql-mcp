@@ -91,18 +91,12 @@ impl ServerHandler for McpServer {
             let tool = Tool::new(
                 "mysql_query",
                 concat!(
-                    "Execute a SQL query against the MySQL database. ",
-                    "Supports SELECT, SHOW, EXPLAIN, and (if configured) INSERT, UPDATE, DELETE, DDL statements. ",
-                    "Response fields: ",
-                    "`rows` (result set), ",
-                    "`row_count` (number of rows returned), ",
-                    "`execution_time_ms` (DB execution time), ",
-                    "`serialization_time_ms` (time to serialize rows to JSON), ",
-                    "`capped` (true when result was truncated to max_rows limit), ",
-                    "`parse_warnings` (performance warnings, e.g. missing LIMIT — only present when non-empty), ",
-                    "`plan` (execution plan with tier, full_table_scan, index_used, rows_examined — only present when performance_hints config is enabled or explain:true is passed), ",
-                    "`suggestions` (index recommendations — only present when a full table scan is detected). ",
-                    "Use `explain: true` to force an execution plan even when performance_hints is disabled in server config.",
+                    "Execute a SQL query against MySQL. ",
+                    "Always returned: rows, row_count, execution_time_ms, serialization_time_ms, parse_warnings. ",
+                    "Optional: plan (only when explain:true or server auto-triggers for slow queries), ",
+                    "capped+next_offset+capped_hint (only when result was truncated to max_rows limit), ",
+                    "suggestions (only when a full table scan is detected). ",
+                    "Supports SELECT, SHOW, EXPLAIN, and (if configured) INSERT, UPDATE, DELETE, DDL.",
                 ),
                 schema,
             );
@@ -121,17 +115,56 @@ impl ServerHandler for McpServer {
             let multi_tool = Tool::new(
                 "mysql_multi_query",
                 concat!(
-                    "Execute 2 or more independent read-only SQL queries in parallel, saving N-1 database round trips compared to sequential mysql_query calls. ",
-                    "Use this whenever you need results from multiple independent tables or queries at the same time — for example fetching user, orders, and settings in one shot. ",
-                    "All queries must be read-only (SELECT, SHOW, EXPLAIN); write statements are rejected. ",
-                    "Response: `results` array (one entry per query, each with sql, rows, row_count, execution_time_ms, capped, and optionally parse_warnings/plan) plus `wall_time_ms` (total elapsed time for all queries combined).",
+                    "Execute 2+ independent read-only SQL queries in parallel (SELECT, SHOW, EXPLAIN only). ",
+                    "Saves N-1 round trips vs sequential mysql_query calls. ",
+                    "Response: results[] (each with sql, rows, row_count, execution_time_ms, capped, optionally parse_warnings/plan/next_offset/capped_hint) ",
+                    "plus wall_time_ms and summary (slowest_query_index, slowest_query_ms, queries_with_full_scans). ",
+                    "Check summary first to identify problematic queries before parsing all results.",
                 ),
                 multi_schema,
             );
 
+
+            let schema_info_schema = Arc::new(rmcp::model::object(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "table": { "type": "string", "description": "Table name" },
+                    "database": { "type": "string", "description": "Database/schema name (optional, uses connected database if omitted)" },
+                    "include": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": ["indexes", "foreign_keys", "size"] },
+                        "description": "Additional metadata to include. Default: just columns. Options: 'indexes' (all indexes with columns), 'foreign_keys' (FK constraints), 'size' (estimated row count and byte sizes)."
+                    }
+                },
+                "required": ["table"]
+            })));
+            let schema_info_tool = Tool::new(
+                "mysql_schema_info",
+                concat!(
+                    "Get schema metadata for a table. ",
+                    "Default (no include): column names, types, nullability only. ",
+                    "include:[indexes]: also returns all indexes with their columns. ",
+                    "include:[foreign_keys]: also returns FK constraints. ",
+                    "include:[size]: also returns estimated row count and byte sizes. ",
+                    "Combine any subset, e.g. include:[indexes,foreign_keys,size] for full detail.",
+                ),
+                schema_info_schema,
+            );
+
+            let server_info_schema = Arc::new(rmcp::model::object(serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            })));
+            let server_info_tool = Tool::new(
+                "mysql_server_info",
+                "Get MySQL server metadata: version, current database, current user, and which write operations are enabled by server config. Use to understand the environment before writing queries or when diagnosing connection issues.",
+                server_info_schema,
+            );
+
             Ok(ListToolsResult {
                 meta: None,
-                tools: vec![tool, multi_tool],
+                tools: vec![tool, multi_tool, schema_info_tool, server_info_tool],
                 next_cursor: None,
             })
         }
@@ -166,6 +199,13 @@ impl ServerHandler for McpServer {
                         ]));
                     }
                 };
+
+                const MAX_QUERIES: usize = 100;
+                if queries.len() > MAX_QUERIES {
+                    return Ok(CallToolResult::error(vec![
+                        Content::text(format!("Too many queries: {} (max {})", queries.len(), MAX_QUERIES)),
+                    ]));
+                }
 
                 // Parse and validate all queries up-front (all must be read-only)
                 let mut parsed_queries = Vec::with_capacity(queries.len());
@@ -301,13 +341,104 @@ impl ServerHandler for McpServer {
                     }
                 }
 
+                let slowest_idx = ordered.iter()
+                    .enumerate()
+                    .filter_map(|(i, entry)| {
+                        entry.get("execution_time_ms")
+                            .and_then(|v| v.as_u64())
+                            .map(|ms| (i, ms))
+                    })
+                    .max_by_key(|(_, ms)| *ms);
+                let queries_with_full_scans = ordered.iter()
+                    .filter(|entry| {
+                        entry.get("plan")
+                            .and_then(|p| p.get("full_table_scan"))
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                    })
+                    .count();
+                let summary = json!({
+                    "total_queries": ordered.len(),
+                    "slowest_query_index": slowest_idx.map(|(i, _)| i),
+                    "slowest_execution_time_ms": slowest_idx.map(|(_, ms)| ms),
+                    "queries_with_full_scans": queries_with_full_scans,
+                });
                 let output = json!({
                     "results": ordered,
+                    "summary": summary,
                     "wall_time_ms": wall_time_ms,
                 });
                 return Ok(CallToolResult::success(vec![
                     Content::text(serde_json::to_string_pretty(&output).unwrap_or_default()),
                 ]));
+            }
+
+            if request.name == "mysql_schema_info" {
+                let args = request.arguments.clone().unwrap_or_default();
+                let table = match args.get("table").and_then(|v: &serde_json::Value| v.as_str()) {
+                    Some(t) => t.to_string(),
+                    None => return Ok(CallToolResult::error(vec![Content::text("Missing required parameter: table")])),
+                };
+                let database = args.get("database").and_then(|v: &serde_json::Value| v.as_str()).map(|s| s.to_string());
+                let include: Vec<String> = args.get("include")
+                    .and_then(|v: &serde_json::Value| v.as_array())
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                    .unwrap_or_default();
+                let include_indexes = include.contains(&"indexes".to_string());
+                let include_fk = include.contains(&"foreign_keys".to_string());
+                let include_size = include.contains(&"size".to_string());
+
+                let result = crate::schema::get_schema_info(
+                    self.db.pool(),
+                    &table,
+                    database.as_deref(),
+                    include_indexes,
+                    include_fk,
+                    include_size,
+                ).await;
+
+                return match result {
+                    Ok(info) => Ok(CallToolResult::success(vec![
+                        Content::text(serde_json::to_string_pretty(&info).unwrap_or_default()),
+                    ])),
+                    Err(e) => Ok(CallToolResult::error(vec![
+                        Content::text(format!("Schema info error for '{}': {}", table, e)),
+                    ])),
+                };
+            }
+
+            if request.name == "mysql_server_info" {
+                let rows = sqlx::query(
+                    "SELECT VERSION() AS version, CURRENT_USER() AS current_user, DATABASE() AS current_database"
+                ).fetch_all(self.db.pool()).await;
+
+                return match rows {
+                    Ok(rows) if !rows.is_empty() => {
+                        use sqlx::Row;
+                        let row = &rows[0];
+                        let version: String = row.try_get("version").unwrap_or_default();
+                        let user: String = row.try_get("current_user").unwrap_or_default();
+                        let db: Option<String> = row.try_get("current_database").ok().flatten();
+
+                        let mut accessible_features = vec!["SELECT", "SHOW", "EXPLAIN"];
+                        if self.config.security.allow_insert { accessible_features.push("INSERT"); }
+                        if self.config.security.allow_update { accessible_features.push("UPDATE"); }
+                        if self.config.security.allow_delete { accessible_features.push("DELETE"); }
+                        if self.config.security.allow_ddl { accessible_features.push("DDL (CREATE/ALTER/DROP)"); }
+
+                        let info = serde_json::json!({
+                            "mysql_version": version,
+                            "current_user": user,
+                            "current_database": db,
+                            "accessible_features": accessible_features,
+                        });
+                        Ok(CallToolResult::success(vec![
+                            Content::text(serde_json::to_string_pretty(&info).unwrap_or_default()),
+                        ]))
+                    }
+                    Ok(_) => Ok(CallToolResult::error(vec![Content::text("No response from server")])),
+                    Err(e) => Ok(CallToolResult::error(vec![Content::text(format!("Server info error: {}", e))])),
+                };
             }
 
             if request.name != "mysql_query" {
@@ -327,6 +458,12 @@ impl ServerHandler for McpServer {
                     ]));
                 }
             };
+            const MAX_SQL_LENGTH: usize = 1_000_000; // 1 MB
+            if sql.len() > MAX_SQL_LENGTH {
+                return Ok(CallToolResult::error(vec![
+                    Content::text(format!("SQL too large: {} bytes (max {} bytes / 1 MB)", sql.len(), MAX_SQL_LENGTH)),
+                ]));
+            }
             let explain_requested = args.get("explain").and_then(|v| v.as_bool()).unwrap_or(false);
             let effective_hints = if explain_requested {
                 "always".to_string()
@@ -338,8 +475,14 @@ impl ServerHandler for McpServer {
             let parsed = match crate::sql_parser::parse_sql(&sql) {
                 Ok(p) => p,
                 Err(e) => {
+                    let sql_preview = if sql.len() <= 120 { sql.as_str() } else { &sql[..120] };
                     return Ok(CallToolResult::error(vec![
-                        Content::text(format!("SQL parse error: {}", e)),
+                        Content::text(format!(
+                            "SQL parse error: {}. Query: {}{}",
+                            e,
+                            sql_preview,
+                            if sql.len() > 120 { "..." } else { "" }
+                        )),
                     ]));
                 }
             };
@@ -349,8 +492,22 @@ impl ServerHandler for McpServer {
                 &parsed.statement_type,
                 parsed.target_schema.as_deref(),
             ) {
+                let perm_type = match parsed.statement_type {
+                    crate::sql_parser::StatementType::Insert => "INSERT",
+                    crate::sql_parser::StatementType::Update => "UPDATE",
+                    crate::sql_parser::StatementType::Delete => "DELETE",
+                    crate::sql_parser::StatementType::Create
+                    | crate::sql_parser::StatementType::Alter
+                    | crate::sql_parser::StatementType::Drop
+                    | crate::sql_parser::StatementType::Truncate => "DDL",
+                    _ => "this operation",
+                };
+                let schema_hint = parsed.target_schema.as_deref().unwrap_or("(default database)");
                 return Ok(CallToolResult::error(vec![
-                    Content::text(format!("Permission denied: {}", e)),
+                    Content::text(format!(
+                        "{} operation denied on '{}': {}. Check ALLOW_{}_OPERATION env var.",
+                        perm_type, schema_hint, e, perm_type.replace(' ', "_")
+                    )),
                 ]));
             }
 
@@ -446,10 +603,13 @@ impl ServerHandler for McpServer {
                         });
                         if result.capped {
                             output["capped"] = json!(true);
+                            output["next_offset"] = json!(result.row_count);
+                            output["capped_hint"] = json!(format!(
+                                "Result truncated to {} rows. Add 'LIMIT {} OFFSET {}' to your query to fetch the next page.",
+                                result.row_count, result.row_count, result.row_count
+                            ));
                         }
-                        if !result.parse_warnings.is_empty() {
-                            output["parse_warnings"] = json!(result.parse_warnings);
-                        }
+                        output["parse_warnings"] = json!(result.parse_warnings);
                         if let Some(plan) = result.plan {
                             output["plan"] = plan;
                         }
