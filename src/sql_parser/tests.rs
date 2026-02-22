@@ -350,11 +350,10 @@ fn test_parse_warnings_leading_wildcard_like() {
         parsed.has_leading_wildcard_like,
         "Expected has_leading_wildcard_like=true"
     );
-    let warnings = parsed.warnings.clone();
     assert!(
-        warnings.iter().any(|w| w.contains("Leading wildcard")),
+        parsed.warnings.iter().any(|w| w.contains("Leading wildcard")),
         "Expected leading wildcard warning, got: {:?}",
-        warnings
+        parsed.warnings
     );
 }
 
@@ -365,11 +364,10 @@ fn test_parse_warnings_no_leading_wildcard() {
         !parsed.has_leading_wildcard_like,
         "Expected has_leading_wildcard_like=false for trailing wildcard"
     );
-    let warnings = parsed.warnings.clone();
     assert!(
-        !warnings.iter().any(|w| w.contains("Leading wildcard")),
+        !parsed.warnings.iter().any(|w| w.contains("Leading wildcard")),
         "Should not warn for trailing wildcard, got: {:?}",
-        warnings
+        parsed.warnings
     );
 }
 

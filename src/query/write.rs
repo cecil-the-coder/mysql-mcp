@@ -30,9 +30,10 @@ pub async fn execute_write_query(
 
     let elapsed = start.elapsed().as_millis() as u64;
 
+    let last_insert_id = result.last_insert_id();
     Ok(WriteResult {
         rows_affected: result.rows_affected(),
-        last_insert_id: (result.last_insert_id() > 0).then(|| result.last_insert_id()),
+        last_insert_id: (last_insert_id > 0).then_some(last_insert_id),
         execution_time_ms: elapsed,
         parse_warnings,
     })
@@ -50,9 +51,10 @@ pub async fn execute_ddl_query(
     // DDL auto-commits; just execute directly
     let result = sqlx::query(sql).execute(pool).await?;
     let elapsed = start.elapsed().as_millis() as u64;
+    let last_insert_id = result.last_insert_id();
     Ok(WriteResult {
         rows_affected: result.rows_affected(),
-        last_insert_id: (result.last_insert_id() > 0).then(|| result.last_insert_id()),
+        last_insert_id: (last_insert_id > 0).then_some(last_insert_id),
         execution_time_ms: elapsed,
         parse_warnings: vec![],
     })
