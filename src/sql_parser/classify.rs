@@ -14,7 +14,7 @@ pub(super) fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedSt
     let mut has_where = false;
     let mut has_wildcard = false;
     let mut where_columns: Vec<String> = vec![];
-    // Additional fields pre-computed so parse_warnings() needs no re-parse.
+    // Additional fields pre-computed during classify for use by callers without re-parse.
     let mut has_named_table = false;
     let mut has_group_by = false;
     let mut has_aggregate = false;

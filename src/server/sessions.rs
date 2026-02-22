@@ -35,6 +35,22 @@ pub(crate) struct SessionStore {
     pub(crate) introspector: Arc<SchemaIntrospector>,
 }
 
+/// Validate a MySQL identifier (session name or database name): max 64 chars,
+/// alphanumeric/underscore/hyphen only. Returns `Err(CallToolResult)` on failure.
+fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToolResult> {
+    if value.len() > 64 {
+        return Err(CallToolResult::error(vec![Content::text(format!(
+            "{} too long (max 64 characters)", kind
+        ))]));
+    }
+    if !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err(CallToolResult::error(vec![Content::text(format!(
+            "{} must contain only alphanumeric characters, underscores, or hyphens", kind
+        ))]));
+    }
+    Ok(())
+}
+
 impl SessionStore {
     /// Resolve a session name to a SessionContext (pool, introspector, database).
     /// Updates last_used on non-default sessions.
@@ -98,15 +114,8 @@ impl SessionStore {
         }
 
         // Validate session name: max 64 chars, alphanumeric + underscore + hyphen only
-        if name.len() > 64 {
-            return Ok(CallToolResult::error(vec![Content::text(
-                "Session name too long (max 64 characters)".to_string()
-            )]));
-        }
-        if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
-            return Ok(CallToolResult::error(vec![Content::text(
-                "Session name must contain only alphanumeric characters, underscores, or hyphens".to_string()
-            )]));
+        if let Err(e) = validate_identifier(&name, "Session name") {
+            return Ok(e);
         }
 
         if !self.config.security.allow_runtime_connections {
@@ -132,15 +141,8 @@ impl SessionStore {
         let password = args.get("password").and_then(|v| v.as_str()).unwrap_or("").to_string();
         let database = args.get("database").and_then(|v| v.as_str()).map(|s| s.to_string());
         if let Some(ref db) = database {
-            if db.len() > 64 {
-                return Ok(CallToolResult::error(vec![Content::text(
-                    "Database name too long (max 64 characters)".to_string()
-                )]));
-            }
-            if !db.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
-                return Ok(CallToolResult::error(vec![Content::text(
-                    "Database name must contain only alphanumeric characters, underscores, or hyphens".to_string()
-                )]));
+            if let Err(e) = validate_identifier(db, "Database name") {
+                return Ok(e);
             }
         }
         let ssl = args.get("ssl").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -234,31 +236,19 @@ impl SessionStore {
         let sessions = self.sessions.lock().await;
         let mut list: Vec<serde_json::Value> = vec![];
 
-        // Include default session if there are other sessions too
-        if !sessions.is_empty() {
-            list.push(json!({
-                "name": "default",
-                "host": self.config.connection.host,
-                "database": self.config.connection.database,
-                "idle_seconds": null,
-            }));
-        }
+        // Default session is always shown (first when there are named sessions, alone otherwise)
+        list.push(json!({
+            "name": "default",
+            "host": self.config.connection.host,
+            "database": self.config.connection.database,
+            "idle_seconds": null,
+        }));
         for (name, session) in sessions.iter() {
             list.push(json!({
                 "name": name,
                 "host": session.host,
                 "database": session.database,
                 "idle_seconds": session.last_used.elapsed().as_secs(),
-            }));
-        }
-
-        if list.is_empty() {
-            // Only the default session exists — show it alone
-            list.push(json!({
-                "name": "default",
-                "host": self.config.connection.host,
-                "database": self.config.connection.database,
-                "idle_seconds": null,
             }));
         }
 

@@ -42,9 +42,9 @@ impl SessionStore {
             .and_then(|v: &serde_json::Value| v.as_array())
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
             .unwrap_or_default();
-        let include_indexes = include.contains(&"indexes".to_string());
-        let include_fk = include.contains(&"foreign_keys".to_string());
-        let include_size = include.contains(&"size".to_string());
+        let include_indexes = include.iter().any(|s| s == "indexes");
+        let include_fk = include.iter().any(|s| s == "foreign_keys");
+        let include_size = include.iter().any(|s| s == "size");
 
         let ctx = match self.resolve_session(&args).await {
             Ok(c) => c,
@@ -289,7 +289,7 @@ impl SessionStore {
                             .unwrap_or(true);
                         if is_full_scan && no_index {
                             if let Some(ref tname) = parsed.target_table {
-                                let where_cols = crate::sql_parser::extract_where_columns(&parsed);
+                                let where_cols = parsed.where_columns.clone();
                                 if !where_cols.is_empty() {
                                     suggestions = query_introspector.generate_index_suggestions(
                                         tname,
@@ -351,17 +351,7 @@ impl SessionStore {
                         }
                     }
 
-                    let mut output = json!({
-                        "rows_affected": result.rows_affected,
-                        "execution_time_ms": result.execution_time_ms,
-                    });
-                    if let Some(id) = result.last_insert_id {
-                        output["last_insert_id"] = json!(id);
-                    }
-                    if !result.parse_warnings.is_empty() {
-                        output["parse_warnings"] = json!(result.parse_warnings);
-                    }
-                    Ok(serialize_response(&output))
+                    Ok(serialize_response(&write_result_content(&result)))
                 }
                 Err(e) => Ok(CallToolResult::error(vec![
                     Content::text(format!("Query error: {}", e)),
@@ -370,17 +360,7 @@ impl SessionStore {
         } else {
             match crate::query::write::execute_write_query(&query_pool, &sql, &parsed).await {
                 Ok(result) => {
-                    let mut output = json!({
-                        "rows_affected": result.rows_affected,
-                        "execution_time_ms": result.execution_time_ms,
-                    });
-                    if let Some(id) = result.last_insert_id {
-                        output["last_insert_id"] = json!(id);
-                    }
-                    if !result.parse_warnings.is_empty() {
-                        output["parse_warnings"] = json!(result.parse_warnings);
-                    }
-                    Ok(serialize_response(&output))
+                    Ok(serialize_response(&write_result_content(&result)))
                 }
                 Err(e) => Ok(CallToolResult::error(vec![
                     Content::text(format!("Query error: {}", e)),
@@ -433,4 +413,18 @@ fn log_query_result(
             "query executed"
         );
     }
+}
+
+fn write_result_content(result: &crate::query::write::WriteResult) -> serde_json::Value {
+    let mut output = json!({
+        "rows_affected": result.rows_affected,
+        "execution_time_ms": result.execution_time_ms,
+    });
+    if let Some(id) = result.last_insert_id {
+        output["last_insert_id"] = json!(id);
+    }
+    if !result.parse_warnings.is_empty() {
+        output["parse_warnings"] = json!(result.parse_warnings);
+    }
+    output
 }

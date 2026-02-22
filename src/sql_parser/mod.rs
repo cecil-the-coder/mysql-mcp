@@ -87,8 +87,8 @@ pub struct ParsedStatement {
     pub sql: String,
 
     // Cached AST-derived fields populated once during parse_sql().
-    // These allow parse_warnings(), check_limit_presence(), and extract_where_columns()
-    // to reuse parse results rather than re-invoking the sqlparser crate.
+    // These allow check_limit_presence() and related helpers to reuse parse results
+    // rather than re-invoking the sqlparser crate.
 
     /// True if the outermost SELECT (or Query) has a LIMIT clause.
     /// Only meaningful for Select statements; false otherwise.
@@ -106,7 +106,6 @@ pub struct ParsedStatement {
     /// Detected from the AST during parse; only meaningful for Select statements.
     pub has_leading_wildcard_like: bool,
     /// Performance/safety warnings pre-computed during parse_sql().
-    /// Returned as-is by parse_warnings().
     pub warnings: Vec<String>,
 }
 
@@ -127,14 +126,6 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
 
     let stmt = &statements[0];
     classify::classify_statement(stmt, sql)
-}
-
-/// Inspect a parsed SELECT statement and return human-readable performance warnings.
-/// Only meaningful for SELECT statements; returns empty vec for other statement types.
-///
-/// Returns the warnings pre-computed by `parse_sql()` — no re-parse required.
-pub fn parse_warnings(parsed: &ParsedStatement) -> Vec<String> {
-    parsed.warnings.clone()
 }
 
 /// Inspect a parsed write statement and return safety warnings.
@@ -173,11 +164,4 @@ pub fn parse_write_warnings(parsed: &ParsedStatement) -> Vec<String> {
     warnings
 }
 
-/// Extract column names referenced in the WHERE clause of a SELECT statement.
-/// Returns simple column names (last segment of compound identifiers).
-/// Returns an empty vec if the SQL is not a SELECT, has no WHERE clause, or parsing fails.
-///
-/// Uses the `where_columns` field pre-populated by `parse_sql()` — no re-parse required.
-pub fn extract_where_columns(parsed: &ParsedStatement) -> Vec<String> {
-    parsed.where_columns.clone()
-}
+

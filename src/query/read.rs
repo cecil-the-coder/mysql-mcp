@@ -37,10 +37,10 @@ pub async fn execute_read_query(
     let stmt_type = &parsed.statement_type;
 
     // Compute parse-time warnings before the DB phase so the field is always present.
-    // parse_warnings uses pre-cached fields from ParsedStatement — no re-parse needed
+    // warnings are pre-cached in ParsedStatement — no re-parse needed
     // for the has_limit / has_where / has_wildcard checks.
     let warnings = if performance_hints != "none" {
-        crate::sql_parser::parse_warnings(parsed)
+        parsed.warnings.clone()
     } else {
         vec![]
     };

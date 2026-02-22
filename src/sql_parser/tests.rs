@@ -350,7 +350,7 @@ fn test_multi_statement_rejected() {
     assert!(err2.to_string().contains("Multi-statement"));
 }
 
-// Tests for parse_warnings (pre-computed, no re-parse)
+// Tests for pre-computed warnings (populated by parse_sql, no re-parse)
 
 #[test]
 fn test_parse_warnings_leading_wildcard_like() {
@@ -359,7 +359,7 @@ fn test_parse_warnings_leading_wildcard_like() {
         parsed.has_leading_wildcard_like,
         "Expected has_leading_wildcard_like=true"
     );
-    let warnings = parse_warnings(&parsed);
+    let warnings = parsed.warnings.clone();
     assert!(
         warnings.iter().any(|w| w.contains("Leading wildcard")),
         "Expected leading wildcard warning, got: {:?}",
@@ -374,7 +374,7 @@ fn test_parse_warnings_no_leading_wildcard() {
         !parsed.has_leading_wildcard_like,
         "Expected has_leading_wildcard_like=false for trailing wildcard"
     );
-    let warnings = parse_warnings(&parsed);
+    let warnings = parsed.warnings.clone();
     assert!(
         !warnings.iter().any(|w| w.contains("Leading wildcard")),
         "Should not warn for trailing wildcard, got: {:?}",
@@ -384,12 +384,14 @@ fn test_parse_warnings_no_leading_wildcard() {
 
 #[test]
 fn test_parse_warnings_no_reparse() {
-    // parse_warnings must return the same result as parse_sql computed —
-    // verified by checking the pre-computed warnings field matches the return value.
+    // Warnings are pre-computed by parse_sql() and stored in parsed.warnings —
+    // verify that parse_sql populates the field correctly for a simple SELECT.
     let parsed = parse_sql("SELECT * FROM users").unwrap();
-    let via_fn = parse_warnings(&parsed);
+    // A SELECT * with no LIMIT and no WHERE should generate at least one warning.
+    // Just confirm the field is accessible and consistent with the flags.
     assert_eq!(
-        via_fn, parsed.warnings,
-        "parse_warnings() must return parsed.warnings clone"
+        parsed.warnings.is_empty(),
+        !parsed.has_wildcard && parsed.has_limit,
+        "warnings should be non-empty when wildcards or missing LIMIT are present"
     );
 }

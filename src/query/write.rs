@@ -10,16 +10,6 @@ pub struct WriteResult {
     pub parse_warnings: Vec<String>,
 }
 
-/// Return `Some(id)` when `id > 0`, otherwise `None`.
-///
-/// MySQL returns `last_insert_id() == 0` for non-INSERT statements (UPDATE,
-/// DELETE) and for INSERT on tables with no AUTO_INCREMENT column.  In both
-/// cases we treat it as "no insert ID" so callers don't have to special-case
-/// the zero sentinel themselves.
-fn last_insert_id_opt(id: u64) -> Option<u64> {
-    if id > 0 { Some(id) } else { None }
-}
-
 /// Execute a DML write statement (INSERT, UPDATE, DELETE) in a transaction.
 ///
 /// `parsed` is the already-parsed statement from the caller; warnings are
@@ -42,7 +32,7 @@ pub async fn execute_write_query(
 
     Ok(WriteResult {
         rows_affected: result.rows_affected(),
-        last_insert_id: last_insert_id_opt(result.last_insert_id()),
+        last_insert_id: (result.last_insert_id() > 0).then(|| result.last_insert_id()),
         execution_time_ms: elapsed,
         parse_warnings,
     })
@@ -62,7 +52,7 @@ pub async fn execute_ddl_query(
     let elapsed = start.elapsed().as_millis() as u64;
     Ok(WriteResult {
         rows_affected: result.rows_affected(),
-        last_insert_id: last_insert_id_opt(result.last_insert_id()),
+        last_insert_id: (result.last_insert_id() > 0).then(|| result.last_insert_id()),
         execution_time_ms: elapsed,
         parse_warnings: vec![],
     })
