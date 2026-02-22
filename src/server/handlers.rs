@@ -37,14 +37,10 @@ impl SessionStore {
             .get("database")
             .and_then(|v: &serde_json::Value| v.as_str())
             .map(|s| s.to_string());
-        let include: Vec<String> = args
-            .get("include")
-            .and_then(|v: &serde_json::Value| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-            .unwrap_or_default();
-        let include_indexes = include.iter().any(|s| s == "indexes");
-        let include_fk = include.iter().any(|s| s == "foreign_keys");
-        let include_size = include.iter().any(|s| s == "size");
+        let include_arr = args.get("include").and_then(|v| v.as_array());
+        let include_indexes = include_arr.map_or(false, |a| a.iter().any(|v| v.as_str() == Some("indexes")));
+        let include_fk     = include_arr.map_or(false, |a| a.iter().any(|v| v.as_str() == Some("foreign_keys")));
+        let include_size   = include_arr.map_or(false, |a| a.iter().any(|v| v.as_str() == Some("size")));
 
         let ctx = match self.resolve_session(&args).await {
             Ok(c) => c,
@@ -340,19 +336,10 @@ impl SessionStore {
                 Ok(result) => {
                     // Invalidate the schema cache so subsequent mysql_schema_info /
                     // list_resources calls reflect the DDL change immediately.
-                    match (&parsed.statement_type, &parsed.target_table) {
-                        // DROP with no known table name: full invalidation (safe fallback).
-                        (crate::sql_parser::StatementType::Drop, None) => {
-                            query_introspector.invalidate_all().await;
-                        }
-                        // Any DDL with a known target table: per-table invalidation.
-                        (_, Some(tname)) => {
-                            query_introspector.invalidate_table(tname).await;
-                        }
-                        // Any other DDL (no target_table): safe full invalidation.
-                        _ => {
-                            query_introspector.invalidate_all().await;
-                        }
+                    if let Some(tname) = &parsed.target_table {
+                        query_introspector.invalidate_table(tname).await;
+                    } else {
+                        query_introspector.invalidate_all().await;
                     }
 
                     Ok(serialize_response(&write_result_content(&result)))

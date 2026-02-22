@@ -73,9 +73,7 @@ fn walk_plan_node(node: &Value, stats: &mut PlanStats) {
             // Index-based access (index scan or index lookup).
             // Short-circuit: only record the first index name encountered.
             if stats.index_name.is_none() {
-                if let Some(name) = node["index_name"].as_str() {
-                    stats.index_name = Some(name.to_string());
-                }
+                stats.index_name = node["index_name"].as_str().map(str::to_string);
             }
             let rows = node["estimated_rows"].as_f64().unwrap_or(0.0);
             stats.total_estimated_rows += rows;

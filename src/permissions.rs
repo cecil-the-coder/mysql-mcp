@@ -32,44 +32,21 @@ pub fn check_permission(
             Ok(())
         }
         StatementType::Insert => {
-            let allowed = schema_perms
-                .and_then(|p| p.allow_insert)
-                .unwrap_or(sec.allow_insert);
-            if !allowed {
-                bail!("INSERT operations are not allowed. Set MYSQL_ALLOW_INSERT=true to enable.");
-            }
-            check_multi_db_write(config, target_schema)?;
-            Ok(())
+            let allowed = schema_perms.and_then(|p| p.allow_insert).unwrap_or(sec.allow_insert);
+            check_write_op(allowed, "INSERT", "MYSQL_ALLOW_INSERT", config, target_schema)
         }
         StatementType::Update => {
-            let allowed = schema_perms
-                .and_then(|p| p.allow_update)
-                .unwrap_or(sec.allow_update);
-            if !allowed {
-                bail!("UPDATE operations are not allowed. Set MYSQL_ALLOW_UPDATE=true to enable.");
-            }
-            check_multi_db_write(config, target_schema)?;
-            Ok(())
+            let allowed = schema_perms.and_then(|p| p.allow_update).unwrap_or(sec.allow_update);
+            check_write_op(allowed, "UPDATE", "MYSQL_ALLOW_UPDATE", config, target_schema)
         }
         StatementType::Delete => {
-            let allowed = schema_perms
-                .and_then(|p| p.allow_delete)
-                .unwrap_or(sec.allow_delete);
-            if !allowed {
-                bail!("DELETE operations are not allowed. Set MYSQL_ALLOW_DELETE=true to enable.");
-            }
-            check_multi_db_write(config, target_schema)?;
-            Ok(())
+            let allowed = schema_perms.and_then(|p| p.allow_delete).unwrap_or(sec.allow_delete);
+            check_write_op(allowed, "DELETE", "MYSQL_ALLOW_DELETE", config, target_schema)
         }
         StatementType::Create | StatementType::Alter | StatementType::Drop | StatementType::Truncate => {
-            let allowed = schema_perms
-                .and_then(|p| p.allow_ddl)
-                .unwrap_or(sec.allow_ddl);
-            if !allowed {
-                bail!("DDL operations ({}) are not allowed. Set MYSQL_ALLOW_DDL=true to enable.", stmt_type.name());
-            }
-            check_multi_db_write(config, target_schema)?;
-            Ok(())
+            let allowed = schema_perms.and_then(|p| p.allow_ddl).unwrap_or(sec.allow_ddl);
+            let label = format!("DDL ({})", stmt_type.name());
+            check_write_op(allowed, &label, "MYSQL_ALLOW_DDL", config, target_schema)
         }
         StatementType::Use => {
             // USE is informational, allow it
@@ -99,6 +76,20 @@ fn check_multi_db_write(config: &Config, target_schema: Option<&str>) -> Result<
         );
     }
     Ok(())
+}
+
+/// Check a write operation permission and enforce multi-DB write rules.
+fn check_write_op(
+    allowed: bool,
+    op: &str,
+    env_var: &str,
+    config: &Config,
+    target_schema: Option<&str>,
+) -> Result<()> {
+    if !allowed {
+        bail!("{} operations are not allowed. Set {}=true to enable.", op, env_var);
+    }
+    check_multi_db_write(config, target_schema)
 }
 
 #[cfg(test)]

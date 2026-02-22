@@ -120,10 +120,7 @@ pub(crate) async fn fetch_columns(pool: &MySqlPool, table_name: &str, database: 
             is_nullable: nullable_str == "YES",
             column_default: is_col_str_opt(row, "column_default"),
             column_key: is_col_str_opt(row, "column_key"),
-            extra: {
-                let e = is_col_str(row, "extra");
-                if e.is_empty() { None } else { Some(e) }
-            },
+            extra: is_col_str_opt(row, "extra"),
         }
     }).collect();
 
