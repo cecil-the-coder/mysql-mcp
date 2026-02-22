@@ -222,13 +222,13 @@ impl SessionStore {
         let parsed = match crate::sql_parser::parse_sql(&sql) {
             Ok(p) => p,
             Err(e) => {
-                let sql_preview = if sql.len() <= 120 { sql.as_str() } else { &sql[..120] };
+                let cut = sql.len() > 120;
                 return Ok(CallToolResult::error(vec![
                     Content::text(format!(
                         "SQL parse error: {}. Query: {}{}",
                         e,
-                        sql_preview,
-                        if sql.len() > 120 { "..." } else { "" }
+                        if cut { &sql[..120] } else { &sql },
+                        if cut { "..." } else { "" }
                     )),
                 ]));
             }

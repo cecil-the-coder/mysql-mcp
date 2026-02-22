@@ -167,7 +167,7 @@ pub(crate) async fn fetch_composite_indexes(pool: &MySqlPool, table: &str, datab
         let non_unique: i64 = row.try_get("NON_UNIQUE").unwrap_or(1);
         let col = is_col_str(row, "COLUMN_NAME");
         let entry = index_map.entry(name.clone()).or_insert_with(|| IndexDef {
-            name: name.clone(),
+            name,
             unique: non_unique == 0,
             columns: Vec::new(),
         });

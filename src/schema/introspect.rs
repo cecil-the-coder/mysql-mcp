@@ -252,9 +252,9 @@ impl SchemaIntrospector {
     /// Invalidate ALL cached schema data (tables list + all column caches).
     /// Use after DDL that may affect multiple tables (e.g., DROP DATABASE, DROP TABLE).
     pub async fn invalidate_all(&self) {
-        { let mut c = self.inner.tables_cache.lock().await; c.clear(); }
-        { let mut c = self.inner.columns_cache.lock().await; c.clear(); }
-        { let mut c = self.inner.indexed_columns_cache.lock().await; c.clear(); }
-        { let mut c = self.inner.composite_indexes_cache.lock().await; c.clear(); }
+        self.inner.tables_cache.lock().await.clear();
+        self.inner.columns_cache.lock().await.clear();
+        self.inner.indexed_columns_cache.lock().await.clear();
+        self.inner.composite_indexes_cache.lock().await.clear();
     }
 }
