@@ -145,7 +145,7 @@ mod e2e_session_tests {
         assert_eq!(list_resp["id"], 11);
         let list_text = list_resp["result"]["content"][0]["text"].as_str().unwrap_or("");
         let list_val: serde_json::Value = serde_json::from_str(list_text).unwrap_or_default();
-        let sessions = list_val["sessions"].as_array().cloned().unwrap_or_default();
+        let sessions = list_val["sessions"].as_array().map(Vec::as_slice).unwrap_or_default();
         assert!(
             sessions.iter().any(|s| s["name"] == "test_sess"),
             "Expected 'test_sess' in session list, got: {}",

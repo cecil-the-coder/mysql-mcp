@@ -59,7 +59,7 @@ fn try_connect() -> Option<BenchDb> {
     let user = std::env::var("MYSQL_USER").unwrap_or_else(|_| "root".to_string());
     let pass = std::env::var("MYSQL_PASS").unwrap_or_default();
     let database = std::env::var("MYSQL_DB").ok().filter(|s| !s.is_empty());
-    let ssl = std::env::var("MYSQL_SSL").map_or(false, |v| v == "true" || v == "1");
+    let ssl = std::env::var("MYSQL_SSL").is_ok_and(|v| v == "true" || v == "1");
     let ssl_ca_str = std::env::var("MYSQL_SSL_CA").unwrap_or_default();
     let ssl_ca = if ssl_ca_str.is_empty() { None } else { Some(ssl_ca_str) };
 

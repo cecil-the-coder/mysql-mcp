@@ -38,9 +38,9 @@ impl SessionStore {
             .and_then(|v: &serde_json::Value| v.as_str())
             .map(|s| s.to_string());
         let include_arr = args.get("include").and_then(|v| v.as_array());
-        let include_indexes = include_arr.map_or(false, |a| a.iter().any(|v| v.as_str() == Some("indexes")));
-        let include_fk     = include_arr.map_or(false, |a| a.iter().any(|v| v.as_str() == Some("foreign_keys")));
-        let include_size   = include_arr.map_or(false, |a| a.iter().any(|v| v.as_str() == Some("size")));
+        let include_indexes = include_arr.is_some_and(|a| a.iter().any(|v| v.as_str() == Some("indexes")));
+        let include_fk     = include_arr.is_some_and(|a| a.iter().any(|v| v.as_str() == Some("foreign_keys")));
+        let include_size   = include_arr.is_some_and(|a| a.iter().any(|v| v.as_str() == Some("size")));
 
         let ctx = match self.resolve_session(&args).await {
             Ok(c) => c,
