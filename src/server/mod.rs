@@ -24,7 +24,7 @@ mod tool_schemas;
 mod sessions;
 mod handlers;
 
-use sessions::{Session, SessionStore};
+use sessions::SessionStore;
 use tool_schemas::*;
 
 /// Check whether a host string resolves to a blocked address category.
@@ -67,8 +67,7 @@ impl McpServer {
             pool,
             config.pool.cache_ttl_secs,
         ));
-        let sessions: Arc<Mutex<HashMap<String, Session>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let sessions = Arc::new(Mutex::new(HashMap::new()));
 
         // Background task: drop sessions idle for > 10 minutes (600 s).
         // "default" is never dropped.
