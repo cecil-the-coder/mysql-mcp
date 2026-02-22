@@ -4,6 +4,10 @@ use sqlx::{MySqlPool, Row, Column, TypeInfo, Acquire};
 use serde_json::{Value, Map};
 use crate::sql_parser::{StatementType, ParsedStatement};
 
+/// Binary columns with invalid UTF-8 are hex-encoded. Cap the output at 512 KB
+/// of raw bytes (→ ~1 MB hex string) to prevent OOM on unexpectedly large BLOBs.
+const MAX_BINARY_DISPLAY_BYTES: usize = 512 * 1024;
+
 pub struct QueryResult {
     pub rows: Vec<Map<String, Value>>,
     pub row_count: usize,
@@ -127,7 +131,22 @@ pub async fn execute_read_query(
 fn row_to_json(row: &sqlx::mysql::MySqlRow) -> Map<String, Value> {
     let mut map = Map::new();
     for (i, col) in row.columns().iter().enumerate() {
-        map.insert(col.name().to_string(), column_to_json(row, i, col));
+        let base = col.name().to_string();
+        // Disambiguate duplicate column names (e.g. SELECT t1.a, t2.a FROM …)
+        // so the second value is not silently overwritten.
+        let key = if !map.contains_key(&base) {
+            base
+        } else {
+            let mut n = 2u32;
+            loop {
+                let candidate = format!("{}_{}", base, n);
+                if !map.contains_key(&candidate) {
+                    break candidate;
+                }
+                n += 1;
+            }
+        };
+        map.insert(key, column_to_json(row, i, col));
     }
     map
 }
@@ -241,8 +260,22 @@ fn column_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col: &sqlx::mysql::My
                 String::from_utf8(b)
                     .map(Value::String)
                     .unwrap_or_else(|e| {
-                        let hex: String = e.into_bytes().iter().map(|byte| format!("{:02x}", byte)).collect();
-                        Value::String(format!("0x{}", hex))
+                        let bytes = e.into_bytes();
+                        let total = bytes.len();
+                        let display = &bytes[..total.min(MAX_BINARY_DISPLAY_BYTES)];
+                        let mut hex = String::with_capacity(display.len() * 2 + 2);
+                        hex.push_str("0x");
+                        for b in display {
+                            use std::fmt::Write as _;
+                            let _ = write!(hex, "{:02x}", b);
+                        }
+                        if total > MAX_BINARY_DISPLAY_BYTES {
+                            hex.push_str(&format!(
+                                "... [{} bytes total, truncated at {}]",
+                                total, MAX_BINARY_DISPLAY_BYTES
+                            ));
+                        }
+                        Value::String(hex)
                     })
             })
             .unwrap_or(Value::Null);
