@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod permissions;
 pub mod query;
+pub mod schema;
 pub mod sql_parser;
 
 #[cfg(test)]
