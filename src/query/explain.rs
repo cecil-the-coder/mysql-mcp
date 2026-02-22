@@ -6,8 +6,8 @@ pub struct ExplainResult {
     pub full_table_scan: bool,
     pub index_used: Option<String>,
     pub rows_examined_estimate: u64,
-    pub extra_flags: Vec<String>, // "Using filesort", "Using temporary", etc.
-    pub tier: String,             // "fast" | "slow" | "very_slow"
+    pub extra_flags: Vec<&'static str>, // "Using filesort", "Using temporary", etc.
+    pub tier: &'static str,             // "fast" | "slow" | "very_slow"
 }
 
 pub async fn run_explain(pool: &MySqlPool, sql: &str) -> Result<ExplainResult> {
@@ -137,19 +137,19 @@ pub fn parse_v2(v: &Value) -> Result<ExplainResult> {
     let rows_examined_estimate = stats.total_estimated_rows.ceil() as u64;
     let mut extra_flags = Vec::new();
     if stats.has_sort {
-        extra_flags.push("Using filesort".to_string());
+        extra_flags.push("Using filesort");
     }
     if stats.has_temp_table {
-        extra_flags.push("Using temporary".to_string());
+        extra_flags.push("Using temporary");
     }
 
     // Compute tier based on actual scan data rather than wall-clock time.
     let tier = if full_table_scan && rows_examined_estimate > 10_000 {
-        "very_slow".to_string()
+        "very_slow"
     } else if full_table_scan || rows_examined_estimate > 1_000 {
-        "slow".to_string()
+        "slow"
     } else {
-        "fast".to_string()
+        "fast"
     };
 
     Ok(ExplainResult {
@@ -252,7 +252,7 @@ mod tests {
         }));
         let result = parse_v2(&v).unwrap();
         assert!(result.full_table_scan, "child table scan detected");
-        assert!(result.extra_flags.iter().any(|s| s == "Using filesort"), "should flag filesort");
+        assert!(result.extra_flags.iter().any(|&s| s == "Using filesort"), "should flag filesort");
     }
 
     #[test]

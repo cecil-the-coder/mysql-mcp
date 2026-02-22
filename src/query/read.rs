@@ -53,16 +53,16 @@ pub async fn execute_read_query(
     // Apply max_rows cap: append LIMIT only for SELECT statements (SHOW/EXPLAIN do not
     // support LIMIT in MySQL). Use the pre-cached has_limit from ParsedStatement — no
     // re-parse needed here.
-    let has_limit = parsed.has_limit;
     let added_limit = max_rows > 0
         && matches!(stmt_type, StatementType::Select)
-        && !has_limit;
-    let effective_sql: String = if added_limit {
-        format!("{} LIMIT {}", sql, max_rows)
+        && !parsed.has_limit;
+    let effective_sql;
+    let effective_sql_ref = if added_limit {
+        effective_sql = format!("{} LIMIT {}", sql, max_rows);
+        effective_sql.as_str()
     } else {
-        String::from(sql)
+        sql
     };
-    let effective_sql_ref = effective_sql.as_str();
 
     // DB phase
     let db_start = Instant::now();

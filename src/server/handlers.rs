@@ -165,21 +165,12 @@ impl SessionStore {
 
         match crate::query::explain::run_explain(&ctx.pool, &sql).await {
             Ok(plan) => {
-                let rows = plan.rows_examined_estimate;
-                let full_table_scan = plan.full_table_scan;
-                let tier = if full_table_scan && rows > 10_000 {
-                    "very_slow"
-                } else if full_table_scan || rows > 1_000 {
-                    "slow"
-                } else {
-                    "fast"
-                };
                 let output = json!({
-                    "full_table_scan": full_table_scan,
+                    "full_table_scan": plan.full_table_scan,
                     "index_used": plan.index_used,
-                    "rows_examined_estimate": rows,
+                    "rows_examined_estimate": plan.rows_examined_estimate,
                     "extra_flags": plan.extra_flags,
-                    "tier": tier,
+                    "tier": plan.tier,
                     "note": "Execution plan only — query was not executed"
                 });
                 Ok(serialize_response(&output))
