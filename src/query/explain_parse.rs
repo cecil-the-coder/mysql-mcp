@@ -77,7 +77,13 @@ pub(crate) fn parse_v2(v: &Value) -> Result<ExplainResult> {
     walk_plan_node(&v["query_plan"], &mut stats);
 
     let full_table_scan = stats.has_full_table_scan;
-    let rows_examined_estimate = stats.total_estimated_rows.ceil() as u64;
+    // Guard against NaN / Infinity before casting to u64: non-finite values
+    // produce u64::MAX (Infinity) or 0 (NaN) in Rust's as-cast, both wrong.
+    let rows_examined_estimate = if stats.total_estimated_rows.is_finite() {
+        stats.total_estimated_rows.ceil() as u64
+    } else {
+        0
+    };
     let extra_flags = if stats.has_sort { vec!["Using filesort"] } else { vec![] };
 
     let tier = if full_table_scan && rows_examined_estimate > VERY_SLOW_ROW_THRESHOLD {

@@ -92,7 +92,7 @@ impl SchemaIntrospector {
         include_foreign_keys: bool,
         include_size: bool,
     ) -> anyhow::Result<serde_json::Value> {
-        let pool = &self.inner.pool;
+        let pool = self.inner.pool.as_ref();
 
         // Columns (always included) — served from cache.
         let columns = self.get_columns(table_name, database).await?;
@@ -108,9 +108,9 @@ impl SchemaIntrospector {
             );
             let q = sqlx::query(&idx_sql).bind(table_name);
             let rows = if let Some(db) = database {
-                q.bind(db).fetch_all(pool.as_ref()).await?
+                q.bind(db).fetch_all(pool).await?
             } else {
-                q.fetch_all(pool.as_ref()).await?
+                q.fetch_all(pool).await?
             };
             let mut idx_map: std::collections::BTreeMap<String, serde_json::Value> =
                 std::collections::BTreeMap::new();
@@ -148,9 +148,9 @@ impl SchemaIntrospector {
             );
             let q = sqlx::query(&fk_sql).bind(table_name);
             let rows = if let Some(db) = database {
-                q.bind(db).fetch_all(pool.as_ref()).await?
+                q.bind(db).fetch_all(pool).await?
             } else {
-                q.fetch_all(pool.as_ref()).await?
+                q.fetch_all(pool).await?
             };
             serde_json::Value::Array(rows.iter().map(|row| serde_json::json!({
                 "constraint":        fetch::is_col_str(row, "CONSTRAINT_NAME"),
@@ -174,19 +174,22 @@ impl SchemaIntrospector {
             );
             let q = sqlx::query(&size_sql).bind(table_name);
             let size_result = if let Some(db) = database {
-                q.bind(db).fetch_one(pool.as_ref()).await
+                q.bind(db).fetch_one(pool).await
             } else {
-                q.fetch_one(pool.as_ref()).await
+                q.fetch_one(pool).await
             };
-            if let Ok(row) = size_result {
-                use sqlx::Row;
-                serde_json::json!({
-                    "estimated_rows": row.try_get::<Option<u64>, _>("TABLE_ROWS").ok().flatten(),
-                    "data_bytes":     row.try_get::<Option<u64>, _>("DATA_LENGTH").ok().flatten(),
-                    "index_bytes":    row.try_get::<Option<u64>, _>("INDEX_LENGTH").ok().flatten(),
-                })
-            } else {
-                serde_json::Value::Null
+            match size_result {
+                Ok(row) => {
+                    use sqlx::Row;
+                    serde_json::json!({
+                        "estimated_rows": row.try_get::<Option<u64>, _>("TABLE_ROWS").ok().flatten(),
+                        "data_bytes":     row.try_get::<Option<u64>, _>("DATA_LENGTH").ok().flatten(),
+                        "index_bytes":    row.try_get::<Option<u64>, _>("INDEX_LENGTH").ok().flatten(),
+                    })
+                }
+                // Table absent from information_schema — not an error.
+                Err(sqlx::Error::RowNotFound) => serde_json::Value::Null,
+                Err(e) => return Err(e.into()),
             }
         } else {
             serde_json::Value::Null

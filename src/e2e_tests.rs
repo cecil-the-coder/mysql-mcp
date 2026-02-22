@@ -4,10 +4,10 @@
 
 #[cfg(test)]
 mod e2e_tests {
-    use tokio::io::{AsyncWriteExt, BufReader};
+    use tokio::io::AsyncWriteExt;
     use serde_json::json;
     use crate::test_helpers::setup_test_db;
-    use crate::e2e_test_utils::{binary_path, send_message, read_response, spawn_server, do_handshake};
+    use crate::e2e_test_utils::{binary_path, send_message, read_response, spawn_server, do_handshake, setup_io};
 
     // -------------------------------------------------------------------------
     // Test 1: MCP initialize handshake — uses do_handshake() helper
@@ -22,9 +22,7 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else { return; };
         let mut child = spawn_server(&binary, &test_db, &[]);
 
-        let mut stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let mut reader = BufReader::new(stdout);
+        let (mut stdin, mut reader) = setup_io(&mut child);
 
         // Send initialize request and capture the response directly (do_handshake
         // consumes the response, so we send the request manually here to inspect it).
@@ -59,9 +57,7 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else { return; };
         let mut child = spawn_server(&binary, &test_db, &[]);
 
-        let mut stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let mut reader = BufReader::new(stdout);
+        let (mut stdin, mut reader) = setup_io(&mut child);
 
         do_handshake(&mut stdin, &mut reader).await;
         send_message(&mut stdin, &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})).await;
@@ -88,9 +84,7 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else { return; };
         let mut child = spawn_server(&binary, &test_db, &[]);
 
-        let mut stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let mut reader = BufReader::new(stdout);
+        let (mut stdin, mut reader) = setup_io(&mut child);
 
         // Send a line that is not valid JSON.
         stdin.write_all(b"this is not json\n").await.unwrap();
@@ -147,9 +141,7 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else { return; };
         let mut child = spawn_server(&binary, &test_db, &[]);
 
-        let mut stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let mut reader = BufReader::new(stdout);
+        let (mut stdin, mut reader) = setup_io(&mut child);
 
         do_handshake(&mut stdin, &mut reader).await;
 
@@ -209,9 +201,7 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else { return; };
         let mut child = spawn_server(&binary, &test_db, &[]);
 
-        let mut stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let mut reader = BufReader::new(stdout);
+        let (mut stdin, mut reader) = setup_io(&mut child);
 
         do_handshake(&mut stdin, &mut reader).await;
 

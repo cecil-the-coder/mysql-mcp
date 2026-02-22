@@ -73,13 +73,16 @@ mod perf_write_tests {
             ).await.unwrap();
             delete_ms.push(t.elapsed().as_secs_f64() * 1000.0);
         }
-        let wall_ms = wall.elapsed().as_secs_f64() * 1000.0;
+        let _wall_ms = wall.elapsed().as_secs_f64() * 1000.0;
 
         sqlx::query("DROP TABLE IF EXISTS perf_write_test").execute(pool).await.ok();
 
-        print(&format!("INSERT (n={N})"), &compute(insert_ms, wall_ms / 3.0));
-        print(&format!("UPDATE (n={N})"), &compute(update_ms, wall_ms / 3.0));
-        print(&format!("DELETE (n={N})"), &compute(delete_ms, wall_ms / 3.0));
+        let insert_wall = insert_ms.iter().sum::<f64>();
+        let update_wall = update_ms.iter().sum::<f64>();
+        let delete_wall = delete_ms.iter().sum::<f64>();
+        print(&format!("INSERT (n={N})"), &compute(insert_ms, insert_wall));
+        print(&format!("UPDATE (n={N})"), &compute(update_ms, update_wall));
+        print(&format!("DELETE (n={N})"), &compute(delete_ms, delete_wall));
     }
 
     /// Schema introspection: cold (TTL=0) vs warm (TTL=60s) cache.

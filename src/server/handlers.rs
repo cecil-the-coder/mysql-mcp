@@ -266,24 +266,18 @@ impl SessionStore {
                     // Generate schema-aware index suggestions when EXPLAIN detected a full
                     // table scan with no index used.
                     let mut suggestions: Vec<String> = vec![];
-                    if let Some(ref plan) = result.plan {
-                        let is_full_scan = plan.get("full_table_scan")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
-                        let no_index = plan.get("index_used")
-                            .map(|v| v.is_null())
-                            .unwrap_or(true);
-                        if is_full_scan && no_index {
-                            if let Some(ref tname) = parsed.target_table {
-                                if !parsed.where_columns.is_empty() {
-                                    suggestions = query_introspector.generate_index_suggestions(
-                                        tname,
-                                        session_db.as_deref(),
-                                        &parsed.where_columns,
-                                    ).await;
-                                }
-                            }
-                        }
+                    let needs_suggestions = result.plan.as_ref().is_some_and(|p| {
+                        p.get("full_table_scan").and_then(|v| v.as_bool()).unwrap_or(false)
+                            && p.get("index_used").map(|v| v.is_null()).unwrap_or(true)
+                    }) && parsed.target_table.is_some()
+                        && !parsed.where_columns.is_empty();
+                    if needs_suggestions {
+                        let tname = parsed.target_table.as_deref().unwrap();
+                        suggestions = query_introspector.generate_index_suggestions(
+                            tname,
+                            session_db.as_deref(),
+                            &parsed.where_columns,
+                        ).await;
                     }
 
                     // Structured performance log
