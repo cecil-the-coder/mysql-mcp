@@ -152,16 +152,17 @@ async fn test_list_composite_indexes() {
     let introspector = SchemaIntrospector::new(pool.clone(), 60);
     let indexes = introspector.list_composite_indexes("test_composite_idx", db).await.unwrap();
 
-    let name_idx = indexes.iter().find(|i| i.name.eq_ignore_ascii_case("idx_name"));
-    assert!(name_idx.is_some(), "idx_name composite index should be found");
-    let name_idx = name_idx.unwrap();
+    let name_idx = indexes.iter()
+        .find(|i| i.name.eq_ignore_ascii_case("idx_name"))
+        .expect("idx_name composite index should be found");
     assert_eq!(name_idx.columns.len(), 2, "composite index should have 2 columns");
     assert!(name_idx.columns[0].eq_ignore_ascii_case("last_name"), "first column of composite index");
     assert!(name_idx.columns[1].eq_ignore_ascii_case("first_name"), "second column of composite index");
 
-    let email_idx = indexes.iter().find(|i| i.name.eq_ignore_ascii_case("idx_email"));
-    assert!(email_idx.is_some(), "idx_email unique index should be found");
-    assert!(email_idx.unwrap().unique, "idx_email should be unique");
+    let email_idx = indexes.iter()
+        .find(|i| i.name.eq_ignore_ascii_case("idx_email"))
+        .expect("idx_email unique index should be found");
+    assert!(email_idx.unique, "idx_email should be unique");
 
     sqlx::query("DROP TABLE IF EXISTS test_composite_idx").execute(pool.as_ref()).await.ok();
 }
