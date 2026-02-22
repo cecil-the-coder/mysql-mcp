@@ -90,42 +90,25 @@ pub(crate) async fn fetch_tables(pool: &MySqlPool, database: Option<&str>) -> Re
 }
 
 pub(crate) async fn fetch_columns(pool: &MySqlPool, table_name: &str, database: Option<&str>) -> Result<Vec<ColumnInfo>> {
+    let sql = format!(
+        r#"SELECT
+            COLUMN_NAME as name,
+            DATA_TYPE as data_type,
+            COLUMN_TYPE as column_type,
+            IS_NULLABLE as is_nullable,
+            COLUMN_DEFAULT as column_default,
+            COLUMN_KEY as column_key,
+            EXTRA as extra
+        FROM information_schema.COLUMNS
+        WHERE TABLE_NAME = ?{}
+        ORDER BY ORDINAL_POSITION"#,
+        if database.is_some() { " AND TABLE_SCHEMA = ?" } else { "" }
+    );
+    let q = sqlx::query(&sql).bind(table_name);
     let rows = if let Some(db) = database {
-        sqlx::query(
-            r#"SELECT
-                COLUMN_NAME as name,
-                DATA_TYPE as data_type,
-                COLUMN_TYPE as column_type,
-                IS_NULLABLE as is_nullable,
-                COLUMN_DEFAULT as column_default,
-                COLUMN_KEY as column_key,
-                EXTRA as extra
-            FROM information_schema.COLUMNS
-            WHERE TABLE_NAME = ?
-            AND TABLE_SCHEMA = ?
-            ORDER BY ORDINAL_POSITION"#,
-        )
-        .bind(table_name)
-        .bind(db)
-        .fetch_all(pool)
-        .await?
+        q.bind(db).fetch_all(pool).await?
     } else {
-        sqlx::query(
-            r#"SELECT
-                COLUMN_NAME as name,
-                DATA_TYPE as data_type,
-                COLUMN_TYPE as column_type,
-                IS_NULLABLE as is_nullable,
-                COLUMN_DEFAULT as column_default,
-                COLUMN_KEY as column_key,
-                EXTRA as extra
-            FROM information_schema.COLUMNS
-            WHERE TABLE_NAME = ?
-            ORDER BY ORDINAL_POSITION"#,
-        )
-        .bind(table_name)
-        .fetch_all(pool)
-        .await?
+        q.fetch_all(pool).await?
     };
 
     let columns = rows.iter().map(|row| {
@@ -154,10 +137,11 @@ pub(crate) async fn fetch_indexed_columns(pool: &MySqlPool, table: &str, databas
     };
     let sql = format!("SHOW INDEX FROM {}", qualified);
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut cols: Vec<String> = Vec::new();
     for row in &rows {
         let col_name = is_col_str(row, "Column_name");
-        if !col_name.is_empty() && !cols.iter().any(|c: &String| c.eq_ignore_ascii_case(&col_name)) {
+        if !col_name.is_empty() && seen.insert(col_name.to_lowercase()) {
             cols.push(col_name);
         }
     }
@@ -165,27 +149,18 @@ pub(crate) async fn fetch_indexed_columns(pool: &MySqlPool, table: &str, databas
 }
 
 pub(crate) async fn fetch_composite_indexes(pool: &MySqlPool, table: &str, database: Option<&str>) -> Result<Vec<IndexDef>> {
+    let sql = format!(
+        "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME \
+         FROM information_schema.STATISTICS \
+         WHERE TABLE_NAME = ?{} \
+         ORDER BY INDEX_NAME, SEQ_IN_INDEX",
+        if database.is_some() { " AND TABLE_SCHEMA = ?" } else { "" }
+    );
+    let q = sqlx::query(&sql).bind(table);
     let rows = if let Some(db) = database {
-        sqlx::query(
-            "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME \
-             FROM information_schema.STATISTICS \
-             WHERE TABLE_NAME = ? AND TABLE_SCHEMA = ? \
-             ORDER BY INDEX_NAME, SEQ_IN_INDEX"
-        )
-        .bind(table)
-        .bind(db)
-        .fetch_all(pool)
-        .await?
+        q.bind(db).fetch_all(pool).await?
     } else {
-        sqlx::query(
-            "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME \
-             FROM information_schema.STATISTICS \
-             WHERE TABLE_NAME = ? \
-             ORDER BY INDEX_NAME, SEQ_IN_INDEX"
-        )
-        .bind(table)
-        .fetch_all(pool)
-        .await?
+        q.fetch_all(pool).await?
     };
 
     let mut index_map: std::collections::BTreeMap<String, IndexDef> = std::collections::BTreeMap::new();

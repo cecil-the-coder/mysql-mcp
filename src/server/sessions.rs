@@ -52,13 +52,17 @@ fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToolResult> {
 }
 
 impl SessionStore {
-    /// Resolve a session name to a SessionContext (pool, introspector, database).
+    /// Resolve the "session" key from the args map to a SessionContext.
     /// Updates last_used on non-default sessions.
-    /// Returns Err with a user-friendly message if not found.
-    pub(crate) async fn get_session(
+    /// Returns Err(CallToolResult) that callers can propagate immediately with `?`.
+    pub(crate) async fn resolve_session(
         &self,
-        name: &str,
-    ) -> std::result::Result<SessionContext, String> {
+        args: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<SessionContext, CallToolResult> {
+        let name = args
+            .get("session")
+            .and_then(|v| v.as_str())
+            .unwrap_or("default");
         if name == "default" || name.is_empty() {
             return Ok(SessionContext {
                 pool: self.db.pool().clone(),
@@ -76,26 +80,11 @@ impl SessionStore {
                     database: session.database.clone(),
                 })
             }
-            None => Err(format!(
+            None => Err(CallToolResult::error(vec![Content::text(format!(
                 "Session '{}' not found. Use mysql_connect to create it, or omit 'session' to use the default connection.",
                 name
-            )),
+            ))])),
         }
-    }
-
-    /// Resolve the "session" key from the args map, returning a SessionContext or
-    /// an Err(CallToolResult) that callers can propagate immediately with `?`.
-    pub(crate) async fn resolve_session(
-        &self,
-        args: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<SessionContext, CallToolResult> {
-        let session_name = args
-            .get("session")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default");
-        self.get_session(session_name).await.map_err(|e| {
-            CallToolResult::error(vec![Content::text(e)])
-        })
     }
 
     // ------------------------------------------------------------------
