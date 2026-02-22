@@ -76,6 +76,8 @@ pub mod perf_tests {
         // so concurrent perf tests (pool_saturation) can connect without being starved.
         const N: usize = 20;
 
+        let parsed_select1 = crate::sql_parser::parse_sql("SELECT 1").unwrap();
+
         // Warm-up connections — hold semaphore permit while the pool creates new TCP+SSL
         // connections so that concurrent perf/integration tests don't overwhelm MySQL's
         // connection handler (server connect_timeout=10s).
@@ -83,7 +85,7 @@ pub mod perf_tests {
             let _permit = crate::test_helpers::db_semaphore()
                 .acquire().await.expect("DB semaphore closed");
             for _ in 0..WARMUP {
-                crate::query::read::execute_read_query(pool, "SELECT 1", &crate::sql_parser::parse_sql("SELECT 1").unwrap(), false, 0, "none", 0).await.unwrap();
+                crate::query::read::execute_read_query(pool, "SELECT 1", &parsed_select1, false, 0, "none", 0).await.unwrap();
             }
         }
 
@@ -91,7 +93,7 @@ pub mod perf_tests {
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(pool, "SELECT 1", &crate::sql_parser::parse_sql("SELECT 1").unwrap(), false, 0, "none", 0).await.unwrap();
+            crate::query::read::execute_read_query(pool, "SELECT 1", &parsed_select1, false, 0, "none", 0).await.unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
@@ -133,11 +135,13 @@ pub mod perf_tests {
                    JOIN users u ON o.user_id = u.id \
                    JOIN products p ON o.product_id = p.id";
 
+        let parsed_join = crate::sql_parser::parse_sql(sql).unwrap();
+
         let wall = Instant::now();
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(pool, sql, &crate::sql_parser::parse_sql(sql).unwrap(), false, 0, "none", 0).await.unwrap();
+            crate::query::read::execute_read_query(pool, sql, &parsed_join, false, 0, "none", 0).await.unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
@@ -180,15 +184,18 @@ pub mod perf_tests {
             // Drop releases all connections back to the pool as idle.
         }
 
+        let parsed_select1 = crate::sql_parser::parse_sql("SELECT 1").unwrap();
+
         let wall = Instant::now();
         let mut set = JoinSet::new();
         for _ in 0..CONCURRENCY {
             let pool = pool.clone();
+            let parsed = parsed_select1.clone();
             set.spawn(async move {
                 let mut v = Vec::with_capacity(PER_TASK);
                 for _ in 0..PER_TASK {
                     let t = Instant::now();
-                    crate::query::read::execute_read_query(&pool, "SELECT 1", &crate::sql_parser::parse_sql("SELECT 1").unwrap(), false, 0, "none", 0).await.unwrap();
+                    crate::query::read::execute_read_query(&pool, "SELECT 1", &parsed, false, 0, "none", 0).await.unwrap();
                     v.push(t.elapsed().as_secs_f64() * 1000.0);
                 }
                 v
