@@ -201,14 +201,15 @@ impl SchemaIntrospector {
         for col in where_cols {
             let already_noted = suggestions.iter().any(|s| s.contains(&format!("`{}`", col)));
             if already_noted { continue; }
-            let low_card = col_info.get(&col.to_lowercase())
+            let col_entry = col_info.get(&col.to_lowercase());
+            let low_card = col_entry
                 .map(|ci| is_low_cardinality_type(&ci.column_type))
                 .unwrap_or(false);
             if low_card && indexed_cols.iter().any(|ic| ic.eq_ignore_ascii_case(col)) {
                 suggestions.push(format!(
                     "Column `{}` on table `{}` is indexed but has low cardinality (type: {}). The optimizer may skip this index and perform a full scan. Consider reviewing query selectivity.",
                     col, table,
-                    col_info.get(&col.to_lowercase()).map(|ci| ci.column_type.as_str()).unwrap_or("unknown")
+                    col_entry.map(|ci| ci.column_type.as_str()).unwrap_or("unknown")
                 ));
             }
         }

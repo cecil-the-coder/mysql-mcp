@@ -164,21 +164,21 @@ impl SessionStore {
             Ok(pool) => {
                 let pool_arc = Arc::new(pool.clone());
                 let introspector = Arc::new(SchemaIntrospector::new(pool_arc, self.config.pool.cache_ttl_secs));
+                let info = json!({
+                    "connected": true,
+                    "session": &name,
+                    "host": &host,
+                    "database": &database,
+                });
                 let session = Session {
                     pool,
                     introspector,
                     last_used: std::time::Instant::now(),
-                    host: host.clone(),
-                    database: database.clone(),
+                    host,
+                    database,
                 };
                 let mut sessions = self.sessions.lock().await;
-                sessions.insert(name.clone(), session);
-                let info = json!({
-                    "connected": true,
-                    "session": name,
-                    "host": host,
-                    "database": database,
-                });
+                sessions.insert(name, session);
                 Ok(serialize_response(&info))
             }
             Err(e) => {

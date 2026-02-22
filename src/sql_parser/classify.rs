@@ -107,10 +107,9 @@ pub(super) fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedSt
 
         Statement::Use(use_stmt) => {
             let schema = match use_stmt {
-                Use::Object(name) => Some(name.to_string()),
-                Use::Database(name) => Some(name.to_string()),
-                Use::Schema(name) => Some(name.to_string()),
-                Use::Catalog(name) => Some(name.to_string()),
+                Use::Object(name) | Use::Database(name) | Use::Schema(name) | Use::Catalog(name) => {
+                    Some(name.to_string())
+                }
                 _ => None,
             };
             (StatementType::Use, schema, None)
@@ -265,10 +264,19 @@ fn has_aggregate_function(projection: &[SelectItem]) -> bool {
 
 fn expr_has_aggregate(expr: &Expr) -> bool {
     match expr {
-        Expr::Function(f) => {
-            let name = f.name.to_string().to_uppercase();
-            matches!(name.as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX")
-        }
+        Expr::Function(f) => f
+            .name
+            .0
+            .last()
+            .map(|id| {
+                let v = id.value.as_str();
+                v.eq_ignore_ascii_case("COUNT")
+                    || v.eq_ignore_ascii_case("SUM")
+                    || v.eq_ignore_ascii_case("AVG")
+                    || v.eq_ignore_ascii_case("MIN")
+                    || v.eq_ignore_ascii_case("MAX")
+            })
+            .unwrap_or(false),
         Expr::BinaryOp { left, right, .. } => {
             expr_has_aggregate(left) || expr_has_aggregate(right)
         }
