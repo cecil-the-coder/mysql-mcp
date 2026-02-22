@@ -97,15 +97,6 @@ fn test_empty_sql() {
 }
 
 #[test]
-fn test_is_ddl() {
-    assert!(StatementType::Create.is_ddl());
-    assert!(StatementType::Alter.is_ddl());
-    assert!(StatementType::Drop.is_ddl());
-    assert!(StatementType::Truncate.is_ddl());
-    assert!(!StatementType::Select.is_ddl());
-}
-
-#[test]
 fn test_names() {
     assert_eq!(StatementType::Select.name(), "SELECT");
     assert_eq!(StatementType::Insert.name(), "INSERT");

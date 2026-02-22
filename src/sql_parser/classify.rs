@@ -1,7 +1,7 @@
 use anyhow::Result;
 use sqlparser::ast::{
     Expr, FromTable, ObjectName, Query, Select, SelectItem, SetExpr, Statement, TableFactor,
-    TableWithJoins, Use, Value,
+    Use, Value,
 };
 use std::collections::HashSet;
 
@@ -42,13 +42,13 @@ pub(super) fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedSt
                         &mut has_leading_wildcard_like,
                     );
                 }
-                has_named_table = select.from.iter().any(|t| is_named_table(&t.relation));
+                has_named_table = select.from.iter().any(|t| matches!(t.relation, TableFactor::Table { .. }));
                 has_group_by = match &select.group_by {
                     sqlparser::ast::GroupByExpr::Expressions(exprs, _) => !exprs.is_empty(),
                     _ => true,
                 };
                 has_aggregate = has_aggregate_function(&select.projection);
-                join_count = count_joins(&select.from);
+                join_count = select.from.iter().map(|twj| 1 + twj.joins.len()).sum();
             }
             (StatementType::Select, None, tname)
         }
@@ -249,17 +249,6 @@ pub(super) fn extract_select(query: &Query) -> Option<&Select> {
         SetExpr::Select(select) => Some(select),
         _ => None,
     }
-}
-
-/// Returns true if the table factor refers to a concrete named table (not a subquery/function).
-fn is_named_table(factor: &TableFactor) -> bool {
-    matches!(factor, TableFactor::Table { .. })
-}
-
-/// Count distinct table references across all FROM clauses including JOIN targets.
-/// Returns the total number of tables (base + joined).
-fn count_joins(from: &[TableWithJoins]) -> usize {
-    from.iter().map(|twj| 1 + twj.joins.len()).sum()
 }
 
 /// Returns true if any aggregate function (COUNT, SUM, AVG, MIN, MAX) appears in the projection.

@@ -103,10 +103,15 @@ impl SessionStore {
                 let read_only = read_only_raw != 0;
 
                 let mut accessible_features = vec!["SELECT", "SHOW", "EXPLAIN"];
-                if self.config.security.allow_insert { accessible_features.push("INSERT"); }
-                if self.config.security.allow_update { accessible_features.push("UPDATE"); }
-                if self.config.security.allow_delete { accessible_features.push("DELETE"); }
-                if self.config.security.allow_ddl { accessible_features.push("DDL (CREATE/ALTER/DROP)"); }
+                let sec = &self.config.security;
+                for (enabled, name) in [
+                    (sec.allow_insert, "INSERT"),
+                    (sec.allow_update, "UPDATE"),
+                    (sec.allow_delete, "DELETE"),
+                    (sec.allow_ddl, "DDL (CREATE/ALTER/DROP)"),
+                ] {
+                    if enabled { accessible_features.push(name); }
+                }
 
                 let info = json!({
                     "mysql_version": version,

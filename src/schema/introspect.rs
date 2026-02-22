@@ -166,11 +166,10 @@ impl SchemaIntrospector {
                 where_cols.iter().all(|wc| idx.columns.iter().any(|ic| ic.eq_ignore_ascii_case(wc)))
             });
             if !covered_by_existing {
-                let col_list = unindexed_cols.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", ");
-                let idx_suffix = unindexed_cols.iter().map(|c| c.as_str()).collect::<Vec<_>>().join("_");
+                let idx_cols: Vec<&str> = unindexed_cols.iter().map(|c| c.as_str()).collect();
                 suggestions.push(format!(
                     "Multiple unindexed WHERE columns on `{}`: [{}]. Consider a composite index: CREATE INDEX idx_{}_{} ON {}({});",
-                    table, col_list, table, idx_suffix, table, col_list
+                    table, idx_cols.join(", "), table, idx_cols.join("_"), table, idx_cols.join(", ")
                 ));
             } else {
                 suggestions.push(format!(

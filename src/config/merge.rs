@@ -13,14 +13,6 @@ pub(crate) fn load_toml_config(path: &Path) -> Result<Config> {
     Ok(config)
 }
 
-/// Load config from the default location (mysql-mcp.toml) or MCP_CONFIG_FILE env var.
-fn load_default_config() -> Result<Config> {
-    let path = std::env::var("MCP_CONFIG_FILE")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("mysql-mcp.toml"));
-    load_toml_config(&path)
-}
-
 /// Load the final merged config:
 /// 1. Load dotenv if .env exists
 /// 2. Load TOML base config
@@ -32,8 +24,11 @@ pub fn load_config() -> Result<Config> {
         dotenv::dotenv().ok();
     }
 
-    // 2. TOML base
-    let base = load_default_config()?;
+    // 2. TOML base (MCP_CONFIG_FILE env var or default mysql-mcp.toml)
+    let path = std::env::var("MCP_CONFIG_FILE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("mysql-mcp.toml"));
+    let base = load_toml_config(&path)?;
 
     // 3. Env overrides
     let env = load_env_config();
