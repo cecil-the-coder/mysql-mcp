@@ -57,12 +57,12 @@ pub async fn execute_read_query(
     let added_limit = max_rows > 0
         && matches!(stmt_type, StatementType::Select)
         && !has_limit;
-    let effective_sql: std::borrow::Cow<str> = if added_limit {
-        std::borrow::Cow::Owned(format!("{} LIMIT {}", sql, max_rows))
+    let effective_sql: String = if added_limit {
+        format!("{} LIMIT {}", sql, max_rows)
     } else {
-        std::borrow::Cow::Borrowed(sql)
+        String::from(sql)
     };
-    let effective_sql_ref = effective_sql.as_ref();
+    let effective_sql_ref = effective_sql.as_str();
 
     // DB phase
     let db_start = Instant::now();
@@ -103,17 +103,10 @@ pub async fn execute_read_query(
 
     let plan: Option<Value> = if run_explain {
         match crate::query::explain::run_explain(pool, sql).await {
-            Ok(mut explain_result) => {
-                // Compute tier based on MySQL's own rows_examined_estimate and
-                // full_table_scan — NOT wall-clock time, which includes network RTT
-                // and tells the LLM nothing actionable about query efficiency.
-                explain_result.tier = if explain_result.full_table_scan && explain_result.rows_examined_estimate > 10_000 {
-                    "very_slow".to_string()
-                } else if explain_result.full_table_scan || explain_result.rows_examined_estimate > 1_000 {
-                    "slow".to_string()
-                } else {
-                    "fast".to_string()
-                };
+            Ok(explain_result) => {
+                // Tier is computed inside parse_v2 based on full_table_scan and
+                // rows_examined_estimate — not wall-clock time, which includes
+                // network RTT and tells the LLM nothing about query efficiency.
                 Some(serde_json::json!({
                     "full_table_scan": explain_result.full_table_scan,
                     "index_used": explain_result.index_used,

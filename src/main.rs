@@ -12,9 +12,15 @@ pub mod server;
 #[cfg(test)]
 pub mod test_helpers;
 #[cfg(test)]
+mod e2e_test_utils;
+#[cfg(test)]
 mod e2e_tests;
 #[cfg(test)]
+mod e2e_session_tests;
+#[cfg(test)]
 mod perf_tests;
+#[cfg(test)]
+mod perf_write_tests;
 
 #[tokio::main]
 async fn main() -> Result<()> {

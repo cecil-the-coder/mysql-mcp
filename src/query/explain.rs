@@ -1,6 +1,6 @@
 use anyhow::Result;
-use sqlx::MySqlPool;
 use serde_json::Value;
+use sqlx::MySqlPool;
 
 pub struct ExplainResult {
     pub full_table_scan: bool,
@@ -10,10 +10,29 @@ pub struct ExplainResult {
     pub tier: String,             // "fast" | "slow" | "very_slow"
 }
 
+pub async fn run_explain(pool: &MySqlPool, sql: &str) -> Result<ExplainResult> {
+    let explain_sql = format!("EXPLAIN FORMAT=JSON {}", sql);
+    let row: sqlx::mysql::MySqlRow = sqlx::query(&explain_sql)
+        .fetch_one(pool)
+        .await?;
+
+    // EXPLAIN FORMAT=JSON returns a single row with one column: the JSON string
+    use sqlx::Row;
+    let json_str: String = row.try_get(0)?;
+    let v: serde_json::Value = serde_json::from_str(&json_str)?;
+
+    parse_v2(&v)
+}
+
+// --------------------------------------------------------------------------
+// Plan walking and parsing (formerly explain_v2.rs)
+// --------------------------------------------------------------------------
+
 /// Collected statistics from walking a query_plan node tree (schema v2).
 struct PlanStats {
     has_full_table_scan: bool,
-    index_names: Vec<String>,
+    /// First index name encountered during the tree walk, if any.
+    index_name: Option<String>,
     total_estimated_rows: f64,
     has_sort: bool,
     has_temp_table: bool,
@@ -23,7 +42,7 @@ impl PlanStats {
     fn new() -> Self {
         PlanStats {
             has_full_table_scan: false,
-            index_names: Vec::new(),
+            index_name: None,
             total_estimated_rows: 0.0,
             has_sort: false,
             has_temp_table: false,
@@ -51,9 +70,12 @@ fn walk_plan_node(node: &Value, stats: &mut PlanStats) {
             stats.total_estimated_rows += rows;
         }
         "index" => {
-            // Index-based access (index scan or index lookup)
-            if let Some(name) = node["index_name"].as_str() {
-                stats.index_names.push(name.to_string());
+            // Index-based access (index scan or index lookup).
+            // Short-circuit: only record the first index name encountered.
+            if stats.index_name.is_none() {
+                if let Some(name) = node["index_name"].as_str() {
+                    stats.index_name = Some(name.to_string());
+                }
             }
             let rows = node["estimated_rows"].as_f64().unwrap_or(0.0);
             stats.total_estimated_rows += rows;
@@ -89,23 +111,10 @@ fn walk_plan_node(node: &Value, stats: &mut PlanStats) {
     }
 }
 
-pub async fn run_explain(pool: &MySqlPool, sql: &str) -> Result<ExplainResult> {
-    let explain_sql = format!("EXPLAIN FORMAT=JSON {}", sql);
-    let row: sqlx::mysql::MySqlRow = sqlx::query(&explain_sql)
-        .fetch_one(pool)
-        .await?;
-
-    // EXPLAIN FORMAT=JSON returns a single row with one column: the JSON string
-    use sqlx::Row;
-    let json_str: String = row.try_get(0)?;
-    let v: Value = serde_json::from_str(&json_str)?;
-
-    parse_v2(&v)
-}
-
 /// Parse MySQL 8.0 EXPLAIN FORMAT=JSON schema v2.
 ///
 /// Structure (abbreviated):
+/// ```json
 /// {
 ///   "query_plan": {
 ///     "access_type": "filter" | "join" | "sort" | "limit" | "table" | "index" | ...,
@@ -117,15 +126,15 @@ pub async fn run_explain(pool: &MySqlPool, sql: &str) -> Result<ExplainResult> {
 ///   "query_type": "select",
 ///   "json_schema_version": "2.0"
 /// }
-fn parse_v2(v: &Value) -> Result<ExplainResult> {
+/// ```
+pub(crate) fn parse_v2(v: &Value) -> Result<ExplainResult> {
     let query_plan = &v["query_plan"];
 
     let mut stats = PlanStats::new();
     walk_plan_node(query_plan, &mut stats);
 
     let full_table_scan = stats.has_full_table_scan;
-    // Use the first index encountered as a representative index (if any).
-    let index_used = stats.index_names.into_iter().next();
+    let index_used = stats.index_name;
     // Use total estimated rows from leaf scans as the examined row estimate.
     let rows_examined_estimate = stats.total_estimated_rows.ceil() as u64;
     let mut extra_flags = Vec::new();
@@ -136,12 +145,21 @@ fn parse_v2(v: &Value) -> Result<ExplainResult> {
         extra_flags.push("Using temporary".to_string());
     }
 
+    // Compute tier based on actual scan data rather than wall-clock time.
+    let tier = if full_table_scan && rows_examined_estimate > 10_000 {
+        "very_slow".to_string()
+    } else if full_table_scan || rows_examined_estimate > 1_000 {
+        "slow".to_string()
+    } else {
+        "fast".to_string()
+    };
+
     Ok(ExplainResult {
         full_table_scan,
         index_used,
         rows_examined_estimate,
         extra_flags,
-        tier: "fast".to_string(), // will be set by caller
+        tier,
     })
 }
 
@@ -149,6 +167,10 @@ fn parse_v2(v: &Value) -> Result<ExplainResult> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    // ------------------------------------------------------------------
+    // Unit tests for parse_v2 (formerly in explain_v2.rs)
+    // ------------------------------------------------------------------
 
     fn make_v2(query_plan: serde_json::Value) -> serde_json::Value {
         json!({
@@ -184,6 +206,7 @@ mod tests {
         assert!(result.index_used.is_none(), "no index expected");
         assert_eq!(result.rows_examined_estimate, 5);
         assert!(result.extra_flags.is_empty());
+        assert_eq!(result.tier, "slow"); // full_table_scan && rows <= 10_000
     }
 
     #[test]
@@ -206,6 +229,7 @@ mod tests {
         assert!(!result.full_table_scan, "no full table scan");
         assert_eq!(result.index_used.as_deref(), Some("PRIMARY"));
         assert_eq!(result.rows_examined_estimate, 1);
+        assert_eq!(result.tier, "fast");
     }
 
     #[test]
@@ -295,51 +319,14 @@ mod tests {
         assert!(!result.full_table_scan, "no table scan for constant query");
         assert!(result.index_used.is_none());
         assert_eq!(result.rows_examined_estimate, 1);
+        assert_eq!(result.tier, "fast");
     }
 
-}
+    // ------------------------------------------------------------------
+    // Integration tests for run_explain (formerly in explain.rs)
+    // ------------------------------------------------------------------
 
-#[cfg(test)]
-mod integration_tests {
-    use super::*;
     use crate::test_helpers::setup_test_db;
-
-    /// Run EXPLAIN on a SELECT against a real DB and assert the result is parseable.
-    /// This test exercises the full run_explain() path including the actual MySQL
-    /// EXPLAIN FORMAT=JSON output.
-    #[ignore]
-    #[tokio::test]
-    async fn test_explain_raw_json_diagnostic() {
-        // This test prints the raw EXPLAIN FORMAT=JSON output from the DB under test.
-        // It does not assert anything — it is used for manual inspection of the actual
-        // JSON structure returned by the MySQL version in use (testcontainers or real DB).
-        let Some(test_db) = setup_test_db().await else { return; };
-        use sqlx::Row;
-
-        // Print MySQL version
-        let row: sqlx::mysql::MySqlRow = sqlx::query("SELECT VERSION()")
-            .fetch_one(&test_db.pool).await.unwrap();
-        let version: String = row.try_get(0).unwrap();
-        eprintln!("[diagnostic] MySQL version: {}", version);
-
-        // Print EXPLAIN for ORDER BY on unindexed column
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS explain_diag (
-                id INT PRIMARY KEY AUTO_INCREMENT,
-                name VARCHAR(50)
-            )"
-        )
-        .execute(&test_db.pool).await.unwrap();
-        sqlx::query("INSERT IGNORE INTO explain_diag (id, name) VALUES (1,'Zara'),(2,'Alice'),(3,'Mike')")
-            .execute(&test_db.pool).await.unwrap();
-
-        let row: sqlx::mysql::MySqlRow = sqlx::query(
-            "EXPLAIN FORMAT=JSON SELECT * FROM explain_diag ORDER BY name"
-        )
-        .fetch_one(&test_db.pool).await.unwrap();
-        let json_str: String = row.try_get(0).unwrap();
-        eprintln!("[diagnostic] EXPLAIN JSON (ORDER BY name):\n{}", json_str);
-    }
 
     #[tokio::test]
     async fn test_explain_simple_select() {

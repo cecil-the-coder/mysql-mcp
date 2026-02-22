@@ -122,14 +122,6 @@ multi_db_write_mode = true
         assert!(config.security.multi_db_write_mode);
     }
 
-    // Test: date_strings and timezone defaults
-    #[test]
-    fn test_date_strings_and_timezone_defaults() {
-        let config = Config::default();
-        assert!(!config.date_strings);
-        assert!(config.timezone.is_none());
-    }
-
     // Test: partial toml (missing sections fill with defaults)
     #[test]
     fn test_partial_toml_fills_defaults() {

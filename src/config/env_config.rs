@@ -64,8 +64,6 @@ pub fn load_env_config() -> EnvConfig {
         ssl_ca: std::env::var("MYSQL_SSL_CA").ok().filter(|s| !s.is_empty()),
         multi_db_write_mode: parse_bool_env("MYSQL_MULTI_DB_WRITE_MODE"),
         allow_runtime_connections: parse_bool_env("MYSQL_ALLOW_RUNTIME_CONNECTIONS"),
-        timezone: std::env::var("MYSQL_TIMEZONE").ok(),
-        date_strings: parse_bool_env("MYSQL_DATE_STRINGS"),
         schema_permissions: parse_schema_permissions(),
         performance_hints: std::env::var("MYSQL_PERFORMANCE_HINTS").ok(),
         slow_query_threshold_ms: parse_env_num::<u64>("MYSQL_SLOW_QUERY_THRESHOLD_MS"),
@@ -96,29 +94,6 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
 }
 
 /// All env var overrides (None = not set, don't override).
-///
-/// # Simplification note (mysql-mcp-p0y)
-///
-/// This struct duplicates every field of `Config` as `Option<T>` to enable the 3-layer
-/// merge pattern (defaults → TOML → env vars). The duplication is the main boilerplate
-/// cost: adding a new config field requires touching `Config` (mod.rs), `EnvConfig` here,
-/// `load_env_config()` here, and `apply_to()` here.
-///
-/// The simplest safe alternatives would be:
-///
-/// A) A proc-macro that auto-generates the `Option<T>` parallel struct and `apply_to()` body
-///    from `#[env_override(...)]` annotations on `Config` fields.
-///
-/// B) The `figment` crate, which handles layered configs declaratively with no intermediate
-///    struct needed.
-///
-/// C) Replacing `EnvConfig` with a `Config::apply_env_overrides(&mut self)` method that reads
-///    env vars directly. This would break the existing `EnvConfig`-based unit tests in
-///    `merge.rs` (which construct `EnvConfig { field: Some(val), ..Default::default() }` to
-///    test field-by-field override behavior).
-///
-/// None of these were implemented at this time because they each either require new
-/// dependencies or would change the tested public interface of the config module.
 #[derive(Debug, Default)]
 pub struct EnvConfig {
     pub host: Option<String>,
@@ -142,8 +117,6 @@ pub struct EnvConfig {
     pub ssl_ca: Option<String>,
     pub multi_db_write_mode: Option<bool>,
     pub allow_runtime_connections: Option<bool>,
-    pub timezone: Option<String>,
-    pub date_strings: Option<bool>,
     pub schema_permissions: HashMap<String, SchemaPermissions>,
     pub performance_hints: Option<String>,
     pub slow_query_threshold_ms: Option<u64>,
@@ -179,8 +152,6 @@ impl EnvConfig {
         if !self.schema_permissions.is_empty() {
             base.security.schema_permissions.extend(self.schema_permissions.clone());
         }
-        if let Some(v) = &self.timezone { base.timezone = Some(v.clone()); }
-        if let Some(v) = self.date_strings { base.date_strings = v; }
         if let Some(v) = &self.performance_hints { base.pool.performance_hints = v.clone(); }
         if let Some(v) = self.slow_query_threshold_ms { base.pool.slow_query_threshold_ms = v; }
         if let Some(v) = self.warmup_connections { base.pool.warmup_connections = v; }

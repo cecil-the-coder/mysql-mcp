@@ -10,8 +10,7 @@ use testcontainers_modules::{
 fn connect_options_from_config(config: &Config) -> sqlx::mysql::MySqlConnectOptions {
     let mut opts = crate::db::build_connect_options(config)
         .expect("build_connect_options failed in test helper");
-    // statement cache: 100 per connection; only effective when using sqlx prepared statement macros
-    opts = opts.statement_cache_capacity(100);
+    opts = opts.statement_cache_capacity(crate::db::STATEMENT_CACHE_CAPACITY);
     opts
 }
 

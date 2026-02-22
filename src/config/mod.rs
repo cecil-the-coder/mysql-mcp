@@ -14,8 +14,6 @@ pub struct Config {
     pub connection: ConnectionConfig,
     pub pool: PoolConfig,
     pub security: SecurityConfig,
-    pub timezone: Option<String>,
-    pub date_strings: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -83,8 +81,6 @@ impl Default for Config {
             connection: ConnectionConfig::default(),
             pool: PoolConfig::default(),
             security: SecurityConfig::default(),
-            timezone: None,
-            date_strings: false,
         }
     }
 }
@@ -139,29 +135,9 @@ impl Default for SecurityConfig {
 
 impl Config {
     pub fn validate(&self) -> anyhow::Result<()> {
-        // Pool size must be 1..=1000
-        if self.pool.size == 0 {
-            anyhow::bail!("Config error: MYSQL_POOL_SIZE cannot be 0 (got 0)");
-        }
-        if self.pool.size > 1000 {
-            anyhow::bail!(
-                "Config error: MYSQL_POOL_SIZE unreasonably large: {} (max 1000)",
-                self.pool.size
-            );
-        }
-
-        // Timeouts must be at least 100ms
-        if self.pool.query_timeout_ms < 100 {
-            anyhow::bail!(
-                "Config error: MYSQL_QUERY_TIMEOUT must be at least 100ms (got {}ms)",
-                self.pool.query_timeout_ms
-            );
-        }
-        if self.pool.connect_timeout_ms < 100 {
-            anyhow::bail!(
-                "Config error: MYSQL_CONNECT_TIMEOUT must be at least 100ms (got {}ms)",
-                self.pool.connect_timeout_ms
-            );
+        // Host must not be empty
+        if self.connection.host.is_empty() {
+            anyhow::bail!("Config error: connection host must not be empty");
         }
 
         // max_rows must be at least 1
@@ -180,6 +156,16 @@ impl Config {
 
         if self.security.max_sessions == 0 {
             anyhow::bail!("security.max_sessions must be >= 1");
+        }
+
+        // SSL CA file must exist if specified
+        if let Some(ref ca) = self.security.ssl_ca {
+            if !std::path::Path::new(ca).exists() {
+                anyhow::bail!(
+                    "Config error: MYSQL_SSL_CA path does not exist: {}",
+                    ca
+                );
+            }
         }
 
         Ok(())

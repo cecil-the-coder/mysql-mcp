@@ -1,0 +1,125 @@
+use std::sync::Arc;
+use rmcp::model::Content;
+use serde_json::json;
+
+// ============================================================
+// Tool input schemas
+// Each function builds and returns the JSON schema for its tool.
+// ============================================================
+
+pub(crate) fn mysql_query_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(json!({
+        "type": "object",
+        "properties": {
+            "sql": {
+                "type": "string",
+                "description": "The SQL query to execute"
+            },
+            "explain": {
+                "type": "boolean",
+                "description": "Set to true when investigating a slow query — returns full execution plan including index usage, rows examined, and optimization suggestions. Overrides the server performance_hints setting for this call."
+            },
+            "session": {
+                "type": "string",
+                "description": "Named session to route this query to (omit for default connection)"
+            }
+        },
+        "required": ["sql"]
+    })))
+}
+
+pub(crate) fn mysql_schema_info_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(json!({
+        "type": "object",
+        "properties": {
+            "table": { "type": "string", "description": "Table name" },
+            "database": { "type": "string", "description": "Database/schema name (optional, uses connected database if omitted)" },
+            "include": {
+                "type": "array",
+                "items": { "type": "string", "enum": ["indexes", "foreign_keys", "size"] },
+                "description": "Additional metadata to include. Default: just columns. Options: 'indexes' (all indexes with columns), 'foreign_keys' (FK constraints), 'size' (estimated row count and byte sizes)."
+            },
+            "session": {
+                "type": "string",
+                "description": "Named session to use (omit for default connection)"
+            }
+        },
+        "required": ["table"]
+    })))
+}
+
+pub(crate) fn mysql_server_info_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(json!({
+        "type": "object",
+        "properties": {
+            "session": { "type": "string", "description": "Named session to use (omit for default connection)" }
+        },
+        "required": []
+    })))
+}
+
+pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string", "description": "Session identifier (alphanumeric, underscore, hyphen; max 64 chars). 'default' is reserved." },
+            "host": { "type": "string", "description": "MySQL host (required unless using preset)" },
+            "port": { "type": "integer", "description": "MySQL port (default: 3306)." },
+            "user": { "type": "string", "description": "MySQL username" },
+            "password": { "type": "string", "description": "MySQL password (optional; use empty string for passwordless login)." },
+            "database": { "type": "string", "description": "Default database to use" },
+            "ssl": { "type": "boolean", "description": "Enable SSL/TLS (default: false). When true and ssl_ca is omitted, uses VerifyIdentity mode (full cert+hostname check)." },
+            "ssl_ca": { "type": "string", "description": "Path to PEM CA certificate file for SSL verification. When set, uses VerifyCa mode (validates cert chain without hostname check)." }
+        },
+        "required": ["name", "host", "user"]
+    })))
+}
+
+pub(crate) fn mysql_disconnect_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(json!({
+        "type": "object",
+        "properties": {
+            "name": { "type": "string", "description": "Session name to disconnect" }
+        },
+        "required": ["name"]
+    })))
+}
+
+pub(crate) fn mysql_list_sessions_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(json!({
+        "type": "object",
+        "properties": {},
+        "required": []
+    })))
+}
+
+pub(crate) fn mysql_explain_plan_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(json!({
+        "type": "object",
+        "properties": {
+            "sql": {
+                "type": "string",
+                "description": "The SELECT statement to explain. Must be a single SELECT (not INSERT/UPDATE/DDL)."
+            },
+            "session": {
+                "type": "string",
+                "description": "Named session to use (default: 'default')."
+            }
+        },
+        "required": ["sql"]
+    })))
+}
+
+/// Serialize a JSON value to pretty-printed text and wrap in a successful CallToolResult.
+/// Returns a CallToolResult::error on serialization failure.
+pub(crate) fn serialize_response(value: &serde_json::Value) -> rmcp::model::CallToolResult {
+    match serde_json::to_string_pretty(value) {
+        Ok(s) => rmcp::model::CallToolResult::success(vec![Content::text(s)]),
+        Err(e) => {
+            tracing::error!("Failed to serialize response: {}", e);
+            rmcp::model::CallToolResult::error(vec![Content::text(format!(
+                "Internal error: failed to serialize response: {}", e
+            ))])
+        }
+    }
+}
