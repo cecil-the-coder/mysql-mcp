@@ -83,8 +83,6 @@ pub struct ParsedStatement {
     pub target_schema: Option<String>,
     /// The primary FROM table name for SELECT statements (if extractable)
     pub target_table: Option<String>,
-    /// The original SQL string (retained for diagnostics/logging)
-    pub sql: String,
 
     // Cached AST-derived fields populated once during parse_sql().
     // These allow check_limit_presence() and related helpers to reuse parse results

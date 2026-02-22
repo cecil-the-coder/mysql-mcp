@@ -172,7 +172,6 @@ pub(super) fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedSt
         statement_type,
         target_schema,
         target_table,
-        sql: sql.to_string(),
         has_limit,
         has_where,
         has_wildcard,
