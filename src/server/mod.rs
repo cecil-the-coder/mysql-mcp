@@ -17,7 +17,6 @@ use rmcp::{
 use tokio::sync::Mutex;
 
 use crate::config::Config;
-use crate::db::DbPool;
 use crate::schema::SchemaIntrospector;
 
 mod tool_schemas;
@@ -55,16 +54,15 @@ pub(crate) fn is_private_host(host: &str) -> bool {
 
 pub struct McpServer {
     pub config: Arc<Config>,
-    pub db: Arc<DbPool>,
+    pub db: Arc<sqlx::MySqlPool>,
     pub introspector: Arc<SchemaIntrospector>,
     store: SessionStore,
 }
 
 impl McpServer {
-    pub fn new(config: Arc<Config>, db: Arc<DbPool>) -> Self {
-        let pool = Arc::new(db.pool().clone());
+    pub fn new(config: Arc<Config>, db: Arc<sqlx::MySqlPool>) -> Self {
         let introspector = Arc::new(SchemaIntrospector::new(
-            pool,
+            db.clone(),
             config.pool.cache_ttl_secs,
         ));
         let sessions: Arc<Mutex<HashMap<String, sessions::Session>>> = Arc::new(Mutex::new(HashMap::new()));

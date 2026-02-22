@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 use anyhow::Result;
 use sqlx::mysql::{MySqlPool, MySqlPoolOptions, MySqlConnectOptions, MySqlSslMode};
@@ -15,22 +14,7 @@ const POOL_IDLE_TIMEOUT_SECS: u64 = 300;
 /// Maximum lifetime of any pooled connection before it is recycled.
 const POOL_MAX_LIFETIME_SECS: u64 = 1800;
 
-pub struct DbPool {
-    pool: MySqlPool,
-}
-
-impl DbPool {
-    pub async fn new(config: Arc<Config>) -> Result<Self> {
-        let pool = build_pool(&config).await?;
-        Ok(Self { pool })
-    }
-
-    pub fn pool(&self) -> &MySqlPool {
-        &self.pool
-    }
-}
-
-async fn build_pool(config: &Config) -> Result<MySqlPool> {
+pub async fn build_pool(config: &Config) -> Result<MySqlPool> {
     let connect_options = build_connect_options(config)?
         .statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
 

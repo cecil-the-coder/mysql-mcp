@@ -5,7 +5,6 @@ use serde_json::json;
 use tokio::sync::Mutex;
 
 use crate::config::Config;
-use crate::db::DbPool;
 use crate::schema::SchemaIntrospector;
 use super::tool_schemas::serialize_response;
 
@@ -31,7 +30,7 @@ pub(crate) struct SessionContext {
 pub(crate) struct SessionStore {
     pub(crate) sessions: Arc<Mutex<HashMap<String, Session>>>,
     pub(crate) config: Arc<Config>,
-    pub(crate) db: Arc<DbPool>,
+    pub(crate) db: Arc<sqlx::MySqlPool>,
     pub(crate) introspector: Arc<SchemaIntrospector>,
 }
 
@@ -65,7 +64,7 @@ impl SessionStore {
             .unwrap_or("default");
         if name == "default" || name.is_empty() {
             return Ok(SessionContext {
-                pool: self.db.pool().clone(),
+                pool: self.db.as_ref().clone(),
                 schema: self.introspector.clone(),
                 database: self.config.connection.database.clone(),
             });

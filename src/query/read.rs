@@ -45,8 +45,6 @@ pub async fn execute_read_query(
         vec![]
     };
 
-    let use_transaction = force_readonly_transaction;
-
     // Apply max_rows cap: append LIMIT only for SELECT statements (SHOW/EXPLAIN do not
     // support LIMIT in MySQL). Use the pre-cached has_limit from ParsedStatement — no
     // re-parse needed here.
@@ -63,7 +61,7 @@ pub async fn execute_read_query(
 
     // DB phase
     let db_start = Instant::now();
-    let rows: Vec<sqlx::mysql::MySqlRow> = if use_transaction {
+    let rows: Vec<sqlx::mysql::MySqlRow> = if force_readonly_transaction {
         // 4-RTT path: SET TRANSACTION READ ONLY → BEGIN → SQL → COMMIT
         // For MySQL, SET TRANSACTION READ ONLY must be called before BEGIN.
         let mut conn = pool.acquire().await?;

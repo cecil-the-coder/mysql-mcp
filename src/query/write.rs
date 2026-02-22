@@ -10,6 +10,18 @@ pub struct WriteResult {
     pub parse_warnings: Vec<String>,
 }
 
+impl WriteResult {
+    fn from_query_result(result: sqlx::mysql::MySqlQueryResult, elapsed: u64, parse_warnings: Vec<String>) -> Self {
+        let last_insert_id = result.last_insert_id();
+        Self {
+            rows_affected: result.rows_affected(),
+            last_insert_id: (last_insert_id > 0).then_some(last_insert_id),
+            execution_time_ms: elapsed,
+            parse_warnings,
+        }
+    }
+}
+
 /// Execute a DML write statement (INSERT, UPDATE, DELETE) in a transaction.
 ///
 /// `parsed` is the already-parsed statement from the caller; warnings are
@@ -29,14 +41,7 @@ pub async fn execute_write_query(
     tx.commit().await?;
 
     let elapsed = start.elapsed().as_millis() as u64;
-
-    let last_insert_id = result.last_insert_id();
-    Ok(WriteResult {
-        rows_affected: result.rows_affected(),
-        last_insert_id: (last_insert_id > 0).then_some(last_insert_id),
-        execution_time_ms: elapsed,
-        parse_warnings,
-    })
+    Ok(WriteResult::from_query_result(result, elapsed, parse_warnings))
 }
 
 /// Execute a DDL statement (CREATE, ALTER, DROP, TRUNCATE).
@@ -51,13 +56,7 @@ pub async fn execute_ddl_query(
     // DDL auto-commits; just execute directly
     let result = sqlx::query(sql).execute(pool).await?;
     let elapsed = start.elapsed().as_millis() as u64;
-    let last_insert_id = result.last_insert_id();
-    Ok(WriteResult {
-        rows_affected: result.rows_affected(),
-        last_insert_id: (last_insert_id > 0).then_some(last_insert_id),
-        execution_time_ms: elapsed,
-        parse_warnings: vec![],
-    })
+    Ok(WriteResult::from_query_result(result, elapsed, vec![]))
 }
 
 #[cfg(test)]
@@ -120,15 +119,4 @@ mod integration_tests {
         assert!(result.is_err());
     }
 
-    // mysql-mcp-t69: timezone handling - requires special MySQL server config
-    #[tokio::test]
-    async fn test_timezone_handling_stub() {
-        eprintln!("TODO: requires special setup (MySQL server with non-UTC timezone configured)");
-    }
-
-    // mysql-mcp-1hq: Unix socket connection - requires special environment
-    #[tokio::test]
-    async fn test_unix_socket_connection_stub() {
-        eprintln!("TODO: requires special setup (Unix socket path configured in environment)");
-    }
 }

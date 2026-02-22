@@ -281,7 +281,8 @@ mod e2e_session_tests {
                 }
             }
         })).await;
-        let _ = read_response(&mut reader).await; // consume connect response
+        let connect_resp = read_response(&mut reader).await.expect("No response to mysql_connect for sess2");
+        assert_ne!(connect_resp["result"]["isError"], true, "mysql_connect (sess2) should succeed, got: {}", connect_resp);
 
         // --- mysql_query: no session param → routes to default ---
         send_message(&mut stdin, &json!({

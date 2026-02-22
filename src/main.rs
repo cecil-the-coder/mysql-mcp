@@ -39,12 +39,12 @@ async fn main() -> Result<()> {
     info!("Configuration loaded");
 
     // Connect to the database
-    let db = Arc::new(db::DbPool::new(config.clone()).await?);
+    let db = Arc::new(db::build_pool(&config).await?);
     info!("Database pool created");
 
     // Warm up the connection pool in the background
     if config.pool.warmup_connections > 0 {
-        let warmup_pool = db.pool().clone();
+        let warmup_pool = (*db).clone();
         let n = config.pool.warmup_connections;
         tokio::spawn(async move {
             for i in 0..n {
