@@ -9,6 +9,10 @@ license = "MIT"
 name = "mysql-mcp"
 path = "src/main.rs"
 
+[lib]
+name = "mysql_mcp"
+path = "src/lib.rs"
+
 [dependencies]
 rmcp = { version = "0.16", features = ["server", "transport-io"] }
 sqlx = { version = "0.8", features = ["mysql", "runtime-tokio", "tls-native-tls", "chrono"] }
@@ -25,3 +29,8 @@ sqlparser = { version = "0.53", features = [] }
 
 [dev-dependencies]
 testcontainers-modules = { version = "0.14.0", features = ["mysql"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "sql_parsing"
+harness = false
