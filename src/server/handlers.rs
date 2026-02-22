@@ -294,12 +294,11 @@ impl SessionStore {
                             .unwrap_or(true);
                         if is_full_scan && no_index {
                             if let Some(ref tname) = parsed.target_table {
-                                let where_cols = parsed.where_columns.clone();
-                                if !where_cols.is_empty() {
+                                if !parsed.where_columns.is_empty() {
                                     suggestions = query_introspector.generate_index_suggestions(
                                         tname,
                                         session_db.as_deref(),
-                                        &where_cols,
+                                        &parsed.where_columns,
                                     ).await;
                                 }
                             }

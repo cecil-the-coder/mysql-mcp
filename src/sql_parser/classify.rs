@@ -323,17 +323,15 @@ pub(super) fn collect_where_info(
 ) {
     match expr {
         Expr::Identifier(ident) => {
-            let name = ident.value.clone();
-            if seen.insert(name.to_lowercase()) {
-                cols.push(name);
+            if seen.insert(ident.value.to_lowercase()) {
+                cols.push(ident.value.clone());
             }
         }
         Expr::CompoundIdentifier(parts) => {
             // Take the last part as the column name (e.g., table.column -> column)
             if let Some(last) = parts.last() {
-                let name = last.value.clone();
-                if seen.insert(name.to_lowercase()) {
-                    cols.push(name);
+                if seen.insert(last.value.to_lowercase()) {
+                    cols.push(last.value.clone());
                 }
             }
         }

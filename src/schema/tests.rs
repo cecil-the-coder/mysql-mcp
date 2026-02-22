@@ -45,12 +45,8 @@ async fn test_schema_cache_ttl_zero_disables_cache() {
     sqlx::query(&format!("DROP TABLE IF EXISTS {marker}"))
         .execute(pool.as_ref()).await.ok();
 
-    let before_names: Vec<&str> = tables_before.iter().map(|t| t.name.as_str()).collect();
-    let after_names: Vec<&str> = tables_after.iter().map(|t| t.name.as_str()).collect();
-    assert!(!before_names.contains(&marker.as_str()),
-        "marker table should not exist before creation");
-    assert!(after_names.contains(&marker.as_str()),
-        "TTL=0 must re-fetch: new table should be visible after creation");
+    assert!(!tables_before.iter().any(|t| t.name == marker), "new table should not appear in pre-DDL list");
+    assert!(tables_after.iter().any(|t| t.name == marker), "new table should appear after DDL");
 }
 
 // mysql-mcp-1au: get columns for a known table

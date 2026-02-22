@@ -254,7 +254,7 @@ mod tests {
         }));
         let result = parse_v2(&v).unwrap();
         assert!(result.full_table_scan, "child table scan detected");
-        assert!(result.extra_flags.contains(&"Using filesort".to_string()), "should flag filesort");
+        assert!(result.extra_flags.iter().any(|s| s == "Using filesort"), "should flag filesort");
     }
 
     #[test]

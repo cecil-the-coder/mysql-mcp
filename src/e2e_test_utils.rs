@@ -11,17 +11,13 @@ pub(crate) fn binary_path() -> Option<std::path::PathBuf> {
     // Prefer the release binary: it reflects `cargo build --release` runs and is
     // the same binary used in production. The debug binary can lag behind if only
     // the release target was rebuilt.
-    let candidates = [
+    [
         "./target/release/mysql-mcp",
         "./target/debug/mysql-mcp",
-    ];
-    for path in &candidates {
-        let p = std::path::PathBuf::from(path);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
+    ]
+    .iter()
+    .find(|path| std::path::Path::new(path).exists())
+    .map(std::path::PathBuf::from)
 }
 
 pub(crate) async fn send_message(stdin: &mut tokio::process::ChildStdin, msg: &Value) {

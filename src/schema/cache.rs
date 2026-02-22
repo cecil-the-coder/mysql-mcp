@@ -81,7 +81,7 @@ where
                     refreshing_guard.insert(cache_key.clone());
                     drop(refreshing_guard);
 
-                    let owned_key = cache_key.clone();
+                    let owned_key = cache_key;
                     let cache_spawn = Arc::clone(&cache);
                     let refreshing_spawn = Arc::clone(&refreshing);
                     tokio::spawn(async move {
