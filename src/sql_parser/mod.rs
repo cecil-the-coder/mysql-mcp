@@ -123,7 +123,7 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
     }
 
     let stmt = &statements[0];
-    classify::classify_statement(stmt, sql)
+    classify::classify_statement(stmt)
 }
 
 /// Inspect a parsed write statement and return safety warnings.

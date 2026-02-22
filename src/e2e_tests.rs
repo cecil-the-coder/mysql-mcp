@@ -20,7 +20,7 @@ mod e2e_tests {
         };
 
         let Some(test_db) = setup_test_db().await else { return; };
-        let mut child = spawn_server(&binary, &test_db);
+        let mut child = spawn_server(&binary, &test_db, &[]);
 
         let mut stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
@@ -57,7 +57,7 @@ mod e2e_tests {
         };
 
         let Some(test_db) = setup_test_db().await else { return; };
-        let mut child = spawn_server(&binary, &test_db);
+        let mut child = spawn_server(&binary, &test_db, &[]);
 
         let mut stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
@@ -86,7 +86,7 @@ mod e2e_tests {
         };
 
         let Some(test_db) = setup_test_db().await else { return; };
-        let mut child = spawn_server(&binary, &test_db);
+        let mut child = spawn_server(&binary, &test_db, &[]);
 
         let mut stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
@@ -145,7 +145,7 @@ mod e2e_tests {
         };
 
         let Some(test_db) = setup_test_db().await else { return; };
-        let mut child = spawn_server(&binary, &test_db);
+        let mut child = spawn_server(&binary, &test_db, &[]);
 
         let mut stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
@@ -207,7 +207,7 @@ mod e2e_tests {
         };
 
         let Some(test_db) = setup_test_db().await else { return; };
-        let mut child = spawn_server(&binary, &test_db);
+        let mut child = spawn_server(&binary, &test_db, &[]);
 
         let mut stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();

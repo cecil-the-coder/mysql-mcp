@@ -9,7 +9,7 @@ use super::ParsedStatement;
 use super::StatementType;
 
 /// Classify a parsed AST statement, computing all cached analysis fields in one pass.
-pub(super) fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedStatement> {
+pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
     let mut has_limit = false;
     let mut has_where = false;
     let mut has_wildcard = false;

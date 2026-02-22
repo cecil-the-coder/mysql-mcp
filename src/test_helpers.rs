@@ -5,15 +5,6 @@ use testcontainers_modules::{
     testcontainers::{runners::AsyncRunner, ContainerAsync},
 };
 
-/// Build MySqlConnectOptions from a Config, applying the correct SSL mode.
-/// Delegates to `crate::db::build_connect_options` to avoid duplicating SSL logic.
-fn connect_options_from_config(config: &Config) -> sqlx::mysql::MySqlConnectOptions {
-    let mut opts = crate::db::build_connect_options(config)
-        .expect("build_connect_options failed in test helper");
-    opts = opts.statement_cache_capacity(crate::db::STATEMENT_CACHE_CAPACITY);
-    opts
-}
-
 /// Global semaphore that limits how many tests may CREATE a new MySQL connection
 /// simultaneously. MySQL's server-side `connect_timeout` (default 10 s) drops
 /// connections whose SSL+auth handshake takes too long. Under heavy parallel
@@ -46,7 +37,12 @@ pub async fn make_pool(test_db: &TestDb, max_connections: u32) -> sqlx::MySqlPoo
     MySqlPoolOptions::new()
         .max_connections(max_connections)
         .acquire_timeout(std::time::Duration::from_secs(120))
-        .connect_lazy_with(connect_options_from_config(&test_db.config))
+        .connect_lazy_with({
+            let mut opts = crate::db::build_connect_options(&test_db.config)
+                .expect("build_connect_options failed in test helper");
+            opts = opts.statement_cache_capacity(crate::db::STATEMENT_CACHE_CAPACITY);
+            opts
+        })
 }
 
 /// Holds a test MySQL pool and optionally the container keeping it alive.
@@ -105,7 +101,12 @@ pub async fn setup_test_db() -> Option<TestDb> {
             .max_connections(1)
             .acquire_timeout(std::time::Duration::from_secs(120))
             .test_before_acquire(false)
-            .connect_with(connect_options_from_config(&config))
+            .connect_with({
+                let mut opts = crate::db::build_connect_options(&config)
+                    .expect("build_connect_options failed in test helper");
+                opts = opts.statement_cache_capacity(crate::db::STATEMENT_CACHE_CAPACITY);
+                opts
+            })
             .await
         {
             Ok(p) => p,

@@ -35,14 +35,10 @@ pub(crate) async fn read_response(reader: &mut BufReader<tokio::process::ChildSt
     }
 }
 
-pub(crate) fn spawn_server(binary: &std::path::Path, test_db: &crate::test_helpers::TestDb) -> tokio::process::Child {
-    spawn_server_with_extra_env(binary, test_db, &[])
-}
-
-/// Like `spawn_server` but also sets additional environment variables before
-/// spawning. `extra_env` is a slice of `(key, value)` pairs applied after
+/// Spawns the mysql-mcp binary with the given test DB credentials.
+/// `extra_env` is a slice of `(key, value)` pairs applied after
 /// the standard MySQL connection env vars.
-pub(crate) fn spawn_server_with_extra_env(
+pub(crate) fn spawn_server(
     binary: &std::path::Path,
     test_db: &crate::test_helpers::TestDb,
     extra_env: &[(&str, &str)],

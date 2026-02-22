@@ -7,7 +7,7 @@ mod e2e_session_tests {
     use tokio::io::BufReader;
     use serde_json::json;
     use crate::test_helpers::setup_test_db;
-    use crate::e2e_test_utils::{binary_path, send_message, read_response, spawn_server_with_extra_env, do_handshake};
+    use crate::e2e_test_utils::{binary_path, send_message, read_response, spawn_server, do_handshake};
 
     // -------------------------------------------------------------------------
     // Test 6 (error path): multi-statement SQL must be rejected before it
@@ -21,7 +21,7 @@ mod e2e_session_tests {
         };
 
         let Some(test_db) = setup_test_db().await else { return; };
-        let mut child = spawn_server_with_extra_env(&binary, &test_db, &[]);
+        let mut child = spawn_server(&binary, &test_db, &[]);
 
         let mut stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
@@ -84,7 +84,7 @@ mod e2e_session_tests {
             return;
         }
 
-        let mut child = spawn_server_with_extra_env(
+        let mut child = spawn_server(
             &binary,
             &test_db,
             &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],
@@ -249,7 +249,7 @@ mod e2e_session_tests {
             return;
         }
 
-        let mut child = spawn_server_with_extra_env(
+        let mut child = spawn_server(
             &binary,
             &test_db,
             &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],
@@ -360,7 +360,7 @@ mod e2e_session_tests {
         };
 
         let Some(test_db) = setup_test_db().await else { return; };
-        let mut child = spawn_server_with_extra_env(
+        let mut child = spawn_server(
             &binary,
             &test_db,
             &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],

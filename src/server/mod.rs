@@ -67,7 +67,7 @@ impl McpServer {
             pool,
             config.pool.cache_ttl_secs,
         ));
-        let sessions = Arc::new(Mutex::new(HashMap::new()));
+        let sessions: Arc<Mutex<HashMap<String, sessions::Session>>> = Arc::new(Mutex::new(HashMap::new()));
 
         // Background task: drop sessions idle for > 10 minutes (600 s).
         // "default" is never dropped.
