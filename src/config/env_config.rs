@@ -80,12 +80,12 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
     for (key, val) in std::env::vars() {
         if let Some(schema_name) = key.strip_prefix("MYSQL_SCHEMA_").and_then(|s| s.strip_suffix("_PERMISSIONS")) {
             let schema_name = schema_name.to_lowercase();
-            let has_op = |op: &str| val.split(',').any(|s| s.trim() == op);
+            let ops: Vec<&str> = val.split(',').map(|s| s.trim()).collect();
             let perms = SchemaPermissions {
-                allow_insert: Some(has_op("insert")),
-                allow_update: Some(has_op("update")),
-                allow_delete: Some(has_op("delete")),
-                allow_ddl: Some(has_op("ddl")),
+                allow_insert: Some(ops.contains(&"insert")),
+                allow_update: Some(ops.contains(&"update")),
+                allow_delete: Some(ops.contains(&"delete")),
+                allow_ddl: Some(ops.contains(&"ddl")),
             };
             map.insert(schema_name, perms);
         }

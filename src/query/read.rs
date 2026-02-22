@@ -104,13 +104,7 @@ pub async fn execute_read_query(
                 // Tier is computed inside parse_v2 based on full_table_scan and
                 // rows_examined_estimate — not wall-clock time, which includes
                 // network RTT and tells the LLM nothing about query efficiency.
-                Some(serde_json::json!({
-                    "full_table_scan": explain_result.full_table_scan,
-                    "index_used": explain_result.index_used,
-                    "rows_examined_estimate": explain_result.rows_examined_estimate,
-                    "extra_flags": explain_result.extra_flags,
-                    "tier": explain_result.tier,
-                }))
+                serde_json::to_value(explain_result).ok()
             }
             Err(e) => {
                 tracing::warn!(sql = %&sql[..sql.len().min(200)], error = %e, "EXPLAIN failed; continuing without plan");
