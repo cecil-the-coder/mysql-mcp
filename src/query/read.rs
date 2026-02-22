@@ -45,10 +45,7 @@ pub async fn execute_read_query(
         vec![]
     };
 
-    let use_transaction = force_readonly_transaction || !matches!(
-        stmt_type,
-        StatementType::Select | StatementType::Show | StatementType::Explain
-    );
+    let use_transaction = force_readonly_transaction;
 
     // Apply max_rows cap: append LIMIT only for SELECT statements (SHOW/EXPLAIN do not
     // support LIMIT in MySQL). Use the pre-cached has_limit from ParsedStatement — no

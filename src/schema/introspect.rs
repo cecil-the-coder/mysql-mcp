@@ -19,7 +19,7 @@ fn key_matches_table(key: &str, table: &str) -> bool {
 
 impl SchemaIntrospector {
     pub fn new(pool: Arc<sqlx::MySqlPool>, cache_ttl_secs: u64) -> Self {
-        use std::collections::{HashMap, HashSet};
+        use std::collections::HashMap;
         use tokio::sync::Mutex;
         Self {
             inner: Arc::new(SchemaCache {
@@ -29,10 +29,6 @@ impl SchemaIntrospector {
                 columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 indexed_columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 composite_indexes_cache: Arc::new(Mutex::new(HashMap::new())),
-                tables_refreshing: Arc::new(Mutex::new(HashSet::new())),
-                columns_refreshing: Arc::new(Mutex::new(HashSet::new())),
-                indexed_columns_refreshing: Arc::new(Mutex::new(HashSet::new())),
-                composite_indexes_refreshing: Arc::new(Mutex::new(HashSet::new())),
             }),
         }
     }
@@ -44,7 +40,6 @@ impl SchemaIntrospector {
 
         get_cached_or_refresh(
             Arc::clone(&self.inner.tables_cache),
-            Arc::clone(&self.inner.tables_refreshing),
             cache_key,
             self.inner.cache_ttl,
             move || {
@@ -57,8 +52,7 @@ impl SchemaIntrospector {
 
     /// Return all columns that have at least one index on the given table.
     /// Runs `SHOW INDEX FROM {table}` (qualified with database if provided).
-    /// Results are cached with the same TTL as the column cache, using a
-    /// stale-while-revalidate strategy identical to `get_columns`.
+    /// Results are cached with the same TTL as the column cache.
     pub async fn list_indexed_columns(&self, table: &str, database: Option<&str>) -> Result<Vec<String>> {
         let cache_key = format!("{}.{}", database.unwrap_or(""), table);
         let pool = Arc::clone(&self.inner.pool);
@@ -67,7 +61,6 @@ impl SchemaIntrospector {
 
         get_cached_or_refresh(
             Arc::clone(&self.inner.indexed_columns_cache),
-            Arc::clone(&self.inner.indexed_columns_refreshing),
             cache_key,
             self.inner.cache_ttl,
             move || {
@@ -83,7 +76,7 @@ impl SchemaIntrospector {
     /// Each entry represents one index: a named, ordered list of columns.
     /// Columns are ordered by their position within the index (SEQ_IN_INDEX).
     /// The PRIMARY key is included.
-    /// Results are cached with the same TTL and strategy as `list_indexed_columns`.
+    /// Results are cached with the same TTL as `list_indexed_columns`.
     pub async fn list_composite_indexes(&self, table: &str, database: Option<&str>) -> Result<Vec<IndexDef>> {
         let cache_key = format!("{}.{}", database.unwrap_or(""), table);
         let pool = Arc::clone(&self.inner.pool);
@@ -92,7 +85,6 @@ impl SchemaIntrospector {
 
         get_cached_or_refresh(
             Arc::clone(&self.inner.composite_indexes_cache),
-            Arc::clone(&self.inner.composite_indexes_refreshing),
             cache_key,
             self.inner.cache_ttl,
             move || {
@@ -112,7 +104,6 @@ impl SchemaIntrospector {
 
         get_cached_or_refresh(
             Arc::clone(&self.inner.columns_cache),
-            Arc::clone(&self.inner.columns_refreshing),
             cache_key,
             self.inner.cache_ttl,
             move || {
