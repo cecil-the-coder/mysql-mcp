@@ -196,15 +196,14 @@ impl SessionStore {
         &self,
         args: serde_json::Map<String, serde_json::Value>,
     ) -> anyhow::Result<CallToolResult, rmcp::ErrorData> {
-        let name = match args.get("name").and_then(|v| v.as_str()) {
-            Some(n) => n.to_string(),
-            None => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: name")])),
+        let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
+            return Ok(CallToolResult::error(vec![Content::text("Missing required argument: name")]));
         };
         if name == "default" {
             return Ok(CallToolResult::error(vec![Content::text("The default session cannot be closed")]));
         }
         let mut sessions = self.sessions.lock().await;
-        if sessions.remove(&name).is_some() {
+        if sessions.remove(name).is_some() {
             Ok(CallToolResult::success(vec![
                 Content::text(format!("Session '{}' closed", name)),
             ]))

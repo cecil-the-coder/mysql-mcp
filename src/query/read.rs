@@ -138,9 +138,7 @@ pub async fn execute_read_query(
 fn row_to_json(row: &sqlx::mysql::MySqlRow) -> Map<String, Value> {
     let mut map = Map::new();
     for (i, col) in row.columns().iter().enumerate() {
-        let col_name = col.name().to_string();
-        let val = column_to_json(row, i, col);
-        map.insert(col_name, val);
+        map.insert(col.name().to_string(), column_to_json(row, i, col));
     }
     map
 }

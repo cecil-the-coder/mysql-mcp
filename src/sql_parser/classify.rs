@@ -94,7 +94,7 @@ pub(super) fn classify_statement(stmt: &Statement, sql: &str) -> Result<ParsedSt
         Statement::Drop { names, .. } => {
             let schema = names
                 .first()
-                .and_then(|n| extract_schema_from_object_name(n));
+                .and_then(extract_schema_from_object_name);
             (StatementType::Drop, schema, None)
         }
 
@@ -288,11 +288,7 @@ fn expr_has_aggregate(expr: &Expr) -> bool {
 
 pub(super) fn extract_schema_from_object_name(name: &ObjectName) -> Option<String> {
     // MySQL fully-qualified: schema.table has 2 parts; the first is schema
-    if name.0.len() >= 2 {
-        Some(name.0[0].value.clone())
-    } else {
-        None
-    }
+    (name.0.len() >= 2).then(|| name.0[0].value.clone())
 }
 
 pub(super) fn extract_schema_from_table_factor(factor: &TableFactor) -> Option<String> {

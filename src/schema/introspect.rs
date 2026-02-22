@@ -10,6 +10,13 @@ pub struct SchemaIntrospector {
     pub(crate) inner: Arc<SchemaCache>,
 }
 
+/// Returns true if the cache key's table segment matches `table` (case-insensitive).
+/// Cache keys have the form "{database}.{table}" where database may be empty.
+fn key_matches_table(key: &str, table: &str) -> bool {
+    let key_table = key.splitn(2, '.').nth(1).unwrap_or(key);
+    key_table.eq_ignore_ascii_case(table)
+}
+
 impl SchemaIntrospector {
     pub fn new(pool: Arc<sqlx::MySqlPool>, cache_ttl_secs: u64) -> Self {
         use std::collections::{HashMap, HashSet};
@@ -225,28 +232,17 @@ impl SchemaIntrospector {
             self.invalidate_all().await;
             return;
         }
-        // Cache keys have the form "{database}.{table}" where database may be empty.
-        // Remove every entry whose table-name segment (after the first '.') matches.
         {
             let mut cache = self.inner.columns_cache.lock().await;
-            cache.retain(|key, _| {
-                let key_table = key.splitn(2, '.').nth(1).unwrap_or(key.as_str());
-                !key_table.eq_ignore_ascii_case(table)
-            });
+            cache.retain(|key, _| !key_matches_table(key, table));
         }
         {
             let mut idx_cache = self.inner.indexed_columns_cache.lock().await;
-            idx_cache.retain(|key, _| {
-                let key_table = key.splitn(2, '.').nth(1).unwrap_or(key.as_str());
-                !key_table.eq_ignore_ascii_case(table)
-            });
+            idx_cache.retain(|key, _| !key_matches_table(key, table));
         }
         {
             let mut cidx_cache = self.inner.composite_indexes_cache.lock().await;
-            cidx_cache.retain(|key, _| {
-                let key_table = key.splitn(2, '.').nth(1).unwrap_or(key.as_str());
-                !key_table.eq_ignore_ascii_case(table)
-            });
+            cidx_cache.retain(|key, _| !key_matches_table(key, table));
         }
         // Also clear the tables list so row-count / existence info is refreshed.
         let mut tables_cache = self.inner.tables_cache.lock().await;
