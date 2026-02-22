@@ -267,15 +267,14 @@ fn expr_has_aggregate(expr: &Expr) -> bool {
             .name
             .0
             .last()
-            .map(|id| {
+            .is_some_and(|id| {
                 let v = id.value.as_str();
                 v.eq_ignore_ascii_case("COUNT")
                     || v.eq_ignore_ascii_case("SUM")
                     || v.eq_ignore_ascii_case("AVG")
                     || v.eq_ignore_ascii_case("MIN")
                     || v.eq_ignore_ascii_case("MAX")
-            })
-            .unwrap_or(false),
+            }),
         Expr::BinaryOp { left, right, .. } => {
             expr_has_aggregate(left) || expr_has_aggregate(right)
         }
@@ -361,13 +360,10 @@ pub(super) fn collect_where_info(
         | Expr::ILike { expr: like_expr, pattern, .. } => {
             // Detect a leading-wildcard pattern string literal.
             if let Expr::Value(val) = pattern.as_ref() {
-                let s = match val {
-                    Value::SingleQuotedString(s) => s.as_str(),
-                    Value::DoubleQuotedString(s) => s.as_str(),
-                    _ => "",
-                };
-                if s.starts_with('%') {
-                    *has_leading_wildcard = true;
+                if let Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) = val {
+                    if s.starts_with('%') {
+                        *has_leading_wildcard = true;
+                    }
                 }
             }
             collect_where_info(like_expr, cols, seen, has_leading_wildcard);
