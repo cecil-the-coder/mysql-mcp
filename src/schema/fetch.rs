@@ -95,6 +95,7 @@ pub(crate) async fn fetch_columns(pool: &MySqlPool, table_name: &str, database: 
             r#"SELECT
                 COLUMN_NAME as name,
                 DATA_TYPE as data_type,
+                COLUMN_TYPE as column_type,
                 IS_NULLABLE as is_nullable,
                 COLUMN_DEFAULT as column_default,
                 COLUMN_KEY as column_key,
@@ -113,6 +114,7 @@ pub(crate) async fn fetch_columns(pool: &MySqlPool, table_name: &str, database: 
             r#"SELECT
                 COLUMN_NAME as name,
                 DATA_TYPE as data_type,
+                COLUMN_TYPE as column_type,
                 IS_NULLABLE as is_nullable,
                 COLUMN_DEFAULT as column_default,
                 COLUMN_KEY as column_key,
@@ -131,6 +133,7 @@ pub(crate) async fn fetch_columns(pool: &MySqlPool, table_name: &str, database: 
         ColumnInfo {
             name: is_col_str(row, "name"),
             data_type: is_col_str(row, "data_type"),
+            column_type: is_col_str(row, "column_type"),
             is_nullable: nullable_str == "YES",
             column_default: is_col_str_opt(row, "column_default"),
             column_key: is_col_str_opt(row, "column_key"),

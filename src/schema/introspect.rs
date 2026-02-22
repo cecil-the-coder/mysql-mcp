@@ -169,12 +169,12 @@ impl SchemaIntrospector {
                 let col_list = unindexed_cols.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", ");
                 let idx_suffix = unindexed_cols.iter().map(|c| c.as_str()).collect::<Vec<_>>().join("_");
                 suggestions.push(format!(
-                    "Multiple unindexed WHERE columns on `{}`: [{}].                      Consider a composite index: CREATE INDEX idx_{}_{} ON {}({});",
+                    "Multiple unindexed WHERE columns on `{}`: [{}]. Consider a composite index: CREATE INDEX idx_{}_{} ON {}({});",
                     table, col_list, table, idx_suffix, table, col_list
                 ));
             } else {
                 suggestions.push(format!(
-                    "WHERE columns on `{}` are covered by an existing composite index.                      Ensure the query uses the index by putting the leading column first in the WHERE clause.",
+                    "WHERE columns on `{}` are covered by an existing composite index. Ensure the query uses the index by putting the leading column first in the WHERE clause.",
                     table
                 ));
             }
@@ -182,16 +182,16 @@ impl SchemaIntrospector {
             // Single unindexed column: emit the standard per-column suggestion.
             for col in &unindexed_cols {
                 let low_card = col_info.get(&col.to_lowercase())
-                    .map(|ci| is_low_cardinality_type(&ci.data_type))
+                    .map(|ci| is_low_cardinality_type(&ci.column_type))
                     .unwrap_or(false);
                 if low_card {
                     suggestions.push(format!(
-                        "Column `{}` in WHERE clause on table `{}` has no index,                          but its type has low cardinality (few distinct values).                          An index may not improve performance — the optimizer may prefer                          a full table scan. Consider filtering on a higher-cardinality                          column instead, or use a partial/functional index.",
+                        "Column `{}` in WHERE clause on table `{}` has no index, but its type has low cardinality (few distinct values). An index may not improve performance — the optimizer may prefer a full table scan. Consider filtering on a higher-cardinality column instead, or use a partial/functional index.",
                         col, table
                     ));
                 } else {
                     suggestions.push(format!(
-                        "Column `{}` in WHERE clause on table `{}` has no index.                          Consider: CREATE INDEX idx_{}_{} ON {}({});",
+                        "Column `{}` in WHERE clause on table `{}` has no index. Consider: CREATE INDEX idx_{}_{} ON {}({});",
                         col, table, table, col, table, col
                     ));
                 }
@@ -203,13 +203,13 @@ impl SchemaIntrospector {
             let already_noted = suggestions.iter().any(|s| s.contains(&format!("`{}`", col)));
             if already_noted { continue; }
             let low_card = col_info.get(&col.to_lowercase())
-                .map(|ci| is_low_cardinality_type(&ci.data_type))
+                .map(|ci| is_low_cardinality_type(&ci.column_type))
                 .unwrap_or(false);
             if low_card && indexed_cols.iter().any(|ic| ic.eq_ignore_ascii_case(col)) {
                 suggestions.push(format!(
-                    "Column `{}` on table `{}` is indexed but has low cardinality (type: {}).                      The optimizer may skip this index and perform a full scan.                      Consider reviewing query selectivity.",
+                    "Column `{}` on table `{}` is indexed but has low cardinality (type: {}). The optimizer may skip this index and perform a full scan. Consider reviewing query selectivity.",
                     col, table,
-                    col_info.get(&col.to_lowercase()).map(|ci| ci.data_type.as_str()).unwrap_or("unknown")
+                    col_info.get(&col.to_lowercase()).map(|ci| ci.column_type.as_str()).unwrap_or("unknown")
                 ));
             }
         }

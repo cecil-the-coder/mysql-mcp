@@ -288,65 +288,21 @@ impl SessionStore {
                             .map(|v| v.is_null())
                             .unwrap_or(true);
                         if is_full_scan && no_index {
-                            let where_cols = crate::sql_parser::extract_where_columns(&parsed);
-                            if !where_cols.is_empty() {
-                                if let Some(ref tname) = parsed.target_table {
-                                    let db = session_db.as_deref();
-                                    if let Ok(indexed_cols) = query_introspector.list_indexed_columns(tname, db).await {
-                                        for col in &where_cols {
-                                            if !indexed_cols.iter().any(|ic| ic.eq_ignore_ascii_case(col)) {
-                                                suggestions.push(format!(
-                                                    "Column `{}` in WHERE clause on table `{}` has no index. Consider: CREATE INDEX idx_{}_{} ON {}({});",
-                                                    col, tname, tname, col, tname, col
-                                                ));
-                                            }
-                                        }
-                                    }
+                            if let Some(ref tname) = parsed.target_table {
+                                let where_cols = crate::sql_parser::extract_where_columns(&parsed);
+                                if !where_cols.is_empty() {
+                                    suggestions = query_introspector.generate_index_suggestions(
+                                        tname,
+                                        session_db.as_deref(),
+                                        &where_cols,
+                                    ).await;
                                 }
                             }
                         }
                     }
 
                     // Structured performance log
-                    {
-                        let sql_truncated = if sql.len() > 200 { &sql[..200] } else { &sql };
-                        let plan_tier = result.plan.as_ref()
-                            .and_then(|p| p.get("tier"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("none");
-                        let full_table_scan = result.plan.as_ref()
-                            .and_then(|p| p.get("full_table_scan"))
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
-                        let is_slow = result.execution_time_ms >= self.config.pool.slow_query_threshold_ms;
-                        if is_slow {
-                            tracing::info!(
-                                sql = sql_truncated,
-                                execution_time_ms = result.execution_time_ms,
-                                serialization_time_ms = result.serialization_time_ms,
-                                row_count = result.row_count,
-                                capped = result.capped,
-                                parse_warnings = ?result.parse_warnings,
-                                plan_tier = plan_tier,
-                                full_table_scan = full_table_scan,
-                                suggestions = ?suggestions,
-                                "slow query"
-                            );
-                        } else {
-                            tracing::debug!(
-                                sql = sql_truncated,
-                                execution_time_ms = result.execution_time_ms,
-                                serialization_time_ms = result.serialization_time_ms,
-                                row_count = result.row_count,
-                                capped = result.capped,
-                                parse_warnings = ?result.parse_warnings,
-                                plan_tier = plan_tier,
-                                full_table_scan = full_table_scan,
-                                suggestions = ?suggestions,
-                                "query executed"
-                            );
-                        }
-                    }
+                    log_query_result(&sql, &result, &suggestions, self.config.pool.slow_query_threshold_ms);
 
                     let mut output = json!({
                         "rows": result.rows,
@@ -376,7 +332,7 @@ impl SessionStore {
                 ])),
             }
         } else if parsed.statement_type.is_ddl() {
-            match crate::query::write::execute_ddl_query(&query_pool, &sql, &parsed).await {
+            match crate::query::write::execute_ddl_query(&query_pool, &sql).await {
                 Ok(result) => {
                     // Invalidate the schema cache so subsequent mysql_schema_info /
                     // list_resources calls reflect the DDL change immediately.
@@ -431,5 +387,50 @@ impl SessionStore {
                 ])),
             }
         }
+    }
+}
+
+fn log_query_result(
+    sql: &str,
+    result: &crate::query::read::QueryResult,
+    suggestions: &[String],
+    slow_threshold_ms: u64,
+) {
+    let sql_truncated = if sql.len() > 200 { &sql[..200] } else { sql };
+    let plan_tier = result.plan.as_ref()
+        .and_then(|p| p.get("tier"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("none");
+    let full_table_scan = result.plan.as_ref()
+        .and_then(|p| p.get("full_table_scan"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let is_slow = result.execution_time_ms >= slow_threshold_ms;
+    if is_slow {
+        tracing::info!(
+            sql = sql_truncated,
+            execution_time_ms = result.execution_time_ms,
+            serialization_time_ms = result.serialization_time_ms,
+            row_count = result.row_count,
+            capped = result.capped,
+            parse_warnings = ?result.parse_warnings,
+            plan_tier = plan_tier,
+            full_table_scan = full_table_scan,
+            suggestions = ?suggestions,
+            "slow query"
+        );
+    } else {
+        tracing::debug!(
+            sql = sql_truncated,
+            execution_time_ms = result.execution_time_ms,
+            serialization_time_ms = result.serialization_time_ms,
+            row_count = result.row_count,
+            capped = result.capped,
+            parse_warnings = ?result.parse_warnings,
+            plan_tier = plan_tier,
+            full_table_scan = full_table_scan,
+            suggestions = ?suggestions,
+            "query executed"
+        );
     }
 }

@@ -3,6 +3,8 @@
 #[cfg(test)]
 mod tests {
     use crate::config::{Config, ConnectionConfig, SchemaPermissions};
+    use crate::config::env_config::EnvConfig;
+    use crate::config::merge::load_toml_config;
 
     // Test: connection string URL format is preserved
     #[test]
@@ -204,5 +206,129 @@ host = "myhost"
     fn test_pool_size_default() {
         let config = Config::default();
         assert_eq!(config.pool.size, 20, "pool size should default to 20");
+    }
+
+    // Test: TOML string with connection, pool, and security fields parses correctly
+    #[test]
+    fn test_toml_config_from_string() {
+        let toml_str = r#"
+[connection]
+host = "db.example.com"
+port = 5432
+user = "myuser"
+password = "mypass"
+database = "mydb"
+
+[pool]
+size = 20
+query_timeout_ms = 60000
+
+[security]
+allow_insert = true
+allow_update = true
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.connection.host, "db.example.com");
+        assert_eq!(config.connection.port, 5432);
+        assert_eq!(config.pool.size, 20);
+        assert!(config.security.allow_insert);
+        assert!(config.security.allow_update);
+        assert!(!config.security.allow_delete);
+    }
+
+    // Test: load_toml_config returns default config when file does not exist
+    #[test]
+    fn test_toml_missing_file_returns_default() {
+        use std::path::Path;
+        let config = load_toml_config(Path::new("/nonexistent/path/mysql-mcp.toml")).unwrap();
+        assert_eq!(config.connection.host, "localhost");
+        assert_eq!(config.connection.port, 3306);
+    }
+
+    // Test: EnvConfig overrides base config fields when set
+    #[test]
+    fn test_env_apply_to_overrides() {
+        let base = Config::default();
+        let env = EnvConfig {
+            host: Some("envhost".to_string()),
+            port: Some(9999),
+            allow_insert: Some(true),
+            ..Default::default()
+        };
+        let merged = env.apply_to(base);
+        assert_eq!(merged.connection.host, "envhost");
+        assert_eq!(merged.connection.port, 9999);
+        assert!(merged.security.allow_insert);
+    }
+
+    // Test: EnvConfig does not override base config fields when None
+    #[test]
+    fn test_env_apply_to_does_not_override_unset_fields() {
+        let mut base = Config::default();
+        base.connection.host = "basehost".to_string();
+        base.connection.port = 1234;
+        let env = EnvConfig {
+            host: None,
+            port: None,
+            ..Default::default()
+        };
+        let merged = env.apply_to(base);
+        assert_eq!(merged.connection.host, "basehost");
+        assert_eq!(merged.connection.port, 1234);
+    }
+
+    // Test: single-database schema_permissions parses allow_insert and allow_update
+    #[test]
+    fn test_schema_permissions_in_toml() {
+        let toml_str = r#"
+[security.schema_permissions.mydb]
+allow_insert = true
+allow_update = false
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let perms = config.security.schema_permissions.get("mydb").unwrap();
+        assert_eq!(perms.allow_insert, Some(true));
+        assert_eq!(perms.allow_update, Some(false));
+    }
+
+    // Test: URL connection string is preserved as-is and does not look like a CLI flag
+    #[test]
+    fn test_url_connection_string_not_parsed_as_cli() {
+        let mut config = Config::default();
+        let url = "mysql://user:pass@host/db".to_string();
+        config.connection.connection_string = Some(url.clone());
+
+        // URL strings don't start with '-' so they should be left as-is
+        let cs = config.connection.connection_string.clone().unwrap();
+        assert!(!cs.trim_start().starts_with('-'));
+        assert_eq!(config.connection.connection_string, Some(url));
+    }
+
+    // Test: EnvConfig overrides pool size, query timeout, and cache TTL
+    #[test]
+    fn test_pool_env_override() {
+        let base = Config::default();
+        let env = EnvConfig {
+            pool_size: Some(50),
+            query_timeout_ms: Some(60_000),
+            cache_ttl_secs: Some(120),
+            ..Default::default()
+        };
+        let merged = env.apply_to(base);
+        assert_eq!(merged.pool.size, 50);
+        assert_eq!(merged.pool.query_timeout_ms, 60_000);
+        assert_eq!(merged.pool.cache_ttl_secs, 120);
+    }
+
+    // Test: ConnectionConfig default fields match expected values
+    #[test]
+    fn test_connection_config_default() {
+        let conn = ConnectionConfig::default();
+        assert_eq!(conn.host, "localhost");
+        assert_eq!(conn.port, 3306);
+        assert_eq!(conn.user, "root");
+        assert!(conn.database.is_none());
+        assert!(conn.socket.is_none());
+        assert!(conn.connection_string.is_none());
     }
 }

@@ -51,12 +51,10 @@ pub async fn execute_write_query(
 /// Execute a DDL statement (CREATE, ALTER, DROP, TRUNCATE).
 /// DDL auto-commits in MySQL, so we don't wrap in explicit transaction.
 ///
-/// `parsed` is accepted for API symmetry with `execute_write_query`; DDL
-/// statements currently produce no parse warnings, so it is unused.
+/// DDL statements produce no parse warnings, so no `ParsedStatement` is needed.
 pub async fn execute_ddl_query(
     pool: &MySqlPool,
     sql: &str,
-    _parsed: &ParsedStatement,
 ) -> Result<WriteResult> {
     let start = Instant::now();
     // DDL auto-commits; just execute directly
@@ -113,13 +111,11 @@ mod integration_tests {
         let pool = &test_db.pool;
 
         let create_sql = "CREATE TABLE IF NOT EXISTS test_ddl_temp (id INT)";
-        let create_parsed = crate::sql_parser::parse_sql(create_sql).unwrap();
-        let result = execute_ddl_query(pool, create_sql, &create_parsed).await;
+        let result = execute_ddl_query(pool, create_sql).await;
         assert!(result.is_ok());
 
         let drop_sql = "DROP TABLE IF EXISTS test_ddl_temp";
-        let drop_parsed = crate::sql_parser::parse_sql(drop_sql).unwrap();
-        let drop_result = execute_ddl_query(pool, drop_sql, &drop_parsed).await;
+        let drop_result = execute_ddl_query(pool, drop_sql).await;
         assert!(drop_result.is_ok());
     }
 

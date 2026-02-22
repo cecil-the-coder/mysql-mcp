@@ -37,6 +37,9 @@ pub struct TableInfo {
 pub struct ColumnInfo {
     pub name: String,
     pub data_type: String,
+    /// Full column type including display width and enum values, e.g. `"tinyint(1)"`, `"varchar(255)"`.
+    /// Use this (not `data_type`) for low-cardinality checks.
+    pub column_type: String,
     pub is_nullable: bool,
     pub column_default: Option<String>,
     pub column_key: Option<String>,
@@ -60,7 +63,7 @@ pub fn is_low_cardinality_type(data_type: &str) -> bool {
     // TINYINT(1) is used as BOOLEAN in MySQL; BOOL/BOOLEAN are aliases.
     // ENUM and SET have a fixed, typically small value domain.
     // BIT columns are usually 1-bit flags.
-    matches!(dt.as_str(), "tinyint" | "bool" | "boolean" | "enum" | "set" | "bit")
+    matches!(dt.as_str(), "bool" | "boolean" | "enum" | "set" | "bit")
         || dt.starts_with("tinyint(1)")
 }
 

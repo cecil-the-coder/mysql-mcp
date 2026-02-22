@@ -262,14 +262,16 @@ async fn test_generate_suggestions_low_cardinality() {
 // mysql-mcp-7f3: is_low_cardinality_type helper function
 #[test]
 fn test_is_low_cardinality_type() {
-    assert!(is_low_cardinality_type("tinyint"), "tinyint is low cardinality");
+    assert!(!is_low_cardinality_type("tinyint"), "bare tinyint is NOT low cardinality (256 values)");
     assert!(is_low_cardinality_type("bool"), "bool is low cardinality");
     assert!(is_low_cardinality_type("boolean"), "boolean is low cardinality");
     assert!(is_low_cardinality_type("enum"), "enum is low cardinality");
     assert!(is_low_cardinality_type("set"), "set is low cardinality");
     assert!(is_low_cardinality_type("bit"), "bit is low cardinality");
-    assert!(is_low_cardinality_type("TINYINT"), "TINYINT case-insensitive");
+    assert!(!is_low_cardinality_type("TINYINT"), "bare TINYINT is NOT low cardinality (256 values)");
     assert!(is_low_cardinality_type("ENUM"), "ENUM case-insensitive");
+    assert!(is_low_cardinality_type("tinyint(1)"), "tinyint(1) is low cardinality (boolean alias)");
+    assert!(is_low_cardinality_type("TINYINT(1)"), "TINYINT(1) case-insensitive boolean alias");
 
     assert!(!is_low_cardinality_type("int"), "int is not low cardinality");
     assert!(!is_low_cardinality_type("varchar"), "varchar is not low cardinality");

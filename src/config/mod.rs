@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub mod toml_config;
 pub mod env_config;
 pub mod merge;
 #[cfg(test)]

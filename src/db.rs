@@ -17,13 +17,12 @@ const POOL_MAX_LIFETIME_SECS: u64 = 1800;
 
 pub struct DbPool {
     pool: MySqlPool,
-    pub config: Arc<Config>,
 }
 
 impl DbPool {
     pub async fn new(config: Arc<Config>) -> Result<Self> {
         let pool = build_pool(&config).await?;
-        Ok(Self { pool, config })
+        Ok(Self { pool })
     }
 
     pub fn pool(&self) -> &MySqlPool {

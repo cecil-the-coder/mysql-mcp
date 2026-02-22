@@ -127,7 +127,7 @@ fn walk_plan_node(node: &Value, stats: &mut PlanStats) {
 ///   "json_schema_version": "2.0"
 /// }
 /// ```
-pub(crate) fn parse_v2(v: &Value) -> Result<ExplainResult> {
+fn parse_v2(v: &Value) -> Result<ExplainResult> {
     let query_plan = &v["query_plan"];
 
     let mut stats = PlanStats::new();
