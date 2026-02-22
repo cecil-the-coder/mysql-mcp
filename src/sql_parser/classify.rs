@@ -200,8 +200,9 @@ pub(super) fn compute_select_warnings(
 
     let mut warnings = Vec::new();
 
-    // 1. SELECT * without LIMIT on a real table
-    if has_wildcard && has_named_table && !has_limit {
+    // 1. SELECT * on a real table — advise column selection regardless of LIMIT.
+    // Deliberately does NOT gate on !has_limit so it doesn't overlap with Warning 4.
+    if has_wildcard && has_named_table {
         warnings.push(
             "SELECT * returns all columns — specify needed columns for efficiency".to_string(),
         );
