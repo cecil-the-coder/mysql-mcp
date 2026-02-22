@@ -80,12 +80,12 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
     for (key, val) in std::env::vars() {
         if let Some(schema_name) = key.strip_prefix("MYSQL_SCHEMA_").and_then(|s| s.strip_suffix("_PERMISSIONS")) {
             let schema_name = schema_name.to_lowercase();
-            let ops: Vec<&str> = val.split(',').map(str::trim).collect();
+            let has_op = |op: &str| val.split(',').any(|s| s.trim() == op);
             let perms = SchemaPermissions {
-                allow_insert: Some(ops.contains(&"insert")),
-                allow_update: Some(ops.contains(&"update")),
-                allow_delete: Some(ops.contains(&"delete")),
-                allow_ddl: Some(ops.contains(&"ddl")),
+                allow_insert: Some(has_op("insert")),
+                allow_update: Some(has_op("update")),
+                allow_delete: Some(has_op("delete")),
+                allow_ddl: Some(has_op("ddl")),
             };
             map.insert(schema_name, perms);
         }
@@ -127,14 +127,14 @@ pub struct EnvConfig {
 
 impl EnvConfig {
     /// Apply env var overrides onto a base Config, returning the merged result.
-    pub fn apply_to(&self, mut base: Config) -> Config {
-        if let Some(v) = &self.host { base.connection.host = v.clone(); }
+    pub fn apply_to(self, mut base: Config) -> Config {
+        if let Some(v) = self.host { base.connection.host = v; }
         if let Some(v) = self.port { base.connection.port = v; }
-        if let Some(v) = &self.socket { base.connection.socket = Some(v.clone()); }
-        if let Some(v) = &self.user { base.connection.user = v.clone(); }
-        if let Some(v) = &self.password { base.connection.password = v.clone(); }
-        if let Some(v) = &self.database { base.connection.database = Some(v.clone()); }
-        if let Some(v) = &self.connection_string { base.connection.connection_string = Some(v.clone()); }
+        if let Some(v) = self.socket { base.connection.socket = Some(v); }
+        if let Some(v) = self.user { base.connection.user = v; }
+        if let Some(v) = self.password { base.connection.password = v; }
+        if let Some(v) = self.database { base.connection.database = Some(v); }
+        if let Some(v) = self.connection_string { base.connection.connection_string = Some(v); }
         if let Some(v) = self.pool_size { base.pool.size = v; }
         if let Some(v) = self.query_timeout_ms { base.pool.query_timeout_ms = v; }
         if let Some(v) = self.connect_timeout_ms { base.pool.connect_timeout_ms = v; }
@@ -146,13 +146,13 @@ impl EnvConfig {
         if let Some(v) = self.readonly_transaction { base.pool.readonly_transaction = v; }
         if let Some(v) = self.ssl { base.security.ssl = v; }
         if let Some(v) = self.ssl_accept_invalid_certs { base.security.ssl_accept_invalid_certs = v; }
-        if let Some(v) = &self.ssl_ca { base.security.ssl_ca = Some(v.clone()); }
+        if let Some(v) = self.ssl_ca { base.security.ssl_ca = Some(v); }
         if let Some(v) = self.multi_db_write_mode { base.security.multi_db_write_mode = v; }
         if let Some(v) = self.allow_runtime_connections { base.security.allow_runtime_connections = v; }
         if !self.schema_permissions.is_empty() {
-            base.security.schema_permissions.extend(self.schema_permissions.clone());
+            base.security.schema_permissions.extend(self.schema_permissions);
         }
-        if let Some(v) = &self.performance_hints { base.pool.performance_hints = v.clone(); }
+        if let Some(v) = self.performance_hints { base.pool.performance_hints = v; }
         if let Some(v) = self.slow_query_threshold_ms { base.pool.slow_query_threshold_ms = v; }
         if let Some(v) = self.warmup_connections { base.pool.warmup_connections = v; }
         if let Some(v) = self.max_rows { base.pool.max_rows = v; }
