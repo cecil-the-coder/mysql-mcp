@@ -72,12 +72,6 @@ async fn test_get_columns_for_table() {
         .ok();
 }
 
-// mysql-mcp-26b: pool behavior under concurrent load - stub
-#[tokio::test]
-async fn test_pool_concurrent_queries_stub() {
-    eprintln!("TODO: requires special setup (concurrent load testing with controlled pool size)");
-}
-
 // mysql-mcp-8r8: list_indexed_columns() caching - cache returns same data on second call
 #[tokio::test]
 async fn test_indexed_columns_cache_hit() {

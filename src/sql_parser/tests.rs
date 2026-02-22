@@ -376,11 +376,10 @@ fn test_parse_warnings_no_reparse() {
     // Warnings are pre-computed by parse_sql() and stored in parsed.warnings —
     // verify that parse_sql populates the field correctly for a simple SELECT.
     let parsed = parse_sql("SELECT * FROM users").unwrap();
-    // A SELECT * with no LIMIT and no WHERE should generate at least one warning.
-    // Just confirm the field is accessible and consistent with the flags.
-    assert_eq!(
-        parsed.warnings.is_empty(),
-        !parsed.has_wildcard && parsed.has_limit,
-        "warnings should be non-empty when wildcards or missing LIMIT are present"
+    // SELECT * with no LIMIT and no WHERE triggers multiple warnings.
+    assert!(
+        !parsed.warnings.is_empty(),
+        "SELECT * FROM users with no LIMIT should produce warnings, got: {:?}",
+        parsed.warnings
     );
 }
