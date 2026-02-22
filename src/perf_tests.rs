@@ -26,7 +26,7 @@ pub mod perf_tests {
     }
 
     pub(crate) fn compute(mut samples_ms: Vec<f64>, wall_ms: f64) -> Stats {
-        samples_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        samples_ms.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let n = samples_ms.len();
         let pct = |p: f64| samples_ms[((n as f64 * p) as usize).min(n - 1)];
         Stats {
