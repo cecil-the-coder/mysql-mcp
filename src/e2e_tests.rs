@@ -71,8 +71,7 @@ mod e2e_tests {
 
         let resp = response.expect("No tools/list response");
         let tools = &resp["result"]["tools"];
-        assert!(tools.is_array(), "tools should be an array");
-        let has_mysql_query = tools.as_array().unwrap().iter().any(|t| t["name"] == "mysql_query");
+        let has_mysql_query = tools.as_array().expect("tools should be an array").iter().any(|t| t["name"] == "mysql_query");
         assert!(has_mysql_query, "Should have mysql_query tool");
     }
 
