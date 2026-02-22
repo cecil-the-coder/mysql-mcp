@@ -66,6 +66,16 @@ pub(crate) fn spawn_server(
     cmd.spawn().expect("Failed to spawn mysql-mcp")
 }
 
+/// Extract stdin and stdout from a freshly spawned child process.
+/// Panics if the child was not spawned with piped stdin/stdout.
+pub(crate) fn setup_io(
+    child: &mut tokio::process::Child,
+) -> (tokio::process::ChildStdin, BufReader<tokio::process::ChildStdout>) {
+    let stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    (stdin, BufReader::new(stdout))
+}
+
 /// Helper that performs the standard initialize + notifications/initialized
 /// handshake so subsequent tool calls are accepted by the server.
 pub(crate) async fn do_handshake(

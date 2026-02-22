@@ -4,10 +4,9 @@
 
 #[cfg(test)]
 mod e2e_session_tests {
-    use tokio::io::BufReader;
     use serde_json::json;
     use crate::test_helpers::setup_test_db;
-    use crate::e2e_test_utils::{binary_path, send_message, read_response, spawn_server, do_handshake};
+    use crate::e2e_test_utils::{binary_path, send_message, read_response, spawn_server, do_handshake, setup_io};
 
     // -------------------------------------------------------------------------
     // Test 6 (error path): multi-statement SQL must be rejected before it
@@ -23,9 +22,7 @@ mod e2e_session_tests {
         let Some(test_db) = setup_test_db().await else { return; };
         let mut child = spawn_server(&binary, &test_db, &[]);
 
-        let mut stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let mut reader = BufReader::new(stdout);
+        let (mut stdin, mut reader) = setup_io(&mut child);
 
         do_handshake(&mut stdin, &mut reader).await;
 
@@ -90,9 +87,7 @@ mod e2e_session_tests {
             &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],
         );
 
-        let mut stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let mut reader = BufReader::new(stdout);
+        let (mut stdin, mut reader) = setup_io(&mut child);
 
         do_handshake(&mut stdin, &mut reader).await;
 
@@ -255,9 +250,7 @@ mod e2e_session_tests {
             &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],
         );
 
-        let mut stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let mut reader = BufReader::new(stdout);
+        let (mut stdin, mut reader) = setup_io(&mut child);
 
         do_handshake(&mut stdin, &mut reader).await;
 
@@ -367,9 +360,7 @@ mod e2e_session_tests {
             &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],
         );
 
-        let mut stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let mut reader = BufReader::new(stdout);
+        let (mut stdin, mut reader) = setup_io(&mut child);
 
         do_handshake(&mut stdin, &mut reader).await;
 
@@ -404,6 +395,76 @@ mod e2e_session_tests {
             "Error should mention 'reserved' or 'default', got: {}",
             err_text
         );
+
+        child.kill().await.ok();
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 10: max_sessions limit is enforced at runtime
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_session_max_sessions_enforced() {
+        let Some(binary) = binary_path() else {
+            eprintln!("Skipping E2E: binary not found. Run `cargo build` first.");
+            return;
+        };
+
+        let Some(test_db) = setup_test_db().await else { return; };
+        let mut child = spawn_server(
+            &binary,
+            &test_db,
+            &[
+                ("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true"),
+                ("MYSQL_MAX_SESSIONS", "1"),
+            ],
+        );
+
+        let (mut stdin, mut reader) = setup_io(&mut child);
+        do_handshake(&mut stdin, &mut reader).await;
+
+        let cfg = &test_db.config;
+
+        // First session: should succeed (limit is 1)
+        send_message(&mut stdin, &json!({
+            "jsonrpc": "2.0", "id": 40, "method": "tools/call",
+            "params": {
+                "name": "mysql_connect",
+                "arguments": {
+                    "name": "sess_a",
+                    "host": cfg.connection.host,
+                    "port": cfg.connection.port,
+                    "user": cfg.connection.user,
+                    "password": cfg.connection.password,
+                    "database": cfg.connection.database,
+                    "ssl": cfg.security.ssl,
+                    "ssl_ca": cfg.security.ssl_ca,
+                }
+            }
+        })).await;
+        let resp1 = read_response(&mut reader).await.expect("No response to first mysql_connect");
+        assert_ne!(resp1["result"]["isError"], true, "First session should succeed, got: {}", resp1);
+
+        // Second session: should fail because max_sessions=1 is already reached
+        send_message(&mut stdin, &json!({
+            "jsonrpc": "2.0", "id": 41, "method": "tools/call",
+            "params": {
+                "name": "mysql_connect",
+                "arguments": {
+                    "name": "sess_b",
+                    "host": cfg.connection.host,
+                    "port": cfg.connection.port,
+                    "user": cfg.connection.user,
+                    "password": cfg.connection.password,
+                    "database": cfg.connection.database,
+                    "ssl": cfg.security.ssl,
+                    "ssl_ca": cfg.security.ssl_ca,
+                }
+            }
+        })).await;
+        let resp2 = read_response(&mut reader).await.expect("No response to second mysql_connect");
+        assert_eq!(resp2["result"]["isError"], true, "Second session should fail when limit reached, got: {}", resp2);
+        let err = resp2["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(err.contains("limit") || err.contains("Maximum"), "Error should mention limit, got: {}", err);
 
         child.kill().await.ok();
     }

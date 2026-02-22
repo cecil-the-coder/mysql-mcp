@@ -159,20 +159,22 @@ impl SchemaIntrospector {
         // --- Case 1: Composite index detection ---
         // If there are 2+ unindexed WHERE columns, check whether a composite index
         // would cover them rather than N individual indexes.
+        let esc = |s: &str| format!("`{}`", super::fetch::escape_mysql_identifier(s));
         if unindexed_cols.len() >= 2 {
             let covered_by_existing = composite_indexes.iter().any(|idx| {
                 where_cols.iter().all(|wc| idx.columns.iter().any(|ic| ic.eq_ignore_ascii_case(wc)))
             });
             if !covered_by_existing {
                 let idx_cols: Vec<&str> = unindexed_cols.iter().map(|c| c.as_str()).collect();
+                let esc_cols: Vec<String> = idx_cols.iter().map(|c| esc(c)).collect();
                 suggestions.push(format!(
-                    "Multiple unindexed WHERE columns on `{}`: [{}]. Consider a composite index: CREATE INDEX idx_{}_{} ON {}({});",
-                    table, idx_cols.join(", "), table, idx_cols.join("_"), table, idx_cols.join(", ")
+                    "Multiple unindexed WHERE columns on {}: [{}]. Consider a composite index: CREATE INDEX idx_{}_{} ON {}({});",
+                    esc(table), idx_cols.join(", "), table, idx_cols.join("_"), esc(table), esc_cols.join(", ")
                 ));
             } else {
                 suggestions.push(format!(
-                    "WHERE columns on `{}` are covered by an existing composite index. Ensure the query uses the index by putting the leading column first in the WHERE clause.",
-                    table
+                    "WHERE columns on {} are covered by an existing composite index. Ensure the query uses the index by putting the leading column first in the WHERE clause.",
+                    esc(table)
                 ));
             }
         } else {
@@ -183,13 +185,13 @@ impl SchemaIntrospector {
                     .unwrap_or(false);
                 if low_card {
                     suggestions.push(format!(
-                        "Column `{}` in WHERE clause on table `{}` has no index, but its type has low cardinality (few distinct values). An index may not improve performance — the optimizer may prefer a full table scan. Consider filtering on a higher-cardinality column instead, or use a partial/functional index.",
-                        col, table
+                        "Column {} in WHERE clause on table {} has no index, but its type has low cardinality (few distinct values). An index may not improve performance — the optimizer may prefer a full table scan. Consider filtering on a higher-cardinality column instead, or use a partial/functional index.",
+                        esc(col), esc(table)
                     ));
                 } else {
                     suggestions.push(format!(
-                        "Column `{}` in WHERE clause on table `{}` has no index. Consider: CREATE INDEX idx_{}_{} ON {}({});",
-                        col, table, table, col, table, col
+                        "Column {} in WHERE clause on table {} has no index. Consider: CREATE INDEX idx_{}_{} ON {}({});",
+                        esc(col), esc(table), table, col, esc(table), esc(col)
                     ));
                 }
             }
@@ -197,7 +199,7 @@ impl SchemaIntrospector {
 
         // --- Case 2: Low-cardinality hint for individually indexed columns ---
         for col in where_cols {
-            let already_noted = suggestions.iter().any(|s| s.contains(&format!("`{}`", col)));
+            let already_noted = suggestions.iter().any(|s| s.contains(esc(col).as_str()));
             if already_noted { continue; }
             let col_entry = col_info.get(&col.to_lowercase());
             let low_card = col_entry
@@ -205,8 +207,8 @@ impl SchemaIntrospector {
                 .unwrap_or(false);
             if low_card && indexed_cols.iter().any(|ic| ic.eq_ignore_ascii_case(col)) {
                 suggestions.push(format!(
-                    "Column `{}` on table `{}` is indexed but has low cardinality (type: {}). The optimizer may skip this index and perform a full scan. Consider reviewing query selectivity.",
-                    col, table,
+                    "Column {} on table {} is indexed but has low cardinality (type: {}). The optimizer may skip this index and perform a full scan. Consider reviewing query selectivity.",
+                    esc(col), esc(table),
                     col_entry.map(|ci| ci.column_type.as_str()).unwrap_or("unknown")
                 ));
             }

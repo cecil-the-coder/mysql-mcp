@@ -10,6 +10,9 @@ const MAX_SQL_LEN: usize = 1_000_000;
 /// Check that a SQL string is within the allowed length limit.
 /// Returns `Err(CallToolResult)` with an error message when the limit is exceeded.
 fn check_sql_length(sql: &str) -> Result<(), CallToolResult> {
+    if sql.is_empty() {
+        return Err(CallToolResult::error(vec![Content::text("SQL cannot be empty")]));
+    }
     if sql.len() > MAX_SQL_LEN {
         Err(CallToolResult::error(vec![Content::text(format!(
             "SQL too large: {} bytes (max {} bytes / 1 MB)",
@@ -239,16 +242,7 @@ impl SessionStore {
             &parsed.statement_type,
             parsed.target_schema.as_deref(),
         ) {
-            let perm_type = match parsed.statement_type {
-                crate::sql_parser::StatementType::Insert => "INSERT",
-                crate::sql_parser::StatementType::Update => "UPDATE",
-                crate::sql_parser::StatementType::Delete => "DELETE",
-                crate::sql_parser::StatementType::Create
-                | crate::sql_parser::StatementType::Alter
-                | crate::sql_parser::StatementType::Drop
-                | crate::sql_parser::StatementType::Truncate => "DDL",
-                _ => "this operation",
-            };
+            let perm_type = parsed.statement_type.permission_category();
             let schema_hint = parsed.target_schema.as_deref().unwrap_or("(default database)");
             return Ok(CallToolResult::error(vec![
                 Content::text(format!(

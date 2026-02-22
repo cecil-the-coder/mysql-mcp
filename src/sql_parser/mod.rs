@@ -55,6 +55,21 @@ impl StatementType {
         )
     }
 
+    /// Permission category label used in denial messages.
+    /// Groups DDL types together; returns "this operation" for uncategorized statements.
+    pub fn permission_category(&self) -> &str {
+        match self {
+            StatementType::Insert => "INSERT",
+            StatementType::Update => "UPDATE",
+            StatementType::Delete => "DELETE",
+            StatementType::Create
+            | StatementType::Alter
+            | StatementType::Drop
+            | StatementType::Truncate => "DDL",
+            _ => "this operation",
+        }
+    }
+
     /// Human-readable name for error messages
     pub fn name(&self) -> &str {
         match self {
