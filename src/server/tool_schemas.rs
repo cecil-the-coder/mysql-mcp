@@ -17,7 +17,7 @@ pub(crate) fn mysql_query_schema() -> Arc<serde_json::Map<String, serde_json::Va
             },
             "explain": {
                 "type": "boolean",
-                "description": "Set to true when investigating a slow query — returns full execution plan including index usage, rows examined, and optimization suggestions. Overrides the server performance_hints setting for this call."
+                "description": "Set to true when investigating a slow query (default: false) — returns full execution plan including index usage, rows examined, and optimization suggestions. Overrides the server performance_hints setting for this call."
             },
             "session": {
                 "type": "string",
@@ -37,7 +37,7 @@ pub(crate) fn mysql_schema_info_schema() -> Arc<serde_json::Map<String, serde_js
             "include": {
                 "type": "array",
                 "items": { "type": "string", "enum": ["indexes", "foreign_keys", "size"] },
-                "description": "Additional metadata to include. Default: just columns. Options: 'indexes' (all indexes with columns), 'foreign_keys' (FK constraints), 'size' (estimated row count and byte sizes)."
+                "description": "Additional metadata to include (array, optional). Default: just columns. Options: 'indexes' (all indexes with columns), 'foreign_keys' (FK constraints), 'size' (estimated row count and byte sizes). Combine any subset, e.g. [\"indexes\", \"foreign_keys\"] for full detail."
             },
             "session": {
                 "type": "string",
@@ -67,7 +67,7 @@ pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::
             "port": { "type": "integer", "description": "MySQL port (default: 3306)." },
             "user": { "type": "string", "description": "MySQL username" },
             "password": { "type": "string", "description": "MySQL password (optional; use empty string for passwordless login)." },
-            "database": { "type": "string", "description": "Default database to use" },
+            "database": { "type": "string", "description": "Default database to use for this session (optional; executed as USE <database> after connection)." },
             "ssl": { "type": "boolean", "description": "Enable SSL/TLS (default: false). When true and ssl_ca is omitted, uses VerifyIdentity mode (full cert+hostname check)." },
             "ssl_ca": { "type": "string", "description": "Path to PEM CA certificate file for SSL verification. When set, uses VerifyCa mode (validates cert chain without hostname check)." }
         },

@@ -6,6 +6,8 @@ use super::tool_schemas::serialize_response;
 
 /// Maximum SQL statement length (1 MB). Enforced in both mysql_query and mysql_explain_plan.
 const MAX_SQL_LEN: usize = 1_000_000;
+/// Number of SQL characters shown in parse-error messages to give context without flooding output.
+const SQL_ERROR_PREVIEW_LEN: usize = 120;
 
 /// Check that a SQL string is within the allowed length limit.
 /// Returns `Err(CallToolResult)` with an error message when the limit is exceeded.
@@ -225,12 +227,12 @@ impl SessionStore {
         let parsed = match crate::sql_parser::parse_sql(&sql) {
             Ok(p) => p,
             Err(e) => {
-                let cut = sql.len() > 120;
+                let cut = sql.len() > SQL_ERROR_PREVIEW_LEN;
                 return Ok(CallToolResult::error(vec![
                     Content::text(format!(
                         "SQL parse error: {}. Query: {}{}",
                         e,
-                        if cut { &sql[..120] } else { &sql },
+                        if cut { &sql[..SQL_ERROR_PREVIEW_LEN] } else { &sql },
                         if cut { "..." } else { "" }
                     )),
                 ]));
@@ -393,8 +395,6 @@ fn write_result_content(result: &crate::query::write::WriteResult) -> serde_json
     if let Some(id) = result.last_insert_id {
         output["last_insert_id"] = json!(id);
     }
-    if !result.parse_warnings.is_empty() {
-        output["parse_warnings"] = json!(result.parse_warnings);
-    }
+    output["parse_warnings"] = json!(result.parse_warnings);
     output
 }
