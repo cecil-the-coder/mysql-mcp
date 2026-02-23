@@ -283,4 +283,185 @@ mod e2e_tests {
             content_text
         );
     }
+
+    // -------------------------------------------------------------------------
+    // Test 6 (permission): INSERT is denied when MYSQL_ALLOW_INSERT is not set
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_mcp_insert_denied_without_permission() {
+        let Some(binary) = binary_path() else {
+            eprintln!("Skipping E2E: binary not found. Run `cargo build` first.");
+            return;
+        };
+
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+        // Spawn with default permissions (MYSQL_ALLOW_INSERT not set → denied).
+        let mut child = spawn_server(&binary, &test_db, &[]);
+
+        let (mut stdin, mut reader) = setup_io(&mut child);
+
+        do_handshake(&mut stdin, &mut reader).await;
+
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": "INSERT INTO _e2e_perm_test (id) VALUES (1)"
+                    }
+                }
+            }),
+        )
+        .await;
+
+        let response = read_response(&mut reader).await;
+        child.kill().await.ok();
+
+        let resp = response.expect("No response from server within timeout");
+        let result = resp.get("result").expect("Expected a result object");
+        assert_eq!(
+            result["isError"], true,
+            "INSERT should be denied when MYSQL_ALLOW_INSERT is not set, got: {}",
+            resp
+        );
+        let text = result["content"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.to_lowercase().contains("denied")
+                || text.contains("INSERT")
+                || text.contains("ALLOW"),
+            "Error message should mention permission denial, got: {}",
+            text
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 7 (write + DDL): CREATE TABLE → INSERT → SELECT → DROP succeeds
+    //         when MYSQL_ALLOW_INSERT and MYSQL_ALLOW_DDL are enabled.
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_mcp_write_and_ddl_allowed() {
+        let Some(binary) = binary_path() else {
+            eprintln!("Skipping E2E: binary not found. Run `cargo build` first.");
+            return;
+        };
+
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+
+        // Unique table name to avoid collisions across concurrent test runs.
+        let table = format!("_e2e_w{}", std::process::id());
+
+        let mut child = spawn_server(
+            &binary,
+            &test_db,
+            &[("MYSQL_ALLOW_INSERT", "true"), ("MYSQL_ALLOW_DDL", "true")],
+        );
+        let (mut stdin, mut reader) = setup_io(&mut child);
+        do_handshake(&mut stdin, &mut reader).await;
+
+        // Step 1: CREATE TABLE
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": format!(
+                            "CREATE TABLE `{}` (id INT PRIMARY KEY AUTO_INCREMENT, val VARCHAR(50))",
+                            table
+                        )
+                    }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no response to CREATE TABLE");
+        assert_ne!(
+            r["result"]["isError"], true,
+            "CREATE TABLE should succeed, got: {}",
+            r
+        );
+
+        // Step 2: INSERT a row
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": format!("INSERT INTO `{}` (val) VALUES ('hello_e2e')", table)
+                    }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no response to INSERT");
+        assert_ne!(
+            r["result"]["isError"], true,
+            "INSERT should succeed when MYSQL_ALLOW_INSERT=true, got: {}",
+            r
+        );
+        let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.contains("rows_affected"),
+            "INSERT response should include rows_affected, got: {}",
+            text
+        );
+
+        // Step 3: SELECT to verify the row is present
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": { "sql": format!("SELECT val FROM `{}`", table) }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no response to SELECT");
+        assert_ne!(
+            r["result"]["isError"], true,
+            "SELECT after INSERT should succeed, got: {}",
+            r
+        );
+        let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.contains("hello_e2e"),
+            "SELECT result should contain the inserted value 'hello_e2e', got: {}",
+            text
+        );
+
+        // Step 4: DROP TABLE (cleanup)
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": { "sql": format!("DROP TABLE `{}`", table) }
+                }
+            }),
+        )
+        .await;
+        let _ = read_response(&mut reader).await;
+
+        child.kill().await.ok();
+    }
 }

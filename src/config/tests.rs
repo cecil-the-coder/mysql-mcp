@@ -6,6 +6,11 @@ mod tests {
     use crate::config::merge::load_toml_config;
     use crate::config::{Config, ConnectionConfig, SchemaPermissions, SshConfig};
 
+    /// Serializes tests that mutate process-wide environment variables.
+    /// Without this, parallel test threads can observe each other's `set_var`/`remove_var`
+    /// calls, causing intermittent failures.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     // Test: connection string URL format is preserved
     #[test]
     fn test_connection_string_url_preserved() {
@@ -203,6 +208,7 @@ host = "myhost"
     // Test: MYSQL_MAX_SESSIONS env var overrides max_sessions
     #[test]
     fn test_env_max_sessions_override() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use crate::config::env_config::load_env_config;
 
         std::env::set_var("MYSQL_MAX_SESSIONS", "5");
@@ -451,6 +457,7 @@ private_key = "/tmp/key.pem"
 
     #[test]
     fn test_ssh_env_vars_override() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use crate::config::env_config::load_env_config;
         std::env::set_var("MYSQL_SSH_HOST", "mybastion");
         std::env::set_var("MYSQL_SSH_USER", "ubuntu");
@@ -474,6 +481,7 @@ private_key = "/tmp/key.pem"
 
     #[test]
     fn test_no_ssh_env_vars_means_none() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use crate::config::env_config::load_env_config;
         // Ensure none of the SSH vars are set
         for key in &[
