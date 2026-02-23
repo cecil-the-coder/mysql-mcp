@@ -198,6 +198,14 @@ impl SessionStore {
             .get("ssl_ca")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        if let Some(ref ca_path) = ssl_ca {
+            if !std::path::Path::new(ca_path).exists() {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "SSL CA file not found: {}",
+                    ca_path
+                ))]));
+            }
+        }
 
         // SSH tunnel parameters (optional)
         let ssh_host = args
@@ -205,6 +213,14 @@ impl SessionStore {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
+        if let Some(ref ssh_h) = ssh_host {
+            if super::is_private_host(ssh_h) {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "SSH bastion host: connecting to loopback/link-local IP addresses is not allowed: {}",
+                    ssh_h
+                ))]));
+            }
+        }
         let ssh_port = match args.get("ssh_port").and_then(|v| v.as_u64()) {
             Some(p) if (1..=65535).contains(&p) => p as u16,
             Some(_) => {
@@ -229,6 +245,11 @@ impl SessionStore {
             .and_then(|v| v.as_str())
             .unwrap_or("strict")
             .to_string();
+        let ssh_known_hosts_file = args
+            .get("ssh_known_hosts_file")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
 
         tracing::debug!(
             name = %name,
@@ -255,7 +276,7 @@ impl SessionStore {
                 user: ssh_user_str,
                 private_key: ssh_private_key.clone(),
                 known_hosts_check: ssh_known_hosts_check.clone(),
-                known_hosts_file: None,
+                known_hosts_file: ssh_known_hosts_file,
             };
             match crate::db::build_session_pool_with_tunnel(
                 &host,

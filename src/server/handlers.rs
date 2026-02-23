@@ -52,6 +52,9 @@ impl SessionStore {
                 )]))
             }
         };
+        if let Err(e) = validate_identifier(&table, "Table name") {
+            return Ok(e);
+        }
         let database = args
             .get("database")
             .and_then(|v: &serde_json::Value| v.as_str())

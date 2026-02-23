@@ -92,6 +92,10 @@ pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::
                 "enum": ["strict", "accept-new", "insecure"],
                 "description": "Host key verification mode. 'strict' (default): fail on unknown host. 'accept-new': auto-add new hosts. 'insecure': skip all verification.",
                 "default": "strict"
+            },
+            "ssh_known_hosts_file": {
+                "type": "string",
+                "description": "Path to a custom known_hosts file for SSH host key verification. If omitted, uses ~/.ssh/known_hosts."
             }
         },
         "required": ["name", "host", "user"]
