@@ -144,6 +144,11 @@ impl Config {
             anyhow::bail!("connection.port must be between 1 and 65535 (got: 0)");
         }
 
+        // connect_timeout_ms=0 means immediate timeout — connections always fail
+        if self.pool.connect_timeout_ms == 0 {
+            anyhow::bail!("pool.connect_timeout_ms must be > 0 (got: 0 — connections would always time out immediately)");
+        }
+
         // pool.size must be at least 1
         if self.pool.size == 0 {
             anyhow::bail!("pool.size must be >= 1");

@@ -49,7 +49,10 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
                 };
                 has_aggregate = has_aggregate_function(&select.projection)
                     || select.having.as_ref().is_some_and(expr_has_aggregate);
-                join_count = select.from.iter().map(|twj| 1 + twj.joins.len()).sum();
+                // Count explicit JOIN clauses only. Comma-separated FROM tables
+                // (implicit cross joins) are NOT counted here — their WHERE conditions
+                // are already analysed by collect_where_info.
+                join_count = select.from.iter().map(|twj| twj.joins.len()).sum();
             }
             (StatementType::Select, None, tname)
         }
@@ -271,11 +274,26 @@ fn expr_has_aggregate(expr: &Expr) -> bool {
             .last()
             .is_some_and(|id| {
                 let v = id.value.as_str();
+                // Standard SQL aggregates
                 v.eq_ignore_ascii_case("COUNT")
                     || v.eq_ignore_ascii_case("SUM")
                     || v.eq_ignore_ascii_case("AVG")
                     || v.eq_ignore_ascii_case("MIN")
                     || v.eq_ignore_ascii_case("MAX")
+                    // MySQL-specific aggregates
+                    || v.eq_ignore_ascii_case("GROUP_CONCAT")
+                    || v.eq_ignore_ascii_case("BIT_AND")
+                    || v.eq_ignore_ascii_case("BIT_OR")
+                    || v.eq_ignore_ascii_case("BIT_XOR")
+                    || v.eq_ignore_ascii_case("STDDEV")
+                    || v.eq_ignore_ascii_case("STDDEV_POP")
+                    || v.eq_ignore_ascii_case("STDDEV_SAMP")
+                    || v.eq_ignore_ascii_case("STD")
+                    || v.eq_ignore_ascii_case("VARIANCE")
+                    || v.eq_ignore_ascii_case("VAR_POP")
+                    || v.eq_ignore_ascii_case("VAR_SAMP")
+                    || v.eq_ignore_ascii_case("JSON_ARRAYAGG")
+                    || v.eq_ignore_ascii_case("JSON_OBJECTAGG")
             }),
         Expr::BinaryOp { left, right, .. } => {
             expr_has_aggregate(left) || expr_has_aggregate(right)
@@ -379,6 +397,22 @@ pub(super) fn collect_where_info(
         }
         Expr::InList { expr, .. } => {
             collect_where_info(expr, cols, seen, has_leading_wildcard);
+        }
+        Expr::Function(func) => {
+            // Recurse into function arguments so columns inside UPPER(col), COALESCE(a, b), etc.
+            // are included in index-suggestion analysis.
+            if let sqlparser::ast::FunctionArguments::List(arg_list) = &func.args {
+                for arg in &arg_list.args {
+                    let arg_expr = match arg {
+                        sqlparser::ast::FunctionArg::Named { arg, .. } => arg,
+                        sqlparser::ast::FunctionArg::ExprNamed { arg, .. } => arg,
+                        sqlparser::ast::FunctionArg::Unnamed(arg) => arg,
+                    };
+                    if let sqlparser::ast::FunctionArgExpr::Expr(e) = arg_expr {
+                        collect_where_info(e, cols, seen, has_leading_wildcard);
+                    }
+                }
+            }
         }
         Expr::Cast { expr, .. } => {
             collect_where_info(expr, cols, seen, has_leading_wildcard);

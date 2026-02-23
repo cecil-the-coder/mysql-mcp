@@ -181,10 +181,14 @@ fn column_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col: &sqlx::mysql::My
         // so use try_get_unchecked to bypass it and decode the raw text value.
         // Return as String to preserve full precision — f64 only has ~15 significant digits.
         "DECIMAL" | "NUMERIC" | "NEWDECIMAL" => {
-            if let Ok(Some(s)) = row.try_get_unchecked::<Option<String>, _>(idx) {
-                return Value::String(s);
+            match row.try_get_unchecked::<Option<String>, _>(idx) {
+                Ok(Some(s)) => return Value::String(s),
+                Ok(None) => return Value::Null,
+                Err(e) => {
+                    tracing::warn!("DECIMAL column at index {} failed to decode as string: {}", idx, e);
+                    return Value::Null;
+                }
             }
-            return Value::Null;
         }
         "BIT" => {
             // BIT columns: decode as u64 bitmask

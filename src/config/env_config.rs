@@ -80,6 +80,10 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
     for (key, val) in std::env::vars() {
         if let Some(schema_name) = key.strip_prefix("MYSQL_SCHEMA_").and_then(|s| s.strip_suffix("_PERMISSIONS")) {
             let schema_name = schema_name.to_lowercase();
+            if schema_name.is_empty() {
+                eprintln!("Warning: {key} has an empty schema name (double underscore?); expected MYSQL_SCHEMA_<name>_PERMISSIONS — skipping");
+                continue;
+            }
             let ops: Vec<&str> = val.split(',').map(|s| s.trim()).collect();
             for op in &ops {
                 if !op.is_empty() && !matches!(*op, "insert" | "update" | "delete" | "ddl") {
