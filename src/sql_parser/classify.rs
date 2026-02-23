@@ -85,18 +85,21 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
             table, selection, ..
         } => {
             let schema = extract_schema_from_table_factor(&table.relation);
+            let tbl = extract_table_from_table_factor(&table.relation);
             has_where = selection.is_some();
-            (StatementType::Update, schema, None)
+            (StatementType::Update, schema, tbl)
         }
 
         Statement::Delete(delete) => {
-            let schema = match &delete.from {
-                FromTable::WithFromKeyword(tables) | FromTable::WithoutKeyword(tables) => tables
-                    .first()
-                    .and_then(|t| extract_schema_from_table_factor(&t.relation)),
+            let first_table = match &delete.from {
+                FromTable::WithFromKeyword(tables) | FromTable::WithoutKeyword(tables) => {
+                    tables.first()
+                }
             };
+            let schema = first_table.and_then(|t| extract_schema_from_table_factor(&t.relation));
+            let tbl = first_table.and_then(|t| extract_table_from_table_factor(&t.relation));
             has_where = delete.selection.is_some();
-            (StatementType::Delete, schema, None)
+            (StatementType::Delete, schema, tbl)
         }
 
         Statement::CreateTable(ct) => {
@@ -356,6 +359,13 @@ pub(super) fn extract_schema_from_object_name(name: &ObjectName) -> Option<Strin
 pub(super) fn extract_schema_from_table_factor(factor: &TableFactor) -> Option<String> {
     match factor {
         TableFactor::Table { name, .. } => extract_schema_from_object_name(name),
+        _ => None,
+    }
+}
+
+fn extract_table_from_table_factor(factor: &TableFactor) -> Option<String> {
+    match factor {
+        TableFactor::Table { name, .. } => extract_table_from_object_name(name),
         _ => None,
     }
 }

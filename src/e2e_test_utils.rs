@@ -97,6 +97,13 @@ pub(crate) fn spawn_server(
         "MYSQL_MAX_ROWS",
         "MYSQL_MAX_SESSIONS",
         "MYSQL_CACHE_TTL",
+        // Pool/performance vars: scrub so tests are not affected by the parent
+        // process environment (e.g. CI jobs that set MYSQL_QUERY_TIMEOUT).
+        // Note: MYSQL_CONNECT_TIMEOUT is set explicitly above, not scrubbed.
+        "MYSQL_QUERY_TIMEOUT",
+        "MYSQL_POOL_SIZE",
+        "MYSQL_SLOW_QUERY_THRESHOLD_MS",
+        "MYSQL_POOL_WARMUP",
     ] {
         cmd.env_remove(var);
     }

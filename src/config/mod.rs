@@ -123,7 +123,7 @@ impl std::fmt::Debug for ConnectionConfig {
             .field("socket", &self.socket)
             .field("user", &self.user)
             .field("password", &"[redacted]")
-            .field("database", &self.database)
+            .field("database", &self.database.as_deref().map(|_| "[redacted]"))
             .field(
                 "connection_string",
                 &self.connection_string.as_ref().map(|_| "[redacted]"),
@@ -168,9 +168,27 @@ impl Default for SecurityConfig {
 
 impl Config {
     pub fn validate(&self) -> anyhow::Result<()> {
-        // Host must not be empty
-        if self.connection.host.is_empty() {
-            anyhow::bail!("Config error: connection host must not be empty");
+        // Host is only required when not using a Unix socket
+        if self.connection.socket.is_none() && self.connection.host.is_empty() {
+            anyhow::bail!("Config error: connection host must not be empty (unless using socket)");
+        }
+
+        // Warn if both connection_string and socket are set — connection_string wins
+        if self.connection.connection_string.is_some() && self.connection.socket.is_some() {
+            eprintln!(
+                "Warning: both connection_string and socket are configured; \
+                 connection_string takes precedence and socket will be ignored"
+            );
+        }
+
+        // query_timeout_ms=0 disables query timeouts entirely (infinite wait).
+        // This is intentionally allowed for operators who need unbounded query time,
+        // but warn so it doesn't go unnoticed.
+        if self.pool.query_timeout_ms == 0 {
+            eprintln!(
+                "Warning: pool.query_timeout_ms is 0 — queries will never time out. \
+                 Set to a positive value (e.g. 30000) to limit runaway queries."
+            );
         }
 
         // Port must be in valid range

@@ -247,6 +247,9 @@ impl EnvConfig {
             base.security.allow_runtime_connections = v;
         }
         if !self.schema_permissions.is_empty() {
+            // Env vars are merged on top of the TOML base using extend(): env entries
+            // for a given schema name overwrite any TOML entry with the same name,
+            // while TOML entries for schemas not present in env vars are preserved.
             base.security
                 .schema_permissions
                 .extend(self.schema_permissions);

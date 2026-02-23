@@ -134,7 +134,14 @@ impl SessionStore {
         }
 
         let host = match args.get("host").and_then(|v| v.as_str()) {
-            Some(h) if !h.is_empty() => h.to_string(),
+            Some(h) if !h.is_empty() => {
+                if h.len() > 255 {
+                    return Ok(CallToolResult::error(vec![Content::text(
+                        "Host too long (max 255 characters)",
+                    )]));
+                }
+                h.to_string()
+            }
             Some(_) => {
                 return Ok(CallToolResult::error(vec![Content::text(
                     "Host cannot be empty",
@@ -214,6 +221,11 @@ impl SessionStore {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
         if let Some(ref ssh_h) = ssh_host {
+            if ssh_h.len() > 255 {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "SSH host too long (max 255 characters)",
+                )]));
+            }
             if super::is_private_host(ssh_h) {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "SSH bastion host: connecting to loopback/link-local IP addresses is not allowed: {}",
@@ -230,11 +242,18 @@ impl SessionStore {
             }
             None => 22,
         };
-        let ssh_user = args
+        let ssh_user = match args
             .get("ssh_user")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+        {
+            Some(u) if u.len() > 255 => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "SSH user too long (max 255 characters)",
+                )]))
+            }
+            other => other.map(|s| s.to_string()),
+        };
         let ssh_private_key = args
             .get("ssh_private_key")
             .and_then(|v| v.as_str())
@@ -264,6 +283,14 @@ impl SessionStore {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "SSH private key file not found: {}",
                     key_path
+                ))]));
+            }
+        }
+        if let Some(ref khf) = ssh_known_hosts_file {
+            if !std::path::Path::new(khf).exists() {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "SSH known_hosts file not found: {}",
+                    khf
                 ))]));
             }
         }

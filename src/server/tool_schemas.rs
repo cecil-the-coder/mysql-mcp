@@ -64,10 +64,10 @@ pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::
         "properties": {
             "name": { "type": "string", "description": "Session identifier (alphanumeric, underscore, hyphen; max 64 chars). 'default' is reserved." },
             "host": { "type": "string", "description": "MySQL host (required unless using preset)" },
-            "port": { "type": "integer", "description": "MySQL port (default: 3306)." },
+            "port": { "type": "integer", "description": "MySQL port (default: 3306).", "minimum": 1, "maximum": 65535 },
             "user": { "type": "string", "description": "MySQL username" },
             "password": { "type": "string", "description": "MySQL password (optional; use empty string for passwordless login)." },
-            "database": { "type": "string", "description": "Default database to use for this session (optional; executed as USE <database> after connection)." },
+            "database": { "type": "string", "description": "Default database for this session (optional; passed via connection string)." },
             "ssl": { "type": "boolean", "description": "Enable SSL/TLS (default: false). When true and ssl_ca is omitted, uses VerifyIdentity mode (full cert+hostname check)." },
             "ssl_ca": { "type": "string", "description": "Path to PEM CA certificate file for SSL verification. When set, uses VerifyCa mode (validates cert chain without hostname check)." },
             "ssh_host": {
@@ -77,6 +77,8 @@ pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::
             "ssh_port": {
                 "type": "integer",
                 "description": "SSH server port (default: 22).",
+                "minimum": 1,
+                "maximum": 65535,
                 "default": 22
             },
             "ssh_user": {
