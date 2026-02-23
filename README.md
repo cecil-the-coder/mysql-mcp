@@ -7,13 +7,12 @@ A MySQL MCP (Model Context Protocol) server written in Rust. It exposes a MySQL 
 - **Read queries**: SELECT, SHOW, EXPLAIN — always allowed
 - **Write operations**: INSERT, UPDATE, DELETE — opt-in via config
 - **DDL operations**: CREATE, ALTER, DROP, TRUNCATE — opt-in
-- **Parallel queries**: `mysql_multi_query` runs independent SELECTs concurrently
 - **Performance hints**: automatic EXPLAIN + index suggestions on slow queries
+- **Named sessions**: connect to additional databases at runtime via `mysql_connect`
+- **SSH tunneling**: reach databases behind a bastion/jump host
 - **Per-schema permissions**: fine-grained write control per database
-- **Schema introspection**: browse tables and column metadata via MCP resources
-- **HTTP remote mode**: serve MCP over HTTP with Bearer token auth
 - **Connection pooling**: configurable pool size, timeouts, and warm-up
-- **SSL support**: encrypted connections with optional cert validation bypass
+- **SSL support**: encrypted connections with optional CA verification
 - **Unix socket support**: connect via socket path instead of host:port
 
 ## Quick Start
@@ -21,7 +20,7 @@ A MySQL MCP (Model Context Protocol) server written in Rust. It exposes a MySQL 
 ### Installation
 
 ```bash
-cargo install --git https://github.com/yourusername/mysql-mcp
+cargo install --git https://github.com/cecil-the-coder/mysql-mcp
 ```
 
 Or download a pre-built binary from the [Releases](../../releases) page.
@@ -120,7 +119,7 @@ A `.env` file in the working directory is loaded automatically if present.
 | `connection.user` | `MYSQL_USER` | string | `root` | MySQL username |
 | `connection.password` | `MYSQL_PASS` | string | `""` | MySQL password |
 | `connection.database` | `MYSQL_DB` | string | — | Default database; omit for multi-database mode |
-| `connection.connection_string` | `MYSQL_CONNECTION_STRING` | string | — | Full `mysql://user:pass@host/db` URL, or mysql CLI-style flags (`-h host -P 3307 -u user -p pass dbname`) |
+| `connection.connection_string` | `MYSQL_CONNECTION_STRING` | string | — | Full `mysql://user:pass@host/db` URL; overrides all other connection fields |
 
 ### Pool
 
@@ -128,8 +127,8 @@ A `.env` file in the working directory is loaded automatically if present.
 |---|---|---|---|---|
 | `pool.size` | `MYSQL_POOL_SIZE` | u32 | `20` | Maximum number of pooled connections |
 | `pool.query_timeout_ms` | `MYSQL_QUERY_TIMEOUT` | u64 | `30000` | Per-query timeout in milliseconds |
-| `pool.connect_timeout_ms` | `MYSQL_CONNECT_TIMEOUT` | u64 | `10000` | Connection establishment timeout in milliseconds; also serves as the acquire timeout — callers that cannot obtain a connection within this window receive an error |
-| `pool.readonly_transaction` | `MYSQL_READONLY_TRANSACTION` | bool | `false` | Wrap every SELECT in a `SET TRANSACTION READ ONLY` + `BEGIN` + `COMMIT` (4-RTT). Leave `false` for bare 1-RTT fetches |
+| `pool.connect_timeout_ms` | `MYSQL_CONNECT_TIMEOUT` | u64 | `10000` | Connection establishment timeout in milliseconds; also serves as the acquire timeout |
+| `pool.readonly_transaction` | `MYSQL_READONLY_TRANSACTION` | bool | `false` | Wrap every SELECT in `SET TRANSACTION READ ONLY` + `BEGIN` + `COMMIT` (4-RTT). Leave `false` for bare 1-RTT fetches |
 | `pool.performance_hints` | `MYSQL_PERFORMANCE_HINTS` | string | `none` | When to run EXPLAIN: `none`, `auto` (only when query exceeds `slow_query_threshold_ms`), or `always` |
 | `pool.slow_query_threshold_ms` | `MYSQL_SLOW_QUERY_THRESHOLD_MS` | u64 | `500` | Threshold used by `performance_hints=auto` |
 | `pool.max_rows` | `MYSQL_MAX_ROWS` | u32 | `1000` | Cap on rows returned per query; `LIMIT {max_rows}` is appended when the query has no LIMIT. `0` disables the cap |
@@ -145,34 +144,25 @@ A `.env` file in the working directory is loaded automatically if present.
 | `security.allow_delete` | `MYSQL_ALLOW_DELETE` | bool | `false` | Permit DELETE statements |
 | `security.allow_ddl` | `MYSQL_ALLOW_DDL` | bool | `false` | Permit DDL statements (CREATE, ALTER, DROP, TRUNCATE) |
 | `security.ssl` | `MYSQL_SSL` | bool | `false` | Require SSL/TLS for the connection |
-| `security.ssl_accept_invalid_certs` | `MYSQL_SSL_ACCEPT_INVALID_CERTS` | bool | `false` | Skip certificate validation (useful for self-signed certs; not for production) |
+| `security.ssl_accept_invalid_certs` | `MYSQL_SSL_ACCEPT_INVALID_CERTS` | bool | `false` | Skip certificate validation (not for production) |
+| `security.ssl_ca` | `MYSQL_SSL_CA` | string | — | Path to PEM CA certificate file |
 | `security.schema_permissions` | `MYSQL_SCHEMA_<NAME>_PERMISSIONS` | map | `{}` | Per-schema write permission overrides (see below) |
 | `security.multi_db_write_mode` | `MYSQL_MULTI_DB_WRITE_MODE` | bool | `false` | Allow writes when no default database is set (multi-DB mode) |
-| `security.allow_runtime_connections` | `MYSQL_ALLOW_RUNTIME_CONNECTIONS` | bool | `false` | Allow `mysql_connect` to accept raw credentials at runtime; when `false` only preset-based connections are permitted |
-| `security.max_sessions` | `MYSQL_MAX_SESSIONS` | u32 | `50` | Maximum number of concurrent named sessions (not counting the default session); prevents unbounded session creation when `allow_runtime_connections` is `true` |
+| `security.allow_runtime_connections` | `MYSQL_ALLOW_RUNTIME_CONNECTIONS` | bool | `false` | Allow `mysql_connect` to accept raw credentials at runtime |
+| `security.max_sessions` | `MYSQL_MAX_SESSIONS` | u32 | `50` | Maximum number of concurrent named sessions |
 
-### Monitoring
-
-| TOML key | Environment variable | Type | Default | Description |
-|---|---|---|---|---|
-| `monitoring.logging` | `MYSQL_ENABLE_LOGGING` | bool | `true` | Enable request/response logging |
-| `monitoring.log_level` | `MYSQL_LOG_LEVEL` | string | `info` | Log verbosity: `error`, `warn`, `info`, `debug`, `trace` |
-| `monitoring.metrics_enabled` | `MYSQL_METRICS_ENABLED` | bool | `false` | Enable metrics collection |
-
-### Remote / HTTP mode
+### SSH Tunnel
 
 | TOML key | Environment variable | Type | Default | Description |
 |---|---|---|---|---|
-| `remote.enabled` | `IS_REMOTE_MCP` | bool | `false` | Serve MCP over HTTP instead of stdio |
-| `remote.secret_key` | `REMOTE_SECRET_KEY` | string | — | Bearer token required for HTTP clients |
-| `remote.port` | `PORT` | u16 | `3000` | HTTP listen port |
-
-### Other
-
-| TOML key | Environment variable | Type | Default | Description |
-|---|---|---|---|---|
-| `timezone` | `MYSQL_TIMEZONE` | string | — | MySQL session timezone, e.g. `UTC` or `+08:00` |
-| `date_strings` | `MYSQL_DATE_STRINGS` | bool | `false` | Return DATE/DATETIME values as strings instead of native types |
+| `ssh.host` | `MYSQL_SSH_HOST` | string | — | SSH bastion hostname |
+| `ssh.port` | `MYSQL_SSH_PORT` | u16 | `22` | SSH server port |
+| `ssh.user` | `MYSQL_SSH_USER` | string | — | SSH username |
+| `ssh.private_key` | `MYSQL_SSH_PRIVATE_KEY` | string | — | Path to PEM private key file |
+| `ssh.private_key_passphrase` | `MYSQL_SSH_PRIVATE_KEY_PASSPHRASE` | string | — | Passphrase for the private key (if encrypted) |
+| `ssh.use_agent` | `MYSQL_SSH_USE_AGENT` | bool | `false` | Use the system SSH agent for authentication |
+| `ssh.known_hosts_check` | `MYSQL_SSH_KNOWN_HOSTS_CHECK` | string | `strict` | Host key verification: `strict`, `accept-new`, or `insecure` |
+| `ssh.known_hosts_file` | `MYSQL_SSH_KNOWN_HOSTS_FILE` | string | — | Override path to known_hosts file |
 
 ---
 
@@ -180,14 +170,15 @@ A `.env` file in the working directory is loaded automatically if present.
 
 ### `mysql_query`
 
-Execute a single SQL statement.
+Execute a SQL statement.
 
 **Parameters**
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `sql` | string | yes | The SQL statement to execute |
-| `explain` | boolean | no | Force an EXPLAIN run for this query, regardless of the `performance_hints` setting |
+| `explain` | boolean | no | Force an EXPLAIN run for this query, overriding the `performance_hints` setting |
+| `session` | string | no | Named session to route this query to (omit for default connection) |
 
 **Supported statement types**
 
@@ -202,10 +193,12 @@ Execute a single SQL statement.
 | `row_count` | number | yes | Number of rows in `rows` |
 | `execution_time_ms` | number | yes | Time spent waiting for MySQL to return results |
 | `serialization_time_ms` | number | yes | Time spent converting MySQL rows to JSON |
-| `capped` | boolean | only when `true` | Present and `true` when `max_rows` was applied and the result was truncated |
 | `parse_warnings` | array of strings | only when non-empty | Static analysis warnings (e.g. `SELECT *`, missing WHERE on UPDATE) |
+| `capped` | boolean | only when `true` | Present when `max_rows` was applied and the result was truncated |
+| `next_offset` | number | only when capped | Offset to pass for the next page |
+| `capped_hint` | string | only when capped | Suggested query with LIMIT/OFFSET to fetch the next page |
 | `plan` | object | only when EXPLAIN ran | Query execution plan (see below) |
-| `suggestions` | array of strings | only when applicable | Index suggestions when a full table scan is detected with no index on WHERE columns |
+| `suggestions` | array of strings | only when applicable | Index suggestions when a full table scan is detected |
 
 **`plan` object fields**
 
@@ -255,7 +248,7 @@ Same as write queries: `rows_affected`, `execution_time_ms`, optionally `last_in
 
 **Example — with performance hints**
 
-With `performance_hints=always` (or `explain: true`), a slow query also returns a `plan`:
+With `performance_hints=always` (or `explain: true`):
 
 ```json
 {
@@ -281,78 +274,105 @@ With `performance_hints=always` (or `explain: true`), a slow query also returns 
 
 ---
 
-### `mysql_multi_query`
+### `mysql_schema_info`
 
-Execute multiple read-only SQL statements in parallel and return all results together. All queries run concurrently and the response arrives in approximately one network round-trip, regardless of how many queries are submitted.
-
-Only read-only statements are accepted (SELECT, SHOW, EXPLAIN).
+Get schema metadata for a table.
 
 **Parameters**
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `queries` | array of strings | yes | SQL statements to execute in parallel |
+| `table` | string | yes | Table name |
+| `database` | string | no | Database/schema name (uses connected database if omitted) |
+| `include` | array of strings | no | Additional metadata: `"indexes"`, `"foreign_keys"`, `"size"` (any combination) |
+| `session` | string | no | Named session to use |
 
-**Response fields**
+**Response**
 
-| Field | Type | Description |
-|---|---|---|
-| `results` | array of objects | One entry per query, in the same order as the input `queries` array |
-| `wall_time_ms` | number | Total elapsed wall-clock time for all queries to complete |
-
-Each entry in `results` contains the same fields as a `mysql_query` read response (`sql`, `rows`, `row_count`, `execution_time_ms`, `serialization_time_ms`, `capped`, and optionally `parse_warnings` and `plan`). On error, the entry contains `sql` and `error` instead.
-
-**Example**
-
-```json
-{
-  "queries": [
-    "SELECT COUNT(*) AS total FROM orders",
-    "SELECT COUNT(*) AS total FROM users WHERE active = 1"
-  ]
-}
-```
-
-```json
-{
-  "results": [
-    {
-      "sql": "SELECT COUNT(*) AS total FROM orders",
-      "rows": [{"total": 1042}],
-      "row_count": 1,
-      "execution_time_ms": 11,
-      "serialization_time_ms": 0,
-      "capped": false
-    },
-    {
-      "sql": "SELECT COUNT(*) AS total FROM users WHERE active = 1",
-      "rows": [{"total": 387}],
-      "row_count": 1,
-      "execution_time_ms": 8,
-      "serialization_time_ms": 0,
-      "capped": false
-    }
-  ],
-  "wall_time_ms": 13
-}
-```
+Always includes `columns` (name, type, nullable). Optional sections:
+- `include: ["indexes"]` — all indexes with column lists, uniqueness, and primary key flag
+- `include: ["foreign_keys"]` — FK constraints with referenced table and columns
+- `include: ["size"]` — estimated row count, data size, and index size in bytes
 
 ---
 
-## MCP Resources
+### `mysql_server_info`
 
-The server also exposes table schemas as MCP resources:
+Get MySQL server metadata: version, current database, current user, sql_mode, character set, collation, time zone, read-only flag, and which write operations are enabled.
 
-- `mysql://tables/{schema}/{table}` — column metadata for a specific table
-- Listing resources returns all accessible tables with approximate row counts
+**Parameters**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `session` | string | no | Named session to use |
+
+---
+
+### `mysql_explain_plan`
+
+Get the execution plan for a SELECT query without running it. Returns index usage, rows examined estimate, and optimization tier.
+
+**Parameters**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `sql` | string | yes | The SELECT statement to explain (must be a single SELECT) |
+| `session` | string | no | Named session to use |
+
+**Response**
+
+Returns the same `plan` object as described for `mysql_query` above.
+
+---
+
+### `mysql_connect`
+
+Create a named session to a different MySQL server or database. Requires `MYSQL_ALLOW_RUNTIME_CONNECTIONS=true`.
+
+**Parameters**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | Session identifier (alphanumeric, underscore, hyphen; max 64 chars). `"default"` is reserved. |
+| `host` | string | yes | MySQL host |
+| `user` | string | yes | MySQL username |
+| `port` | integer | no | MySQL port (default: 3306) |
+| `password` | string | no | MySQL password |
+| `database` | string | no | Default database for the session |
+| `ssl` | boolean | no | Enable SSL/TLS |
+| `ssl_ca` | string | no | Path to PEM CA certificate file |
+| `ssh_host` | string | no | SSH bastion hostname (enables SSH tunneling) |
+| `ssh_port` | integer | no | SSH port (default: 22) |
+| `ssh_user` | string | no | SSH username (required when `ssh_host` is set) |
+| `ssh_private_key` | string | no | Path to SSH private key file |
+| `ssh_use_agent` | boolean | no | Use system SSH agent for authentication |
+| `ssh_known_hosts_check` | string | no | Host key verification: `strict` (default), `accept-new`, or `insecure` |
+
+Sessions idle for more than 10 minutes are closed automatically. Pass the session `name` to other tools via the `session` parameter.
+
+---
+
+### `mysql_disconnect`
+
+Explicitly close a named session. The default session cannot be closed.
+
+**Parameters**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | Session name to close |
+
+---
+
+### `mysql_list_sessions`
+
+List all active named sessions with host, database, and idle time. The default session is omitted when it is the only active session.
+
+No parameters.
 
 ---
 
 ## Performance Guide
-
-### Use `mysql_multi_query` for independent reads
-
-When you need data from multiple unrelated tables, `mysql_multi_query` runs all queries concurrently. Two queries that each take 50 ms will finish in ~50 ms total instead of ~100 ms. The savings grow with the number of queries and network latency to the database.
 
 ### `performance_hints` modes
 
@@ -362,7 +382,7 @@ When you need data from multiple unrelated tables, `mysql_multi_query` runs all 
 | `auto` | EXPLAIN runs only when the query exceeds `slow_query_threshold_ms` (default 500 ms). Good for production: zero overhead on fast queries. |
 | `always` | EXPLAIN runs after every SELECT. Useful during development or debugging. |
 
-You can also override per-call by passing `"explain": true` to `mysql_query`.
+You can also override per-call by passing `"explain": true` to `mysql_query` or by using `mysql_explain_plan` before executing.
 
 ### `max_rows` protects against runaway results
 
@@ -435,20 +455,10 @@ When `connection.database` is not set, the server operates in multi-database mod
 
 ```bash
 MYSQL_SSL=true
+MYSQL_SSL_CA=/path/to/ca.pem         # VerifyCa mode (validates cert chain)
 # For self-signed certs only — do not use in production:
 MYSQL_SSL_ACCEPT_INVALID_CERTS=true
 ```
-
-### HTTP remote mode
-
-```bash
-IS_REMOTE_MCP=true
-REMOTE_SECRET_KEY=your-secret-token
-PORT=3000
-./mysql-mcp
-```
-
-Remote clients must send `Authorization: Bearer your-secret-token` with every request.
 
 ---
 
@@ -490,19 +500,16 @@ known_hosts_check = "strict"             # strict | accept-new | insecure
 
 **Environment variables:**
 
-| Variable | Description |
-|----------|-------------|
-| `MYSQL_SSH_HOST` | SSH bastion hostname |
-| `MYSQL_SSH_PORT` | SSH port (default: 22) |
-| `MYSQL_SSH_USER` | SSH username |
-| `MYSQL_SSH_PRIVATE_KEY` | Path to PEM private key |
-| `MYSQL_SSH_USE_AGENT` | `true` to use SSH agent |
-| `MYSQL_SSH_KNOWN_HOSTS_CHECK` | `strict` / `accept-new` / `insecure` |
-| `MYSQL_SSH_KNOWN_HOSTS_FILE` | Override known_hosts path |
+```bash
+MYSQL_SSH_HOST=bastion.example.com
+MYSQL_SSH_USER=ubuntu
+MYSQL_SSH_PRIVATE_KEY=/home/user/.ssh/id_rsa
+MYSQL_SSH_KNOWN_HOSTS_CHECK=strict
+```
 
 ### Authentication
 
-- **Key file (recommended for automation):** Set `private_key` to a passphrase-free key path.
+- **Key file (recommended for automation):** Set `private_key` to the key path. Use `private_key_passphrase` (or `MYSQL_SSH_PRIVATE_KEY_PASSPHRASE`) if the key is encrypted.
 - **SSH agent:** Set `use_agent = true` (or `MYSQL_SSH_USE_AGENT=true`). The agent must be running and have the key loaded (`ssh-add /path/to/key`).
 
 ### Known Hosts
@@ -557,17 +564,17 @@ Requires `MYSQL_ALLOW_RUNTIME_CONNECTIONS=true`.
 ## Development
 
 ```bash
-# Run unit tests (no MySQL needed)
+# Run unit tests (no MySQL needed — uses testcontainers/Docker automatically)
 cargo test
 
 # Build release binary
 cargo build --release
 
-# Run with a real MySQL instance
-MYSQL_HOST=localhost MYSQL_USER=root cargo test
+# Run against a real MySQL instance
+MYSQL_HOST=localhost MYSQL_USER=root MYSQL_DB=mydb cargo test
 ```
 
-Integration tests use [testcontainers](https://github.com/testcontainers/testcontainers-rs) to spin up a real MySQL instance automatically when Docker is available.
+Integration tests use [testcontainers](https://github.com/testcontainers/testcontainers-rs) to spin up a real MySQL instance automatically when Docker is available and `MYSQL_HOST` is not set.
 
 ---
 
