@@ -111,29 +111,41 @@ pub(crate) async fn fetch_columns(
     table_name: &str,
     database: Option<&str>,
 ) -> Result<Vec<ColumnInfo>> {
-    let sql = format!(
-        r#"SELECT
-            COLUMN_NAME as name,
-            DATA_TYPE as data_type,
-            COLUMN_TYPE as column_type,
-            IS_NULLABLE as is_nullable,
-            COLUMN_DEFAULT as column_default,
-            COLUMN_KEY as column_key,
-            EXTRA as extra
-        FROM information_schema.COLUMNS
-        WHERE TABLE_NAME = ?{}
-        ORDER BY ORDINAL_POSITION"#,
-        if database.is_some() {
-            " AND TABLE_SCHEMA = ?"
-        } else {
-            ""
-        }
-    );
-    let q = sqlx::query(&sql).bind(table_name);
     let rows = if let Some(db) = database {
-        q.bind(db).fetch_all(pool).await?
+        sqlx::query(
+            r#"SELECT
+                COLUMN_NAME as name,
+                DATA_TYPE as data_type,
+                COLUMN_TYPE as column_type,
+                IS_NULLABLE as is_nullable,
+                COLUMN_DEFAULT as column_default,
+                COLUMN_KEY as column_key,
+                EXTRA as extra
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+            ORDER BY ORDINAL_POSITION"#,
+        )
+        .bind(db)
+        .bind(table_name)
+        .fetch_all(pool)
+        .await?
     } else {
-        q.fetch_all(pool).await?
+        sqlx::query(
+            r#"SELECT
+                COLUMN_NAME as name,
+                DATA_TYPE as data_type,
+                COLUMN_TYPE as column_type,
+                IS_NULLABLE as is_nullable,
+                COLUMN_DEFAULT as column_default,
+                COLUMN_KEY as column_key,
+                EXTRA as extra
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
+            ORDER BY ORDINAL_POSITION"#,
+        )
+        .bind(table_name)
+        .fetch_all(pool)
+        .await?
     };
 
     let columns = rows
@@ -188,22 +200,27 @@ pub(crate) async fn fetch_composite_indexes(
     table: &str,
     database: Option<&str>,
 ) -> Result<Vec<IndexDef>> {
-    let sql = format!(
-        "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME \
-         FROM information_schema.STATISTICS \
-         WHERE TABLE_NAME = ?{} \
-         ORDER BY INDEX_NAME, SEQ_IN_INDEX",
-        if database.is_some() {
-            " AND TABLE_SCHEMA = ?"
-        } else {
-            ""
-        }
-    );
-    let q = sqlx::query(&sql).bind(table);
     let rows = if let Some(db) = database {
-        q.bind(db).fetch_all(pool).await?
+        sqlx::query(
+            "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME \
+             FROM information_schema.STATISTICS \
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
+             ORDER BY INDEX_NAME, SEQ_IN_INDEX",
+        )
+        .bind(db)
+        .bind(table)
+        .fetch_all(pool)
+        .await?
     } else {
-        q.fetch_all(pool).await?
+        sqlx::query(
+            "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME \
+             FROM information_schema.STATISTICS \
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? \
+             ORDER BY INDEX_NAME, SEQ_IN_INDEX",
+        )
+        .bind(table)
+        .fetch_all(pool)
+        .await?
     };
 
     let mut index_map: std::collections::BTreeMap<String, IndexDef> =

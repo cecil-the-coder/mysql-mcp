@@ -171,7 +171,18 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         | Statement::SetTimeZone { .. } => (StatementType::Set, None, None),
 
         other => {
-            let name = format!("{:?}", std::mem::discriminant(other));
+            // Extract only the variant name from the debug representation.
+            // `format!("{:?}", other)` produces strings like "Call(...)" or
+            // "LockTables { ... }"; we take everything before the first '{', '(',
+            // or space to get just "Call" or "LockTables".
+            // This is far more useful than `std::mem::discriminant` which
+            // produces an opaque "Discriminant(N)".
+            let debug = format!("{other:?}");
+            let name = debug
+                .split(['{', '(', ' '])
+                .next()
+                .unwrap_or("Unknown")
+                .to_string();
             (StatementType::Other(name), None, None)
         }
     };

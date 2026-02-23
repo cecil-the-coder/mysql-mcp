@@ -40,7 +40,7 @@ pub(crate) struct SessionStore {
 
 /// Validate a MySQL identifier (session name or database name): max 64 chars,
 /// alphanumeric/underscore/hyphen only. Returns `Err(CallToolResult)` on failure.
-fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToolResult> {
+pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToolResult> {
     if value.is_empty() {
         return Err(CallToolResult::error(vec![Content::text(format!(
             "{} cannot be empty",
@@ -204,11 +204,15 @@ impl SessionStore {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        let ssh_port = args
-            .get("ssh_port")
-            .and_then(|v| v.as_u64())
-            .map(|p| p as u16)
-            .unwrap_or(22);
+        let ssh_port = match args.get("ssh_port").and_then(|v| v.as_u64()) {
+            Some(p) if (1..=65535).contains(&p) => p as u16,
+            Some(_) => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "ssh_port out of range (1–65535)",
+                )]))
+            }
+            None => 22,
+        };
         let ssh_user = args
             .get("ssh_user")
             .and_then(|v| v.as_str())

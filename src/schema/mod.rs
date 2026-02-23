@@ -97,19 +97,27 @@ impl SchemaIntrospector {
 
         // Indexes — richer than the composite-index cache (includes INDEX_TYPE, NULLABLE).
         let indexes: serde_json::Value = if include_indexes {
-            let idx_sql =
-                format!(
-                "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE, NULLABLE \
-                 FROM information_schema.STATISTICS \
-                 WHERE TABLE_NAME = ?{} \
-                 ORDER BY INDEX_NAME, SEQ_IN_INDEX",
-                if database.is_some() { " AND TABLE_SCHEMA = ?" } else { "" }
-            );
-            let q = sqlx::query(&idx_sql).bind(table_name);
             let rows = if let Some(db) = database {
-                q.bind(db).fetch_all(pool).await?
+                sqlx::query(
+                    "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE, NULLABLE \
+                     FROM information_schema.STATISTICS \
+                     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
+                     ORDER BY INDEX_NAME, SEQ_IN_INDEX",
+                )
+                .bind(db)
+                .bind(table_name)
+                .fetch_all(pool)
+                .await?
             } else {
-                q.fetch_all(pool).await?
+                sqlx::query(
+                    "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE, NULLABLE \
+                     FROM information_schema.STATISTICS \
+                     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? \
+                     ORDER BY INDEX_NAME, SEQ_IN_INDEX",
+                )
+                .bind(table_name)
+                .fetch_all(pool)
+                .await?
             };
             let mut idx_map: std::collections::BTreeMap<String, serde_json::Value> =
                 std::collections::BTreeMap::new();
@@ -137,26 +145,35 @@ impl SchemaIntrospector {
         // Foreign keys.
         let foreign_keys: serde_json::Value =
             if include_foreign_keys {
-                let fk_sql = format!(
-                    "SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME, \
-                        kcu.REFERENCED_COLUMN_NAME, rc.UPDATE_RULE, rc.DELETE_RULE \
-                 FROM information_schema.KEY_COLUMN_USAGE kcu \
-                 JOIN information_schema.REFERENTIAL_CONSTRAINTS rc \
-                   ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME \
-                  AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA \
-                 WHERE kcu.TABLE_NAME = ?{} \
-                   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL",
-                    if database.is_some() {
-                        " AND kcu.TABLE_SCHEMA = ?"
-                    } else {
-                        ""
-                    }
-                );
-                let q = sqlx::query(&fk_sql).bind(table_name);
                 let rows = if let Some(db) = database {
-                    q.bind(db).fetch_all(pool).await?
+                    sqlx::query(
+                        "SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME, \
+                             kcu.REFERENCED_COLUMN_NAME, rc.UPDATE_RULE, rc.DELETE_RULE \
+                         FROM information_schema.KEY_COLUMN_USAGE kcu \
+                         JOIN information_schema.REFERENTIAL_CONSTRAINTS rc \
+                           ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME \
+                          AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA \
+                         WHERE kcu.TABLE_SCHEMA = ? AND kcu.TABLE_NAME = ? \
+                           AND kcu.REFERENCED_TABLE_NAME IS NOT NULL",
+                    )
+                    .bind(db)
+                    .bind(table_name)
+                    .fetch_all(pool)
+                    .await?
                 } else {
-                    q.fetch_all(pool).await?
+                    sqlx::query(
+                        "SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME, \
+                             kcu.REFERENCED_COLUMN_NAME, rc.UPDATE_RULE, rc.DELETE_RULE \
+                         FROM information_schema.KEY_COLUMN_USAGE kcu \
+                         JOIN information_schema.REFERENTIAL_CONSTRAINTS rc \
+                           ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME \
+                          AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA \
+                         WHERE kcu.TABLE_SCHEMA = DATABASE() AND kcu.TABLE_NAME = ? \
+                           AND kcu.REFERENCED_TABLE_NAME IS NOT NULL",
+                    )
+                    .bind(table_name)
+                    .fetch_all(pool)
+                    .await?
                 };
                 serde_json::Value::Array(rows.iter().map(|row| serde_json::json!({
                 "constraint":        fetch::is_col_str(row, "CONSTRAINT_NAME"),
@@ -172,21 +189,25 @@ impl SchemaIntrospector {
 
         // Table size estimate.
         let size: serde_json::Value = if include_size {
-            let size_sql = format!(
-                "SELECT TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH \
-                 FROM information_schema.TABLES \
-                 WHERE TABLE_NAME = ?{}",
-                if database.is_some() {
-                    " AND TABLE_SCHEMA = ?"
-                } else {
-                    ""
-                }
-            );
-            let q = sqlx::query(&size_sql).bind(table_name);
             let size_result = if let Some(db) = database {
-                q.bind(db).fetch_one(pool).await
+                sqlx::query(
+                    "SELECT TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH \
+                     FROM information_schema.TABLES \
+                     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+                )
+                .bind(db)
+                .bind(table_name)
+                .fetch_one(pool)
+                .await
             } else {
-                q.fetch_one(pool).await
+                sqlx::query(
+                    "SELECT TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH \
+                     FROM information_schema.TABLES \
+                     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
+                )
+                .bind(table_name)
+                .fetch_one(pool)
+                .await
             };
             match size_result {
                 Ok(row) => {

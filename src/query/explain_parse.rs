@@ -136,16 +136,20 @@ fn walk_v1_table(table: &Value, stats: &mut PlanStats) {
         .as_f64()
         .or_else(|| table["rows"].as_f64())
         .unwrap_or(0.0);
-    stats.total_estimated_rows += rows;
 
     if table["using_filesort"].as_bool().unwrap_or(false) {
         stats.has_sort = true;
     }
-    // Derived / materialized subquery inside a table node
+    // Derived / materialized subquery inside a table node.
+    // The outer table's `rows` is the size of the already-materialized result,
+    // not real scan work.  Only count rows from inside the subquery to avoid
+    // double-counting; if there is no subquery, count the rows normally.
     if let Some(mat) = table.get("materialized_from_subquery") {
         if let Some(qb) = mat.get("query_block") {
             walk_v1_block(qb, stats);
         }
+    } else {
+        stats.total_estimated_rows += rows;
     }
 }
 
@@ -504,5 +508,42 @@ mod tests {
         let result = parse(&v).unwrap();
         assert!(result.full_table_scan);
         assert_eq!(result.rows_examined_estimate, 7);
+    }
+
+    #[test]
+    fn test_v1_materialized_subquery_no_double_count() {
+        // A derived table (<derived2>) wraps a full scan of big_table.
+        // The outer table's rows_examined_per_scan (100) is just the size of the
+        // materialized result — it must NOT be added on top of big_table's 1_000_000.
+        // Expected total: 1_000_000, not 1_000_100.
+        let v = make_v1(json!({
+            "select_id": 1,
+            "nested_loop": [{
+                "table": {
+                    "table_name": "<derived2>",
+                    "rows_examined_per_scan": 100,
+                    "materialized_from_subquery": {
+                        "query_block": {
+                            "nested_loop": [{
+                                "table": {
+                                    "table_name": "big_table",
+                                    "access_type": "ALL",
+                                    "rows_examined_per_scan": 1000000
+                                }
+                            }]
+                        }
+                    }
+                }
+            }]
+        }));
+        let result = parse(&v).unwrap();
+        assert!(
+            result.full_table_scan,
+            "full table scan inside subquery should be detected"
+        );
+        assert_eq!(
+            result.rows_examined_estimate, 1_000_000,
+            "outer derived rows must not be double-counted"
+        );
     }
 }

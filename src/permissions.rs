@@ -90,7 +90,24 @@ pub fn check_permission(
             Ok(())
         }
         StatementType::Other(name) => {
-            bail!("Unsupported statement type: {}. Only SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, TRUNCATE, SHOW, USE are supported.", name);
+            let hint = if name.contains("Call") {
+                "CALL (stored procedures) is not supported by this server.".to_string()
+            } else if name.contains("Load") {
+                "LOAD DATA is not supported. Use INSERT statements to load data.".to_string()
+            } else if name.contains("LockTables") || name.contains("UnlockTables") {
+                "LOCK/UNLOCK TABLES is not supported.".to_string()
+            } else if name.contains("Prepare")
+                || name.contains("Execute")
+                || name.contains("Deallocate")
+            {
+                "The prepared-statement protocol (PREPARE/EXECUTE/DEALLOCATE) is not supported. Send the final SQL directly."
+                    .to_string()
+            } else if name.contains("Do") {
+                "DO is not supported. Use SELECT instead (e.g. SELECT SLEEP(1)).".to_string()
+            } else {
+                format!("Unsupported statement type: {name}. Only SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, DROP, TRUNCATE, SHOW, USE are supported.")
+            };
+            bail!("{}", hint);
         }
     }
 }
@@ -203,9 +220,53 @@ mod tests {
     #[test]
     fn test_other_always_denied() {
         let config = Config::default();
-        let err =
-            check_permission(&config, &StatementType::Other("CALL".to_string()), None).unwrap_err();
+        let err = check_permission(
+            &config,
+            &StatementType::Other("SomeUnknownStatement".to_string()),
+            None,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("Unsupported statement type"));
+    }
+
+    #[test]
+    fn test_other_call_gives_helpful_message() {
+        let config = Config::default();
+        let err =
+            check_permission(&config, &StatementType::Other("Call".to_string()), None).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("stored procedures") || msg.contains("CALL"),
+            "expected stored-procedure hint, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_other_lock_tables_gives_helpful_message() {
+        let config = Config::default();
+        let err = check_permission(
+            &config,
+            &StatementType::Other("LockTables".to_string()),
+            None,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("LOCK") || msg.contains("UNLOCK"),
+            "expected LOCK/UNLOCK hint, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_other_load_gives_helpful_message() {
+        let config = Config::default();
+        let err = check_permission(&config, &StatementType::Other("LoadData".to_string()), None)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("INSERT") || msg.contains("LOAD"),
+            "expected INSERT/LOAD hint, got: {msg}"
+        );
     }
 
     fn config_with_inserts() -> Config {

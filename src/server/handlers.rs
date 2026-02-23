@@ -1,7 +1,7 @@
 use rmcp::model::{CallToolResult, Content};
 use serde_json::json;
 
-use super::sessions::SessionStore;
+use super::sessions::{validate_identifier, SessionStore};
 use super::tool_schemas::serialize_response;
 
 /// Maximum SQL statement length (1 MB). Enforced in both mysql_query and mysql_explain_plan.
@@ -57,6 +57,11 @@ impl SessionStore {
             .and_then(|v: &serde_json::Value| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
+        if let Some(ref db) = database {
+            if let Err(e) = validate_identifier(db, "Database name") {
+                return Ok(e);
+            }
+        }
         let include_arr = args.get("include").and_then(|v| v.as_array());
         let include_indexes =
             include_arr.is_some_and(|a| a.iter().any(|v| v.as_str() == Some("indexes")));

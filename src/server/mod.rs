@@ -40,7 +40,8 @@ pub(crate) fn is_private_host(host: &str) -> bool {
             }
             IpAddr::V6(v6) => {
                 v6.is_loopback()           // ::1
-                || v6.is_unspecified() // ::
+                || v6.is_unspecified()     // ::
+                || v6.is_unicast_link_local() // fe80::/10 — cloud metadata / link-local
             }
         }
     } else {
@@ -104,6 +105,28 @@ impl McpServer {
         let service = self.serve(stdio()).await?;
         service.waiting().await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_private_host;
+
+    #[test]
+    fn ipv6_link_local_is_blocked() {
+        assert!(is_private_host("fe80::1"), "fe80::1 must be blocked");
+        assert!(
+            is_private_host("fe80::169:254:169:254"),
+            "fe80::169:254:169:254 must be blocked"
+        );
+    }
+
+    #[test]
+    fn ipv6_documentation_range_is_allowed() {
+        assert!(
+            !is_private_host("2001:db8::1"),
+            "2001:db8::1 (documentation) must be allowed"
+        );
     }
 }
 

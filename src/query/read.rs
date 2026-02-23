@@ -103,7 +103,11 @@ pub async fn execute_read_query(
 
     // Serialization phase
     let ser_start = Instant::now();
-    let mut json_rows: Vec<Map<String, Value>> = rows.iter().map(row_to_json).collect();
+    let mut warnings = warnings; // make mutable so row_to_json can push serialization warnings
+    let mut json_rows: Vec<Map<String, Value>> = rows
+        .iter()
+        .map(|row| row_to_json(row, &mut warnings))
+        .collect();
     let ser_elapsed = ser_start.elapsed().as_millis() as u64;
 
     // For SHOW statements (which don't support LIMIT), cap post-fetch if needed.
@@ -158,7 +162,7 @@ pub async fn execute_read_query(
     })
 }
 
-fn row_to_json(row: &sqlx::mysql::MySqlRow) -> Map<String, Value> {
+fn row_to_json(row: &sqlx::mysql::MySqlRow, warnings: &mut Vec<String>) -> Map<String, Value> {
     let mut map = Map::new();
     for (i, col) in row.columns().iter().enumerate() {
         let base = col.name().to_string();
@@ -167,7 +171,7 @@ fn row_to_json(row: &sqlx::mysql::MySqlRow) -> Map<String, Value> {
         let key = if !map.contains_key(&base) {
             base
         } else {
-            let mut n = 2u32;
+            let mut n = 2u64;
             loop {
                 let candidate = format!("{}_{}", base, n);
                 if !map.contains_key(&candidate) {
@@ -176,7 +180,7 @@ fn row_to_json(row: &sqlx::mysql::MySqlRow) -> Map<String, Value> {
                 n += 1;
             }
         };
-        map.insert(key, column_to_json(row, i, col));
+        map.insert(key, column_to_json(row, i, col, warnings));
     }
     map
 }
@@ -185,6 +189,7 @@ fn column_to_json(
     row: &sqlx::mysql::MySqlRow,
     idx: usize,
     col: &sqlx::mysql::MySqlColumn,
+    warnings: &mut Vec<String>,
 ) -> Value {
     let type_name = col.type_info().name();
     match type_name {
@@ -200,15 +205,22 @@ fn column_to_json(
         }
         "TINYINT UNSIGNED" | "SMALLINT UNSIGNED" | "MEDIUMINT UNSIGNED" | "INT UNSIGNED"
         | "BIGINT UNSIGNED" => {
-            if let Ok(v) = row.try_get::<u64, _>(idx) {
-                return serde_json::json!(v);
+            if let Ok(v) = row.try_get::<Option<u64>, _>(idx) {
+                return v.map(|n| serde_json::json!(n)).unwrap_or(Value::Null);
             }
         }
         "FLOAT" | "DOUBLE" => {
             if let Ok(v) = row.try_get::<f64, _>(idx) {
                 return serde_json::Number::from_f64(v)
                     .map(Value::Number)
-                    .unwrap_or(Value::Null);
+                    .unwrap_or_else(|| {
+                        warnings.push(format!(
+                            "Column '{}' contains a non-finite float value (NaN or Infinity); \
+                             serialized as null",
+                            col.name()
+                        ));
+                        Value::Null
+                    });
             }
         }
         // MySQL sends DECIMAL/NUMERIC as text over the wire even in binary protocol.
