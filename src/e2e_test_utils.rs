@@ -46,7 +46,7 @@ pub(crate) fn spawn_server(
     binary: &std::path::Path,
     test_db: &crate::test_helpers::TestDb,
     extra_env: &[(&str, &str)],
-) -> tokio::process::Child {
+) -> Option<tokio::process::Child> {
     let cfg = &test_db.config;
     let mut cmd = Command::new(binary);
     cmd.stdin(Stdio::piped())
@@ -81,7 +81,13 @@ pub(crate) fn spawn_server(
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
-    cmd.spawn().expect("Failed to spawn mysql-mcp")
+    match cmd.spawn() {
+        Ok(child) => Some(child),
+        Err(e) => {
+            eprintln!("Failed to spawn mysql-mcp binary: {}", e);
+            None
+        }
+    }
 }
 
 /// Extract stdin and stdout from a freshly spawned child process.

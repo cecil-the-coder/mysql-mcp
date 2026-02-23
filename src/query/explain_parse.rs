@@ -77,9 +77,11 @@ fn make_result(stats: PlanStats) -> Result<ExplainResult> {
         vec![]
     };
 
-    let tier = if full_table_scan && rows_examined_estimate > VERY_SLOW_ROW_THRESHOLD {
+    // Tier is determined by estimated row count alone. The full_table_scan flag is
+    // surfaced separately in the output; even a full scan of a 5-row table is fast.
+    let tier = if rows_examined_estimate > VERY_SLOW_ROW_THRESHOLD {
         ExplainTier::VerySlow
-    } else if full_table_scan || rows_examined_estimate > SLOW_ROW_THRESHOLD {
+    } else if rows_examined_estimate > SLOW_ROW_THRESHOLD {
         ExplainTier::Slow
     } else {
         ExplainTier::Fast
@@ -264,7 +266,7 @@ mod tests {
         assert!(result.index_used.is_none(), "no index expected");
         assert_eq!(result.rows_examined_estimate, 5);
         assert!(result.extra_flags.is_empty());
-        assert_eq!(result.tier, ExplainTier::Slow); // full_table_scan && rows <= 10_000
+        assert_eq!(result.tier, ExplainTier::Fast); // 5 rows is below SLOW_ROW_THRESHOLD
     }
 
     #[test]

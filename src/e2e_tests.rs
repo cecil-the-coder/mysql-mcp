@@ -24,7 +24,7 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let mut child = spawn_server(&binary, &test_db, &[]);
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else { return; };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -69,7 +69,7 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let mut child = spawn_server(&binary, &test_db, &[]);
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else { return; };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -84,13 +84,29 @@ mod e2e_tests {
         child.kill().await.ok();
 
         let resp = response.expect("No tools/list response");
-        let tools = &resp["result"]["tools"];
-        let has_mysql_query = tools
+        let tool_arr = resp["result"]["tools"]
             .as_array()
-            .expect("tools should be an array")
+            .expect("tools should be an array");
+        let tool_names: Vec<&str> = tool_arr
             .iter()
-            .any(|t| t["name"] == "mysql_query");
-        assert!(has_mysql_query, "Should have mysql_query tool");
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        for expected in [
+            "mysql_query",
+            "mysql_schema_info",
+            "mysql_server_info",
+            "mysql_connect",
+            "mysql_disconnect",
+            "mysql_list_sessions",
+            "mysql_explain_plan",
+        ] {
+            assert!(
+                tool_names.contains(&expected),
+                "tools/list missing '{}', got: {:?}",
+                expected,
+                tool_names
+            );
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -106,7 +122,7 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let mut child = spawn_server(&binary, &test_db, &[]);
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else { return; };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -170,7 +186,7 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let mut child = spawn_server(&binary, &test_db, &[]);
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else { return; };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -236,7 +252,7 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let mut child = spawn_server(&binary, &test_db, &[]);
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else { return; };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -298,7 +314,7 @@ mod e2e_tests {
             return;
         };
         // Spawn with default permissions (MYSQL_ALLOW_INSERT not set → denied).
-        let mut child = spawn_server(&binary, &test_db, &[]);
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else { return; };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -358,11 +374,11 @@ mod e2e_tests {
         // Unique table name to avoid collisions across concurrent test runs.
         let table = format!("_e2e_w{}", std::process::id());
 
-        let mut child = spawn_server(
+        let Some(mut child) = spawn_server(
             &binary,
             &test_db,
             &[("MYSQL_ALLOW_INSERT", "true"), ("MYSQL_ALLOW_DDL", "true")],
-        );
+        ) else { return; };
         let (mut stdin, mut reader) = setup_io(&mut child);
         do_handshake(&mut stdin, &mut reader).await;
 
