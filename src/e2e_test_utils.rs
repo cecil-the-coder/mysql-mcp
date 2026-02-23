@@ -42,6 +42,10 @@ pub(crate) async fn read_response(
 /// Spawns the mysql-mcp binary with the given test DB credentials.
 /// `extra_env` is a slice of `(key, value)` pairs applied after
 /// the standard MySQL connection env vars.
+///
+/// All permission/behaviour MYSQL_* env vars that might be set in the
+/// parent process (e.g. CI job env) are explicitly removed before
+/// `extra_env` is applied, so each test starts from a known baseline.
 pub(crate) fn spawn_server(
     binary: &std::path::Path,
     test_db: &crate::test_helpers::TestDb,
@@ -78,6 +82,25 @@ pub(crate) fn spawn_server(
         // default (10 s) can be exhausted on high-latency remote DBs when
         // other tests are simultaneously establishing connections.
         .env("MYSQL_CONNECT_TIMEOUT", "120000");
+
+    // Scrub all permission/behaviour vars that the CI job (or local shell) might
+    // have set. This ensures tests that rely on default-deny behaviour are not
+    // accidentally passing because the parent exported these vars.
+    for var in &[
+        "MYSQL_ALLOW_INSERT",
+        "MYSQL_ALLOW_UPDATE",
+        "MYSQL_ALLOW_DELETE",
+        "MYSQL_ALLOW_DDL",
+        "MYSQL_READONLY_TRANSACTION",
+        "MYSQL_ALLOW_RUNTIME_CONNECTIONS",
+        "MYSQL_MULTI_DB_WRITE_MODE",
+        "MYSQL_MAX_ROWS",
+        "MYSQL_MAX_SESSIONS",
+        "MYSQL_CACHE_TTL",
+    ] {
+        cmd.env_remove(var);
+    }
+
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
