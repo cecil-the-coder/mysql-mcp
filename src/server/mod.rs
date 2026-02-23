@@ -24,7 +24,9 @@ use tool_schemas::*;
 
 /// Check whether a host string resolves to a blocked address category.
 ///
-/// Blocks loopback and link-local (cloud metadata endpoint 169.254.169.254).
+/// Blocks loopback, link-local (cloud metadata endpoint 169.254.169.254), and multicast.
+/// Also blocks IPv6-mapped IPv4 addresses (e.g. ::ffff:127.0.0.1) which would otherwise
+/// bypass the IPv4 loopback check.
 /// RFC 1918 private ranges (10/8, 172.16/12, 192.168/16) are intentionally ALLOWED:
 /// database servers legitimately live at those addresses in private networks.
 /// Hostnames are always allowed — DNS is the operator's responsibility.
@@ -33,15 +35,26 @@ pub(crate) fn is_private_host(host: &str) -> bool {
     if let Ok(ip) = host.parse::<IpAddr>() {
         match ip {
             IpAddr::V4(v4) => {
-                v4.is_loopback()           // 127.0.0.0/8 — localhost services
-                || v4.is_link_local()      // 169.254.0.0/16 — cloud metadata
-                || v4.is_broadcast()       // 255.255.255.255
+                v4.is_loopback()       // 127.0.0.0/8 — localhost services
+                || v4.is_link_local()  // 169.254.0.0/16 — cloud metadata
+                || v4.is_broadcast()   // 255.255.255.255
                 || v4.is_unspecified() // 0.0.0.0
+                || v4.is_multicast()   // 224.0.0.0/4
             }
             IpAddr::V6(v6) => {
-                v6.is_loopback()           // ::1
-                || v6.is_unspecified()     // ::
-                || v6.is_unicast_link_local() // fe80::/10 — cloud metadata / link-local
+                // IPv6-mapped IPv4 (::ffff:x.x.x.x) — apply the same IPv4 rules so that
+                // e.g. ::ffff:127.0.0.1 and ::ffff:169.254.169.254 are blocked.
+                if let Some(v4) = v6.to_ipv4_mapped() {
+                    return v4.is_loopback()
+                        || v4.is_link_local()
+                        || v4.is_broadcast()
+                        || v4.is_unspecified()
+                        || v4.is_multicast();
+                }
+                v6.is_loopback()              // ::1
+                || v6.is_unspecified()        // ::
+                || v6.is_unicast_link_local()  // fe80::/10 — cloud metadata / link-local
+                || v6.is_multicast()           // ff00::/8
             }
         }
     } else {
@@ -73,15 +86,30 @@ impl McpServer {
             Arc::new(Mutex::new(HashMap::new()));
 
         // Background task: drop sessions idle for > 10 minutes (600 s).
-        // "default" is never dropped.
+        // "default" is never dropped. SSH tunnels are explicitly closed so the
+        // subprocess is reaped rather than relying on Drop's non-blocking start_kill().
         let sessions_reaper = sessions.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
                 interval.tick().await;
                 let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(600);
-                let mut map = sessions_reaper.lock().await;
-                map.retain(|_name, session| session.last_used > cutoff);
+                let stale: Vec<String> = {
+                    let map = sessions_reaper.lock().await;
+                    map.iter()
+                        .filter(|(_, s)| s.last_used <= cutoff)
+                        .map(|(name, _)| name.clone())
+                        .collect()
+                };
+                for name in stale {
+                    let mut map = sessions_reaper.lock().await;
+                    if let Some(session) = map.remove(&name) {
+                        drop(map); // release lock before awaiting tunnel close
+                        if let Some(tunnel) = session.tunnel {
+                            let _ = tunnel.close().await;
+                        }
+                    }
+                }
             }
         });
 
@@ -127,6 +155,45 @@ mod tests {
             !is_private_host("2001:db8::1"),
             "2001:db8::1 (documentation) must be allowed"
         );
+    }
+
+    #[test]
+    fn ipv6_mapped_ipv4_loopback_is_blocked() {
+        assert!(
+            is_private_host("::ffff:127.0.0.1"),
+            "::ffff:127.0.0.1 (IPv6-mapped loopback) must be blocked"
+        );
+    }
+
+    #[test]
+    fn ipv6_mapped_ipv4_link_local_is_blocked() {
+        assert!(
+            is_private_host("::ffff:169.254.169.254"),
+            "::ffff:169.254.169.254 (IPv6-mapped cloud metadata) must be blocked"
+        );
+    }
+
+    #[test]
+    fn ipv4_multicast_is_blocked() {
+        assert!(
+            is_private_host("224.0.0.1"),
+            "224.0.0.1 (IPv4 multicast) must be blocked"
+        );
+    }
+
+    #[test]
+    fn ipv6_multicast_is_blocked() {
+        assert!(
+            is_private_host("ff02::1"),
+            "ff02::1 (IPv6 multicast) must be blocked"
+        );
+    }
+
+    #[test]
+    fn ipv4_private_rfc1918_is_allowed() {
+        assert!(!is_private_host("10.0.0.1"), "10.0.0.1 must be allowed");
+        assert!(!is_private_host("172.16.0.1"), "172.16.0.1 must be allowed");
+        assert!(!is_private_host("192.168.1.1"), "192.168.1.1 must be allowed");
     }
 }
 

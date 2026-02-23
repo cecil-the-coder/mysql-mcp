@@ -251,6 +251,23 @@ impl SessionStore {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
 
+        if !matches!(
+            ssh_known_hosts_check.as_str(),
+            "strict" | "accept-new" | "insecure"
+        ) {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "ssh_known_hosts_check must be one of: strict, accept-new, insecure",
+            )]));
+        }
+        if let Some(ref key_path) = ssh_private_key {
+            if !std::path::Path::new(key_path).exists() {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "SSH private key file not found: {}",
+                    key_path
+                ))]));
+            }
+        }
+
         tracing::debug!(
             name = %name,
             host = %host,
@@ -259,6 +276,24 @@ impl SessionStore {
             database = ?database,
             "mysql_connect: creating session"
         );
+
+        // Pre-check: fast path before the expensive pool/tunnel creation.
+        // We re-check both conditions after creation to handle concurrent races.
+        {
+            let sessions = self.sessions.lock().await;
+            if sessions.len() >= self.config.security.max_sessions as usize {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Maximum session limit ({}) reached. Disconnect an existing session first.",
+                    self.config.security.max_sessions
+                ))]));
+            }
+            if sessions.contains_key(&name) {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
+                    name
+                ))]));
+            }
+        }
 
         let (pool, tunnel) = if let Some(ref ssh_host_str) = ssh_host {
             // Validate SSH user is present
@@ -336,6 +371,25 @@ impl SessionStore {
             "database": &database,
             "ssh_host": &ssh_host,
         });
+        let mut sessions = self.sessions.lock().await;
+        if sessions.len() >= self.config.security.max_sessions as usize {
+            if let Some(t) = tunnel {
+                let _ = t.close().await;
+            }
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "Maximum session limit ({}) reached. Disconnect an existing session first.",
+                self.config.security.max_sessions
+            ))]));
+        }
+        if sessions.contains_key(&name) {
+            if let Some(t) = tunnel {
+                let _ = t.close().await;
+            }
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
+                name
+            ))]));
+        }
         let session = Session {
             pool,
             introspector,
@@ -345,19 +399,6 @@ impl SessionStore {
             tunnel,
             ssh_host,
         };
-        let mut sessions = self.sessions.lock().await;
-        if sessions.len() >= self.config.security.max_sessions as usize {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
-                "Maximum session limit ({}) reached. Disconnect an existing session first.",
-                self.config.security.max_sessions
-            ))]));
-        }
-        if sessions.contains_key(&name) {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
-                "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
-                name
-            ))]));
-        }
         sessions.insert(name, session);
         Ok(serialize_response(&info))
     }

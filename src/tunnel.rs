@@ -21,6 +21,8 @@ impl TunnelHandle {
     /// Prefer this over relying on Drop when you want clean teardown.
     pub async fn close(mut self) -> Result<()> {
         self.child.kill().await?;
+        // Wait for the child to be fully reaped so no zombie process is left behind.
+        let _ = self.child.wait().await;
         Ok(())
     }
 }
