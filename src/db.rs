@@ -83,11 +83,17 @@ fn determine_ssl_mode(ssl: bool, accept_invalid: bool, has_ca: bool) -> MySqlSsl
 pub fn build_connect_options(config: &Config) -> Result<MySqlConnectOptions> {
     let conn = &config.connection;
 
-    // If a full mysql:// URL is given, parse it directly
+    // If a full mysql:// URL is given, parse it directly.
+    // Reject unrecognized schemes rather than silently falling through to TCP.
     if let Some(cs) = &conn.connection_string {
         if cs.starts_with("mysql://") || cs.starts_with("mysql+ssl://") {
             let opts = MySqlConnectOptions::from_str(cs)?;
             return Ok(opts);
+        } else {
+            anyhow::bail!(
+                "connection_string must start with 'mysql://' or 'mysql+ssl://', got: '{}'",
+                cs.split_at(cs.find("://").map(|i| i + 3).unwrap_or(cs.len().min(32))).0
+            );
         }
     }
 

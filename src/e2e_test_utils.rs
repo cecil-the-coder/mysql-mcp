@@ -52,10 +52,17 @@ pub(crate) fn spawn_server(
         .env("MYSQL_PORT", cfg.connection.port.to_string())
         .env("MYSQL_USER", &cfg.connection.user)
         .env("MYSQL_PASS", &cfg.connection.password)
-        .env("MYSQL_DB", cfg.connection.database.as_deref().unwrap_or(""))
         .env("MYSQL_SSL", if cfg.security.ssl { "true" } else { "false" })
-        .env("MYSQL_SSL_ACCEPT_INVALID_CERTS", if cfg.security.ssl_accept_invalid_certs { "true" } else { "false" })
-        .env("MYSQL_SSL_CA", cfg.security.ssl_ca.as_deref().unwrap_or(""))
+        .env("MYSQL_SSL_ACCEPT_INVALID_CERTS", if cfg.security.ssl_accept_invalid_certs { "true" } else { "false" });
+    // Only set MYSQL_DB/MYSQL_SSL_CA when non-empty: the env_config reader treats
+    // Some("") as a database/CA override, which would fail at connect time.
+    if let Some(db) = cfg.connection.database.as_deref().filter(|s| !s.is_empty()) {
+        cmd.env("MYSQL_DB", db);
+    }
+    if let Some(ca) = cfg.security.ssl_ca.as_deref().filter(|s| !s.is_empty()) {
+        cmd.env("MYSQL_SSL_CA", ca);
+    }
+    cmd
         // Give the binary generous connection headroom: the production
         // default (10 s) can be exhausted on high-latency remote DBs when
         // other tests are simultaneously establishing connections.

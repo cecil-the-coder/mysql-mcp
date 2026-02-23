@@ -139,6 +139,11 @@ impl Config {
             anyhow::bail!("Config error: connection host must not be empty");
         }
 
+        // pool.size must be at least 1
+        if self.pool.size == 0 {
+            anyhow::bail!("pool.size must be >= 1");
+        }
+
         // max_rows must be at least 1
         if self.pool.max_rows == 0 {
             anyhow::bail!("pool.max_rows must be >= 1 (set to a large number like 10000 for effectively unlimited rows)");

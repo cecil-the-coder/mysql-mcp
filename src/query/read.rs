@@ -205,8 +205,13 @@ fn column_to_json(row: &sqlx::mysql::MySqlRow, idx: usize, col: &sqlx::mysql::My
         "JSON" => {
             // JSON columns: parse and return as structured JSON value
             if let Ok(Some(s)) = row.try_get::<Option<String>, _>(idx) {
-                return serde_json::from_str::<Value>(&s)
-                    .unwrap_or(Value::String(s));
+                match serde_json::from_str::<Value>(&s) {
+                    Ok(v) => return v,
+                    Err(e) => {
+                        tracing::warn!("JSON column could not be parsed (returning as string): {}", e);
+                        return Value::String(s);
+                    }
+                }
             }
             return Value::Null;
         }

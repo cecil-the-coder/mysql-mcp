@@ -35,7 +35,8 @@ impl SessionStore {
         args: serde_json::Map<String, serde_json::Value>,
     ) -> anyhow::Result<CallToolResult, rmcp::ErrorData> {
         let table = match args.get("table").and_then(|v: &serde_json::Value| v.as_str()) {
-            Some(t) => t.to_string(),
+            Some(t) if !t.is_empty() => t.to_string(),
+            Some(_) => return Ok(CallToolResult::error(vec![Content::text("Table name cannot be empty")])),
             None => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: table")])),
         };
         let database = args

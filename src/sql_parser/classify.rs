@@ -45,7 +45,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
                 has_named_table = select.from.iter().any(|t| matches!(t.relation, TableFactor::Table { .. }));
                 has_group_by = match &select.group_by {
                     sqlparser::ast::GroupByExpr::Expressions(exprs, _) => !exprs.is_empty(),
-                    _ => true,
+                    sqlparser::ast::GroupByExpr::All(_) => true,
                 };
                 has_aggregate = has_aggregate_function(&select.projection);
                 join_count = select.from.iter().map(|twj| 1 + twj.joins.len()).sum();
@@ -281,6 +281,12 @@ fn expr_has_aggregate(expr: &Expr) -> bool {
         }
         Expr::UnaryOp { expr, .. } => expr_has_aggregate(expr),
         Expr::Nested(inner) => expr_has_aggregate(inner),
+        Expr::Case { operand, conditions, results, else_result, .. } => {
+            operand.as_deref().is_some_and(expr_has_aggregate)
+                || conditions.iter().any(expr_has_aggregate)
+                || results.iter().any(expr_has_aggregate)
+                || else_result.as_deref().is_some_and(expr_has_aggregate)
+        }
         _ => false,
     }
 }
@@ -372,6 +378,23 @@ pub(super) fn collect_where_info(
         }
         Expr::InList { expr, .. } => {
             collect_where_info(expr, cols, seen, has_leading_wildcard);
+        }
+        Expr::Cast { expr, .. } => {
+            collect_where_info(expr, cols, seen, has_leading_wildcard);
+        }
+        Expr::Case { operand, conditions, results, else_result, .. } => {
+            if let Some(op) = operand {
+                collect_where_info(op, cols, seen, has_leading_wildcard);
+            }
+            for cond in conditions {
+                collect_where_info(cond, cols, seen, has_leading_wildcard);
+            }
+            for result in results {
+                collect_where_info(result, cols, seen, has_leading_wildcard);
+            }
+            if let Some(else_expr) = else_result {
+                collect_where_info(else_expr, cols, seen, has_leading_wildcard);
+            }
         }
         Expr::Nested(inner) => {
             collect_where_info(inner, cols, seen, has_leading_wildcard);

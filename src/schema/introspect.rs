@@ -160,16 +160,32 @@ impl SchemaIntrospector {
         // If there are 2+ unindexed WHERE columns, check whether a composite index
         // would cover them rather than N individual indexes.
         let esc = |s: &str| format!("`{}`", super::fetch::escape_mysql_identifier(s));
+        // Sanitize a string for use as part of an index name (alphanumeric + underscore only).
+        let safe_name = |s: &str| -> String {
+            s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect()
+        };
         if unindexed_cols.len() >= 2 {
+            // An existing composite index covers the WHERE columns iff all WHERE columns
+            // appear as a leading prefix of that index (B-tree indexes require leftmost prefix
+            // for efficient range/equality filtering). Column ORDER within the prefix doesn't
+            // matter for equality predicates, so we compare sets.
+            let where_col_set: std::collections::HashSet<String> =
+                where_cols.iter().map(|s| s.to_lowercase()).collect();
             let covered_by_existing = composite_indexes.iter().any(|idx| {
-                where_cols.iter().all(|wc| idx.columns.iter().any(|ic| ic.eq_ignore_ascii_case(wc)))
+                if idx.columns.len() < where_col_set.len() { return false; }
+                let prefix_set: std::collections::HashSet<String> = idx.columns[..where_col_set.len()]
+                    .iter()
+                    .map(|s| s.to_lowercase())
+                    .collect();
+                prefix_set == where_col_set
             });
             if !covered_by_existing {
                 let idx_cols: Vec<&str> = unindexed_cols.iter().map(|c| c.as_str()).collect();
                 let esc_cols: Vec<String> = idx_cols.iter().map(|c| esc(c)).collect();
+                let safe_cols: Vec<String> = idx_cols.iter().map(|c| safe_name(c)).collect();
                 suggestions.push(format!(
                     "Multiple unindexed WHERE columns on {}: [{}]. Consider a composite index: CREATE INDEX idx_{}_{} ON {}({});",
-                    esc(table), idx_cols.join(", "), table, idx_cols.join("_"), esc(table), esc_cols.join(", ")
+                    esc(table), idx_cols.join(", "), safe_name(table), safe_cols.join("_"), esc(table), esc_cols.join(", ")
                 ));
             } else {
                 suggestions.push(format!(
@@ -191,7 +207,7 @@ impl SchemaIntrospector {
                 } else {
                     suggestions.push(format!(
                         "Column {} in WHERE clause on table {} has no index. Consider: CREATE INDEX idx_{}_{} ON {}({});",
-                        esc(col), esc(table), table, col, esc(table), esc(col)
+                        esc(col), esc(table), safe_name(table), safe_name(col), esc(table), esc(col)
                     ));
                 }
             }
@@ -222,7 +238,9 @@ impl SchemaIntrospector {
     /// Use after DDL that targets a known table (CREATE TABLE, ALTER TABLE, TRUNCATE).
     pub async fn invalidate_table(&self, table: &str) {
         if table.is_empty() {
-            self.invalidate_all().await;
+            // Caller bug: empty table name should not reach here. The handler calls
+            // invalidate_all() directly when the target table is unknown.
+            tracing::warn!("invalidate_table called with empty table name; ignoring");
             return;
         }
         {
