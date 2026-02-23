@@ -24,7 +24,9 @@ mod e2e_session_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else { return; };
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
+            return;
+        };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -95,7 +97,9 @@ mod e2e_session_tests {
             &binary,
             &test_db,
             &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],
-        ) else { return; };
+        ) else {
+            return;
+        };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -302,7 +306,9 @@ mod e2e_session_tests {
             &binary,
             &test_db,
             &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],
-        ) else { return; };
+        ) else {
+            return;
+        };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -444,7 +450,9 @@ mod e2e_session_tests {
             &binary,
             &test_db,
             &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],
-        ) else { return; };
+        ) else {
+            return;
+        };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -514,7 +522,9 @@ mod e2e_session_tests {
                 ("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true"),
                 ("MYSQL_MAX_SESSIONS", "1"),
             ],
-        ) else { return; };
+        ) else {
+            return;
+        };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
         do_handshake(&mut stdin, &mut reader).await;
@@ -614,7 +624,9 @@ mod e2e_session_tests {
             &binary,
             &test_db,
             &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],
-        ) else { return; };
+        ) else {
+            return;
+        };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
         do_handshake(&mut stdin, &mut reader).await;

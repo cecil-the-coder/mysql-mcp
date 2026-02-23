@@ -24,7 +24,9 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else { return; };
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
+            return;
+        };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -69,7 +71,9 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else { return; };
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
+            return;
+        };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -87,10 +91,7 @@ mod e2e_tests {
         let tool_arr = resp["result"]["tools"]
             .as_array()
             .expect("tools should be an array");
-        let tool_names: Vec<&str> = tool_arr
-            .iter()
-            .filter_map(|t| t["name"].as_str())
-            .collect();
+        let tool_names: Vec<&str> = tool_arr.iter().filter_map(|t| t["name"].as_str()).collect();
         for expected in [
             "mysql_query",
             "mysql_schema_info",
@@ -122,7 +123,9 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else { return; };
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
+            return;
+        };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -186,7 +189,9 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else { return; };
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
+            return;
+        };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -252,7 +257,9 @@ mod e2e_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else { return; };
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
+            return;
+        };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -314,7 +321,9 @@ mod e2e_tests {
             return;
         };
         // Spawn with default permissions (MYSQL_ALLOW_INSERT not set → denied).
-        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else { return; };
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
+            return;
+        };
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
@@ -378,7 +387,9 @@ mod e2e_tests {
             &binary,
             &test_db,
             &[("MYSQL_ALLOW_INSERT", "true"), ("MYSQL_ALLOW_DDL", "true")],
-        ) else { return; };
+        ) else {
+            return;
+        };
         let (mut stdin, mut reader) = setup_io(&mut child);
         do_handshake(&mut stdin, &mut reader).await;
 
