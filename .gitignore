@@ -4,3 +4,4 @@ Cargo.lock
 *.db
 mysql-mcp.toml
 cert*.pem
+ca.pem

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use sqlparser::ast::{
-    Expr, FromTable, ObjectName, Query, Select, SelectItem, SetExpr, Statement, TableFactor,
-    Use, Value,
+    Expr, FromTable, ObjectName, Query, Select, SelectItem, SetExpr, Statement, TableFactor, Use,
+    Value,
 };
 use std::collections::HashSet;
 
@@ -20,8 +20,18 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
     let mut has_aggregate = false;
     let mut join_count: usize = 0;
     let mut has_leading_wildcard_like = false;
+    let mut is_compound_query = false;
 
     let (statement_type, target_schema, target_table) = match stmt {
+        Statement::Query(query) if query.with.is_some() => (
+            StatementType::Other(
+                "WITH (CTE) queries are not supported. Rewrite using a subquery instead."
+                    .to_string(),
+            ),
+            None,
+            None,
+        ),
+
         Statement::Query(query) => {
             let tname = extract_first_from_table_name(query);
             has_limit = query.limit.is_some();
@@ -42,7 +52,10 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
                         &mut has_leading_wildcard_like,
                     );
                 }
-                has_named_table = select.from.iter().any(|t| matches!(t.relation, TableFactor::Table { .. }));
+                has_named_table = select
+                    .from
+                    .iter()
+                    .any(|t| matches!(t.relation, TableFactor::Table { .. }));
                 has_group_by = match &select.group_by {
                     sqlparser::ast::GroupByExpr::Expressions(exprs, _) => !exprs.is_empty(),
                     sqlparser::ast::GroupByExpr::All(_) => true,
@@ -53,6 +66,11 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
                 // (implicit cross joins) are NOT counted here — their WHERE conditions
                 // are already analysed by collect_where_info.
                 join_count = select.from.iter().map(|twj| twj.joins.len()).sum();
+            } else {
+                // UNION / INTERSECT / EXCEPT: body is SetExpr::SetOperation, not Select.
+                // Analysis fields (has_where, has_named_table, etc.) remain false — no
+                // false-positive warnings. Set the flag so we can add an informational note.
+                is_compound_query = true;
             }
             (StatementType::Select, None, tname)
         }
@@ -96,9 +114,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         }
 
         Statement::Drop { names, .. } => {
-            let schema = names
-                .first()
-                .and_then(extract_schema_from_object_name);
+            let schema = names.first().and_then(extract_schema_from_object_name);
             (StatementType::Drop, schema, None)
         }
 
@@ -111,9 +127,10 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
 
         Statement::Use(use_stmt) => {
             let schema = match use_stmt {
-                Use::Object(name) | Use::Database(name) | Use::Schema(name) | Use::Catalog(name) => {
-                    Some(name.to_string())
-                }
+                Use::Object(name)
+                | Use::Database(name)
+                | Use::Schema(name)
+                | Use::Catalog(name) => Some(name.to_string()),
                 _ => None,
             };
             (StatementType::Use, schema, None)
@@ -160,7 +177,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
     };
 
     // Pre-compute performance warnings from cached fields (SELECT only).
-    let warnings = compute_select_warnings(
+    let mut warnings = compute_select_warnings(
         &statement_type,
         has_wildcard,
         has_named_table,
@@ -171,6 +188,11 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         has_aggregate,
         join_count,
     );
+    if is_compound_query {
+        warnings.push(
+            "UNION/INTERSECT/EXCEPT: index usage and row estimates are not available for compound queries".to_string()
+        );
+    }
 
     Ok(ParsedStatement {
         statement_type,
@@ -187,6 +209,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
 
 /// Compute SELECT performance warnings from pre-parsed fields.
 /// Returns an empty vec for non-SELECT statements.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn compute_select_warnings(
     statement_type: &StatementType,
     has_wildcard: bool,
@@ -214,16 +237,13 @@ pub(super) fn compute_select_warnings(
 
     // 2. No WHERE and no LIMIT on a real table — full scan
     if has_named_table && !has_where && !has_limit {
-        warnings.push(
-            "No WHERE clause and no LIMIT — query will scan the entire table".to_string(),
-        );
+        warnings
+            .push("No WHERE clause and no LIMIT — query will scan the entire table".to_string());
     }
 
     // 3. LIKE with a leading wildcard — index unusable
     if has_leading_wildcard_like {
-        warnings.push(
-            "Leading wildcard in LIKE — index on this column cannot be used".to_string(),
-        );
+        warnings.push("Leading wildcard in LIKE — index on this column cannot be used".to_string());
     }
 
     // 4. No LIMIT on a non-aggregate SELECT that has a WHERE clause.
@@ -268,14 +288,10 @@ fn has_aggregate_function(projection: &[SelectItem]) -> bool {
 
 fn expr_has_aggregate(expr: &Expr) -> bool {
     match expr {
-        Expr::Function(f) => f
-            .name
-            .0
-            .last()
-            .is_some_and(|id| {
-                let v = id.value.as_str();
-                // Standard SQL aggregates
-                v.eq_ignore_ascii_case("COUNT")
+        Expr::Function(f) => f.name.0.last().is_some_and(|id| {
+            let v = id.value.as_str();
+            // Standard SQL aggregates
+            v.eq_ignore_ascii_case("COUNT")
                     || v.eq_ignore_ascii_case("SUM")
                     || v.eq_ignore_ascii_case("AVG")
                     || v.eq_ignore_ascii_case("MIN")
@@ -294,13 +310,17 @@ fn expr_has_aggregate(expr: &Expr) -> bool {
                     || v.eq_ignore_ascii_case("VAR_SAMP")
                     || v.eq_ignore_ascii_case("JSON_ARRAYAGG")
                     || v.eq_ignore_ascii_case("JSON_OBJECTAGG")
-            }),
-        Expr::BinaryOp { left, right, .. } => {
-            expr_has_aggregate(left) || expr_has_aggregate(right)
-        }
+        }),
+        Expr::BinaryOp { left, right, .. } => expr_has_aggregate(left) || expr_has_aggregate(right),
         Expr::UnaryOp { expr, .. } => expr_has_aggregate(expr),
         Expr::Nested(inner) => expr_has_aggregate(inner),
-        Expr::Case { operand, conditions, results, else_result, .. } => {
+        Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+            ..
+        } => {
             operand.as_deref().is_some_and(expr_has_aggregate)
                 || conditions.iter().any(expr_has_aggregate)
                 || results.iter().any(expr_has_aggregate)
@@ -377,19 +397,29 @@ pub(super) fn collect_where_info(
             collect_where_info(left, cols, seen, has_leading_wildcard);
             collect_where_info(right, cols, seen, has_leading_wildcard);
         }
-        Expr::Between { expr, low, high, .. } => {
+        Expr::Between {
+            expr, low, high, ..
+        } => {
             collect_where_info(expr, cols, seen, has_leading_wildcard);
             collect_where_info(low, cols, seen, has_leading_wildcard);
             collect_where_info(high, cols, seen, has_leading_wildcard);
         }
-        Expr::Like { expr: like_expr, pattern, .. }
-        | Expr::ILike { expr: like_expr, pattern, .. } => {
+        Expr::Like {
+            expr: like_expr,
+            pattern,
+            ..
+        }
+        | Expr::ILike {
+            expr: like_expr,
+            pattern,
+            ..
+        } => {
             // Detect a leading-wildcard pattern string literal.
-            if let Expr::Value(val) = pattern.as_ref() {
-                if let Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) = val {
-                    if s.starts_with('%') {
-                        *has_leading_wildcard = true;
-                    }
+            if let Expr::Value(Value::SingleQuotedString(s) | Value::DoubleQuotedString(s)) =
+                pattern.as_ref()
+            {
+                if s.starts_with('%') {
+                    *has_leading_wildcard = true;
                 }
             }
             collect_where_info(like_expr, cols, seen, has_leading_wildcard);
@@ -417,7 +447,13 @@ pub(super) fn collect_where_info(
         Expr::Cast { expr, .. } => {
             collect_where_info(expr, cols, seen, has_leading_wildcard);
         }
-        Expr::Case { operand, conditions, results, else_result, .. } => {
+        Expr::Case {
+            operand,
+            conditions,
+            results,
+            else_result,
+            ..
+        } => {
             if let Some(op) = operand {
                 collect_where_info(op, cols, seen, has_leading_wildcard);
             }

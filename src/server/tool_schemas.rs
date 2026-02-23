@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use rmcp::model::Content;
 use serde_json::json;
+use std::sync::Arc;
 
 // ============================================================
 // Tool input schemas
@@ -69,7 +69,35 @@ pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::
             "password": { "type": "string", "description": "MySQL password (optional; use empty string for passwordless login)." },
             "database": { "type": "string", "description": "Default database to use for this session (optional; executed as USE <database> after connection)." },
             "ssl": { "type": "boolean", "description": "Enable SSL/TLS (default: false). When true and ssl_ca is omitted, uses VerifyIdentity mode (full cert+hostname check)." },
-            "ssl_ca": { "type": "string", "description": "Path to PEM CA certificate file for SSL verification. When set, uses VerifyCa mode (validates cert chain without hostname check)." }
+            "ssl_ca": { "type": "string", "description": "Path to PEM CA certificate file for SSL verification. When set, uses VerifyCa mode (validates cert chain without hostname check)." },
+            "ssh_host": {
+                "type": "string",
+                "description": "SSH bastion hostname. When provided, the connection is made through an SSH tunnel via this host."
+            },
+            "ssh_port": {
+                "type": "integer",
+                "description": "SSH server port (default: 22).",
+                "default": 22
+            },
+            "ssh_user": {
+                "type": "string",
+                "description": "SSH username (required when ssh_host is set)."
+            },
+            "ssh_private_key": {
+                "type": "string",
+                "description": "Path to the SSH private key file (PEM format). If omitted, relies on SSH agent."
+            },
+            "ssh_use_agent": {
+                "type": "boolean",
+                "description": "Use the system SSH agent (SSH_AUTH_SOCK) for authentication.",
+                "default": false
+            },
+            "ssh_known_hosts_check": {
+                "type": "string",
+                "enum": ["strict", "accept-new", "insecure"],
+                "description": "Host key verification mode. 'strict' (default): fail on unknown host. 'accept-new': auto-add new hosts. 'insecure': skip all verification.",
+                "default": "strict"
+            }
         },
         "required": ["name", "host", "user"]
     })))
@@ -118,7 +146,8 @@ pub(crate) fn serialize_response(value: &serde_json::Value) -> rmcp::model::Call
         Err(e) => {
             tracing::error!("Failed to serialize response: {}", e);
             rmcp::model::CallToolResult::error(vec![Content::text(format!(
-                "Internal error: failed to serialize response: {}", e
+                "Internal error: failed to serialize response: {}",
+                e
             ))])
         }
     }

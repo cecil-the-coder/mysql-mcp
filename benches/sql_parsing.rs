@@ -15,18 +15,9 @@ fn bench_reads(c: &mut Criterion) {
     let mut group = c.benchmark_group("parse_sql/read");
 
     let cases: &[(&str, &str)] = &[
-        (
-            "simple_select",
-            "SELECT id, name FROM users WHERE id = 1",
-        ),
-        (
-            "select_star_no_limit",
-            "SELECT * FROM users",
-        ),
-        (
-            "no_where_no_limit",
-            "SELECT id, created_at FROM orders",
-        ),
+        ("simple_select", "SELECT id, name FROM users WHERE id = 1"),
+        ("select_star_no_limit", "SELECT * FROM users"),
+        ("no_where_no_limit", "SELECT id, created_at FROM orders"),
         (
             "with_limit",
             "SELECT id, name FROM users WHERE active = 1 LIMIT 100",
@@ -58,14 +49,8 @@ fn bench_reads(c: &mut Criterion) {
              WHERE created_at > '2024-01-01' \
              GROUP BY user_id",
         ),
-        (
-            "show_tables",
-            "SHOW TABLES",
-        ),
-        (
-            "show_columns",
-            "SHOW COLUMNS FROM users",
-        ),
+        ("show_tables", "SHOW TABLES"),
+        ("show_columns", "SHOW COLUMNS FROM users"),
     ];
 
     for (name, sql) in cases {

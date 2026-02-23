@@ -25,11 +25,11 @@
 //!   Note: the handle_connect clone→move change saves ~100 ns per call, invisible
 //!   against the ~100 ms connection setup measured here.
 
-use std::sync::Arc;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use mysql_mcp::query::read::execute_read_query;
 use mysql_mcp::schema::SchemaIntrospector;
 use mysql_mcp::sql_parser::parse_sql;
+use std::sync::Arc;
 
 struct BenchDb {
     pool: sqlx::MySqlPool,
@@ -61,21 +61,45 @@ fn try_connect() -> Option<BenchDb> {
     let database = std::env::var("MYSQL_DB").ok().filter(|s| !s.is_empty());
     let ssl = std::env::var("MYSQL_SSL").is_ok_and(|v| v == "true" || v == "1");
     let ssl_ca_str = std::env::var("MYSQL_SSL_CA").unwrap_or_default();
-    let ssl_ca = if ssl_ca_str.is_empty() { None } else { Some(ssl_ca_str) };
+    let ssl_ca = if ssl_ca_str.is_empty() {
+        None
+    } else {
+        Some(ssl_ca_str)
+    };
 
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let pool = rt.block_on(async {
         mysql_mcp::db::build_session_pool(
-            &host, port, &user, &pass,
-            database.as_deref(), ssl, false, ssl_ca.as_deref(),
+            &host,
+            port,
+            &user,
+            &pass,
+            database.as_deref(),
+            ssl,
+            false,
+            ssl_ca.as_deref(),
             30_000,
-        ).await
+        )
+        .await
     });
 
     match pool {
-        Ok(p) => Some(BenchDb { pool: p, rt, host, port, user, pass, database, ssl, ssl_ca }),
+        Ok(p) => Some(BenchDb {
+            pool: p,
+            rt,
+            host,
+            port,
+            user,
+            pass,
+            database,
+            ssl,
+            ssl_ca,
+        }),
         Err(e) => {
-            eprintln!("  [skip] Could not connect to MySQL for DB benchmarks: {}", e);
+            eprintln!(
+                "  [skip] Could not connect to MySQL for DB benchmarks: {}",
+                e
+            );
             None
         }
     }
@@ -208,11 +232,9 @@ fn bench_index_suggestions(c: &mut Criterion) {
     // Prime all three caches (indexed_columns, composite_indexes, columns) for
     // explain_test_fts so benchmark iterations hit only the Rust loop.
     db.rt.block_on(async {
-        let _ = introspector.generate_index_suggestions(
-            "explain_test_fts",
-            Some("mcp_test"),
-            &["val".to_string()],
-        ).await;
+        let _ = introspector
+            .generate_index_suggestions("explain_test_fts", Some("mcp_test"), &["val".to_string()])
+            .await;
     });
     // Let the stale-while-revalidate background spawn settle.
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -225,11 +247,13 @@ fn bench_index_suggestions(c: &mut Criterion) {
         group.bench_function("single_unindexed_col_cached", |b| {
             b.iter(|| {
                 db.rt.block_on(async {
-                    introspector.generate_index_suggestions(
-                        "explain_test_fts",
-                        Some("mcp_test"),
-                        &where_cols,
-                    ).await
+                    introspector
+                        .generate_index_suggestions(
+                            "explain_test_fts",
+                            Some("mcp_test"),
+                            &where_cols,
+                        )
+                        .await
                 })
             });
         });
@@ -241,22 +265,22 @@ fn bench_index_suggestions(c: &mut Criterion) {
         let where_cols = vec!["val".to_string(), "id".to_string()];
         // Prime cache for this key too (same table, already cached, but prime suggestion path)
         db.rt.block_on(async {
-            let _ = introspector.generate_index_suggestions(
-                "explain_test_fts",
-                Some("mcp_test"),
-                &where_cols,
-            ).await;
+            let _ = introspector
+                .generate_index_suggestions("explain_test_fts", Some("mcp_test"), &where_cols)
+                .await;
         });
         std::thread::sleep(std::time::Duration::from_millis(100));
 
         group.bench_function("two_unindexed_cols_cached", |b| {
             b.iter(|| {
                 db.rt.block_on(async {
-                    introspector.generate_index_suggestions(
-                        "explain_test_fts",
-                        Some("mcp_test"),
-                        &where_cols,
-                    ).await
+                    introspector
+                        .generate_index_suggestions(
+                            "explain_test_fts",
+                            Some("mcp_test"),
+                            &where_cols,
+                        )
+                        .await
                 })
             });
         });
@@ -291,10 +315,18 @@ fn bench_session_connect(c: &mut Criterion) {
         b.iter(|| {
             db.rt.block_on(async {
                 mysql_mcp::db::build_session_pool(
-                    &host, port, &user, &pass,
-                    database.as_deref(), ssl, false, ssl_ca.as_deref(),
+                    &host,
+                    port,
+                    &user,
+                    &pass,
+                    database.as_deref(),
+                    ssl,
+                    false,
+                    ssl_ca.as_deref(),
                     30_000,
-                ).await.unwrap()
+                )
+                .await
+                .unwrap()
             })
         });
     });
@@ -302,5 +334,10 @@ fn bench_session_connect(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_query_execution, bench_index_suggestions, bench_session_connect);
+criterion_group!(
+    benches,
+    bench_query_execution,
+    bench_index_suggestions,
+    bench_session_connect
+);
 criterion_main!(benches);

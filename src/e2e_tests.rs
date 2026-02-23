@@ -4,10 +4,12 @@
 
 #[cfg(test)]
 mod e2e_tests {
-    use tokio::io::AsyncWriteExt;
-    use serde_json::json;
+    use crate::e2e_test_utils::{
+        binary_path, do_handshake, read_response, send_message, setup_io, spawn_server,
+    };
     use crate::test_helpers::setup_test_db;
-    use crate::e2e_test_utils::{binary_path, send_message, read_response, spawn_server, do_handshake, setup_io};
+    use serde_json::json;
+    use tokio::io::AsyncWriteExt;
 
     // -------------------------------------------------------------------------
     // Test 1: MCP initialize handshake — uses do_handshake() helper
@@ -19,21 +21,27 @@ mod e2e_tests {
             return;
         };
 
-        let Some(test_db) = setup_test_db().await else { return; };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
         let mut child = spawn_server(&binary, &test_db, &[]);
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
         // Send initialize request and capture the response directly (do_handshake
         // consumes the response, so we send the request manually here to inspect it).
-        send_message(&mut stdin, &json!({
-            "jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "test-client", "version": "1.0"}
-            }
-        })).await;
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test-client", "version": "1.0"}
+                }
+            }),
+        )
+        .await;
 
         let response = read_response(&mut reader).await;
         child.kill().await.ok();
@@ -41,7 +49,11 @@ mod e2e_tests {
         let resp = response.expect("No response from server within timeout");
         assert_eq!(resp["jsonrpc"], "2.0");
         assert_eq!(resp["id"], 1);
-        assert!(resp.get("result").is_some(), "Expected result, got: {}", resp);
+        assert!(
+            resp.get("result").is_some(),
+            "Expected result, got: {}",
+            resp
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -54,20 +66,30 @@ mod e2e_tests {
             return;
         };
 
-        let Some(test_db) = setup_test_db().await else { return; };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
         let mut child = spawn_server(&binary, &test_db, &[]);
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
         do_handshake(&mut stdin, &mut reader).await;
-        send_message(&mut stdin, &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})).await;
+        send_message(
+            &mut stdin,
+            &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
+        )
+        .await;
 
         let response = read_response(&mut reader).await;
         child.kill().await.ok();
 
         let resp = response.expect("No tools/list response");
         let tools = &resp["result"]["tools"];
-        let has_mysql_query = tools.as_array().expect("tools should be an array").iter().any(|t| t["name"] == "mysql_query");
+        let has_mysql_query = tools
+            .as_array()
+            .expect("tools should be an array")
+            .iter()
+            .any(|t| t["name"] == "mysql_query");
         assert!(has_mysql_query, "Should have mysql_query tool");
     }
 
@@ -81,7 +103,9 @@ mod e2e_tests {
             return;
         };
 
-        let Some(test_db) = setup_test_db().await else { return; };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
         let mut child = spawn_server(&binary, &test_db, &[]);
 
         let (mut stdin, mut reader) = setup_io(&mut child);
@@ -99,7 +123,8 @@ mod e2e_tests {
         let read_result = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             reader.read_line(&mut error_line),
-        ).await;
+        )
+        .await;
 
         match read_result {
             Ok(Ok(n)) if n > 0 => {
@@ -112,7 +137,11 @@ mod e2e_tests {
                     v
                 );
                 let code = v["error"]["code"].as_i64().unwrap_or(0);
-                assert_eq!(code, -32700, "Expected parse-error code -32700, got: {}", code);
+                assert_eq!(
+                    code, -32700,
+                    "Expected parse-error code -32700, got: {}",
+                    code
+                );
             }
             // Timeout or EOF: the server either silently dropped the line
             // (still alive) or exited due to protocol violation. Both are
@@ -138,7 +167,9 @@ mod e2e_tests {
             return;
         };
 
-        let Some(test_db) = setup_test_db().await else { return; };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
         let mut child = spawn_server(&binary, &test_db, &[]);
 
         let (mut stdin, mut reader) = setup_io(&mut child);
@@ -146,15 +177,19 @@ mod e2e_tests {
         do_handshake(&mut stdin, &mut reader).await;
 
         // Call mysql_query without the required `sql` argument.
-        send_message(&mut stdin, &json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {
-                "name": "mysql_query",
-                "arguments": {}
-            }
-        })).await;
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {}
+                }
+            }),
+        )
+        .await;
 
         let response = read_response(&mut reader).await;
         child.kill().await.ok();
@@ -198,24 +233,30 @@ mod e2e_tests {
             return;
         };
 
-        let Some(test_db) = setup_test_db().await else { return; };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
         let mut child = spawn_server(&binary, &test_db, &[]);
 
         let (mut stdin, mut reader) = setup_io(&mut child);
 
         do_handshake(&mut stdin, &mut reader).await;
 
-        send_message(&mut stdin, &json!({
-            "jsonrpc": "2.0",
-            "id": 4,
-            "method": "tools/call",
-            "params": {
-                "name": "mysql_query",
-                "arguments": {
-                    "sql": "SELECT * FROM nonexistent_table_xyz_999"
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": "SELECT * FROM nonexistent_table_xyz_999"
+                    }
                 }
-            }
-        })).await;
+            }),
+        )
+        .await;
 
         let response = read_response(&mut reader).await;
         child.kill().await.ok();

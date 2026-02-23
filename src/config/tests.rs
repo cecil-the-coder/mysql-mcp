@@ -2,9 +2,9 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{Config, ConnectionConfig, SchemaPermissions};
     use crate::config::env_config::EnvConfig;
     use crate::config::merge::load_toml_config;
+    use crate::config::{Config, ConnectionConfig, SchemaPermissions, SshConfig};
 
     // Test: connection string URL format is preserved
     #[test]
@@ -16,7 +16,12 @@ mod tests {
             },
             ..Default::default()
         };
-        assert!(base.connection.connection_string.as_deref().unwrap().starts_with("mysql://"));
+        assert!(base
+            .connection
+            .connection_string
+            .as_deref()
+            .unwrap()
+            .starts_with("mysql://"));
     }
 
     // Test: ALLOW_DDL config is settable
@@ -36,8 +41,15 @@ mod tests {
 allow_insert = true
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert!(config.security.schema_permissions.contains_key("my-database_123"));
-        let perms = config.security.schema_permissions.get("my-database_123").unwrap();
+        assert!(config
+            .security
+            .schema_permissions
+            .contains_key("my-database_123"));
+        let perms = config
+            .security
+            .schema_permissions
+            .get("my-database_123")
+            .unwrap();
         assert_eq!(perms.allow_insert, Some(true));
     }
 
@@ -143,8 +155,10 @@ host = "myhost"
     #[test]
     fn test_allow_runtime_connections_default_false() {
         let config = Config::default();
-        assert!(!config.security.allow_runtime_connections,
-            "allow_runtime_connections must default to false (security)");
+        assert!(
+            !config.security.allow_runtime_connections,
+            "allow_runtime_connections must default to false (security)"
+        );
     }
 
     // Test: max_sessions defaults to 50
@@ -159,9 +173,15 @@ host = "myhost"
     fn test_max_rows_zero_fails_validation() {
         let mut config = Config::default();
         config.pool.max_rows = 0;
-        assert!(config.validate().is_err(), "max_rows=0 should fail validation");
+        assert!(
+            config.validate().is_err(),
+            "max_rows=0 should fail validation"
+        );
         let err = config.validate().unwrap_err();
-        assert!(err.to_string().contains("max_rows"), "error should mention max_rows");
+        assert!(
+            err.to_string().contains("max_rows"),
+            "error should mention max_rows"
+        );
     }
 
     // Test: warmup_connections > pool size fails validation
@@ -197,8 +217,10 @@ host = "myhost"
     #[test]
     fn test_readonly_transaction_default() {
         let config = Config::default();
-        assert!(!config.pool.readonly_transaction,
-            "readonly_transaction should default to false (prefer 1-RTT path)");
+        assert!(
+            !config.pool.readonly_transaction,
+            "readonly_transaction should default to false (prefer 1-RTT path)"
+        );
     }
 
     // Test: pool size defaults to 20
@@ -330,5 +352,146 @@ allow_update = false
         assert!(conn.database.is_none());
         assert!(conn.socket.is_none());
         assert!(conn.connection_string.is_none());
+    }
+
+    // SSH config tests
+    #[test]
+    fn test_ssh_config_default() {
+        let config = Config::default();
+        assert!(config.ssh.is_none(), "SSH config should be None by default");
+    }
+
+    #[test]
+    fn test_ssh_config_from_toml() {
+        let toml_str = r#"
+[ssh]
+host = "bastion.example.com"
+user = "ubuntu"
+private_key = "/tmp/key.pem"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let ssh = config.ssh.as_ref().expect("ssh should be Some");
+        assert_eq!(ssh.host, "bastion.example.com");
+        assert_eq!(ssh.user, "ubuntu");
+        assert_eq!(ssh.port, 22); // default
+        assert_eq!(ssh.known_hosts_check, "strict"); // default
+    }
+
+    #[test]
+    fn test_ssh_config_validate_empty_host() {
+        let mut config = Config::default();
+        config.ssh = Some(SshConfig {
+            host: String::new(),
+            user: "user".to_string(),
+            ..Default::default()
+        });
+        assert!(config.validate().is_err());
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("ssh.host"));
+    }
+
+    #[test]
+    fn test_ssh_config_validate_empty_user() {
+        let mut config = Config::default();
+        config.ssh = Some(SshConfig {
+            host: "bastion".to_string(),
+            user: String::new(),
+            ..Default::default()
+        });
+        assert!(config.validate().is_err());
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("ssh.user"));
+    }
+
+    #[test]
+    fn test_ssh_config_validate_invalid_known_hosts_check() {
+        let mut config = Config::default();
+        config.ssh = Some(SshConfig {
+            host: "bastion".to_string(),
+            user: "ubuntu".to_string(),
+            known_hosts_check: "banana".to_string(),
+            ..Default::default()
+        });
+        assert!(config.validate().is_err());
+        assert!(config
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("known_hosts_check"));
+    }
+
+    #[test]
+    fn test_ssh_config_validate_valid_known_hosts_values() {
+        for val in &["strict", "accept-new", "insecure"] {
+            let mut config = Config::default();
+            config.ssh = Some(SshConfig {
+                host: "bastion".to_string(),
+                user: "ubuntu".to_string(),
+                known_hosts_check: val.to_string(),
+                ..Default::default()
+            });
+            // Should not fail on known_hosts_check (private_key not set, path check skipped)
+            let result = config.validate();
+            // It passes validation for known_hosts_check itself
+            assert!(
+                !result
+                    .as_ref()
+                    .is_err_and(|e| e.to_string().contains("known_hosts_check")),
+                "known_hosts_check='{}' should be valid",
+                val
+            );
+        }
+    }
+
+    #[test]
+    fn test_ssh_env_vars_override() {
+        use crate::config::env_config::load_env_config;
+        std::env::set_var("MYSQL_SSH_HOST", "mybastion");
+        std::env::set_var("MYSQL_SSH_USER", "ubuntu");
+        std::env::set_var("MYSQL_SSH_PORT", "2222");
+        std::env::set_var("MYSQL_SSH_KNOWN_HOSTS_CHECK", "accept-new");
+        let env = load_env_config();
+        let config = env.apply_to(Config::default());
+        std::env::remove_var("MYSQL_SSH_HOST");
+        std::env::remove_var("MYSQL_SSH_USER");
+        std::env::remove_var("MYSQL_SSH_PORT");
+        std::env::remove_var("MYSQL_SSH_KNOWN_HOSTS_CHECK");
+
+        let ssh = config
+            .ssh
+            .expect("ssh config should be Some when env vars set");
+        assert_eq!(ssh.host, "mybastion");
+        assert_eq!(ssh.user, "ubuntu");
+        assert_eq!(ssh.port, 2222);
+        assert_eq!(ssh.known_hosts_check, "accept-new");
+    }
+
+    #[test]
+    fn test_no_ssh_env_vars_means_none() {
+        use crate::config::env_config::load_env_config;
+        // Ensure none of the SSH vars are set
+        for key in &[
+            "MYSQL_SSH_HOST",
+            "MYSQL_SSH_USER",
+            "MYSQL_SSH_PORT",
+            "MYSQL_SSH_PRIVATE_KEY",
+            "MYSQL_SSH_USE_AGENT",
+            "MYSQL_SSH_KNOWN_HOSTS_CHECK",
+            "MYSQL_SSH_KNOWN_HOSTS_FILE",
+        ] {
+            std::env::remove_var(key);
+        }
+        let env = load_env_config();
+        let config = env.apply_to(Config::default());
+        assert!(
+            config.ssh.is_none(),
+            "ssh should remain None when no MYSQL_SSH_* vars set"
+        );
     }
 }

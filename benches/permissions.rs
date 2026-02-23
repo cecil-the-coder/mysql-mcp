@@ -60,37 +60,79 @@ fn bench_check_permission(c: &mut Criterion) {
 
     // SELECT: fast path (always allowed, no HashMap lookup)
     group.bench_function("select/allowed", |b| {
-        b.iter(|| check_permission(black_box(&allow_all), black_box(&StatementType::Select), black_box(None)))
+        b.iter(|| {
+            check_permission(
+                black_box(&allow_all),
+                black_box(&StatementType::Select),
+                black_box(None),
+            )
+        })
     });
 
     // INSERT allowed: HashMap lookup hits, permission granted, multi-db check passes (single-db mode)
     group.bench_function("insert/allowed_single_db", |b| {
-        b.iter(|| check_permission(black_box(&allow_all), black_box(&StatementType::Insert), black_box(Some("mydb"))))
+        b.iter(|| {
+            check_permission(
+                black_box(&allow_all),
+                black_box(&StatementType::Insert),
+                black_box(Some("mydb")),
+            )
+        })
     });
 
     // INSERT denied: bails early after permission check
     group.bench_function("insert/denied", |b| {
-        b.iter(|| check_permission(black_box(&deny_all), black_box(&StatementType::Insert), black_box(None)))
+        b.iter(|| {
+            check_permission(
+                black_box(&deny_all),
+                black_box(&StatementType::Insert),
+                black_box(None),
+            )
+        })
     });
 
     // INSERT allowed via schema-specific override (HashMap lookup + schema match)
     group.bench_function("insert/schema_override_allow", |b| {
-        b.iter(|| check_permission(black_box(&schema_override), black_box(&StatementType::Insert), black_box(Some("mydb"))))
+        b.iter(|| {
+            check_permission(
+                black_box(&schema_override),
+                black_box(&StatementType::Insert),
+                black_box(Some("mydb")),
+            )
+        })
     });
 
     // INSERT in multi-DB mode with write flag set
     group.bench_function("insert/multi_db_allowed", |b| {
-        b.iter(|| check_permission(black_box(&multi_db), black_box(&StatementType::Insert), black_box(Some("somedb"))))
+        b.iter(|| {
+            check_permission(
+                black_box(&multi_db),
+                black_box(&StatementType::Insert),
+                black_box(Some("somedb")),
+            )
+        })
     });
 
     // DDL allowed
     group.bench_function("ddl/allowed", |b| {
-        b.iter(|| check_permission(black_box(&allow_all), black_box(&StatementType::Create), black_box(Some("mydb"))))
+        b.iter(|| {
+            check_permission(
+                black_box(&allow_all),
+                black_box(&StatementType::Create),
+                black_box(Some("mydb")),
+            )
+        })
     });
 
     // DDL denied
     group.bench_function("ddl/denied", |b| {
-        b.iter(|| check_permission(black_box(&deny_all), black_box(&StatementType::Create), black_box(None)))
+        b.iter(|| {
+            check_permission(
+                black_box(&deny_all),
+                black_box(&StatementType::Create),
+                black_box(None),
+            )
+        })
     });
 
     group.finish();

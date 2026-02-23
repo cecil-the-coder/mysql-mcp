@@ -1,23 +1,25 @@
 //! Shared helpers for E2E tests that spawn the mysql-mcp binary over stdio.
 //! All items are `pub(crate)` so they can be used from any `#[cfg(test)]` module.
 
+use serde_json::{json, Value};
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::{AsyncWriteExt, AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use serde_json::{json, Value};
 
 pub(crate) fn binary_path() -> Option<std::path::PathBuf> {
-    // Prefer the release binary: it reflects `cargo build --release` runs and is
-    // the same binary used in production. The debug binary can lag behind if only
-    // the release target was rebuilt.
-    [
-        "./target/release/mysql-mcp",
-        "./target/debug/mysql-mcp",
-    ]
-    .iter()
-    .find(|path| std::path::Path::new(path).exists())
-    .map(std::path::PathBuf::from)
+    // Pick the most recently modified binary so that both `cargo test` (which
+    // rebuilds debug) and `cargo build --release` (which rebuilds release) are
+    // handled correctly. Preferring one profile unconditionally causes E2E tests
+    // to run against a stale binary when only the other profile was rebuilt.
+    ["./target/release/mysql-mcp", "./target/debug/mysql-mcp"]
+        .iter()
+        .filter_map(|p| {
+            let path = std::path::Path::new(p);
+            path.metadata().ok().map(|m| (path.to_path_buf(), m))
+        })
+        .max_by_key(|(_, m)| m.modified().ok())
+        .map(|(p, _)| p)
 }
 
 pub(crate) async fn send_message(stdin: &mut tokio::process::ChildStdin, msg: &Value) {
@@ -26,7 +28,9 @@ pub(crate) async fn send_message(stdin: &mut tokio::process::ChildStdin, msg: &V
     stdin.flush().await.unwrap();
 }
 
-pub(crate) async fn read_response(reader: &mut BufReader<tokio::process::ChildStdout>) -> Option<Value> {
+pub(crate) async fn read_response(
+    reader: &mut BufReader<tokio::process::ChildStdout>,
+) -> Option<Value> {
     let mut line = String::new();
     // 45s gives the binary time to connect to MySQL even under heavy parallel load.
     match tokio::time::timeout(Duration::from_secs(45), reader.read_line(&mut line)).await {
@@ -53,7 +57,14 @@ pub(crate) fn spawn_server(
         .env("MYSQL_USER", &cfg.connection.user)
         .env("MYSQL_PASS", &cfg.connection.password)
         .env("MYSQL_SSL", if cfg.security.ssl { "true" } else { "false" })
-        .env("MYSQL_SSL_ACCEPT_INVALID_CERTS", if cfg.security.ssl_accept_invalid_certs { "true" } else { "false" });
+        .env(
+            "MYSQL_SSL_ACCEPT_INVALID_CERTS",
+            if cfg.security.ssl_accept_invalid_certs {
+                "true"
+            } else {
+                "false"
+            },
+        );
     // Only set MYSQL_DB/MYSQL_SSL_CA when non-empty: the env_config reader treats
     // Some("") as a database/CA override, which would fail at connect time.
     if let Some(db) = cfg.connection.database.as_deref().filter(|s| !s.is_empty()) {
@@ -77,7 +88,10 @@ pub(crate) fn spawn_server(
 /// Panics if the child was not spawned with piped stdin/stdout.
 pub(crate) fn setup_io(
     child: &mut tokio::process::Child,
-) -> (tokio::process::ChildStdin, BufReader<tokio::process::ChildStdout>) {
+) -> (
+    tokio::process::ChildStdin,
+    BufReader<tokio::process::ChildStdout>,
+) {
     let stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
     (stdin, BufReader::new(stdout))
@@ -89,14 +103,22 @@ pub(crate) async fn do_handshake(
     stdin: &mut tokio::process::ChildStdin,
     reader: &mut BufReader<tokio::process::ChildStdout>,
 ) {
-    send_message(stdin, &json!({
-        "jsonrpc": "2.0", "id": 1, "method": "initialize",
-        "params": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "test", "version": "1"}
-        }
-    })).await;
+    send_message(
+        stdin,
+        &json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1"}
+            }
+        }),
+    )
+    .await;
     let _ = read_response(reader).await; // consume initialize response
-    send_message(stdin, &json!({"jsonrpc": "2.0", "method": "notifications/initialized"})).await;
+    send_message(
+        stdin,
+        &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    )
+    .await;
 }

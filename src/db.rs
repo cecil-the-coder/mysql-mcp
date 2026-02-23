@@ -1,8 +1,8 @@
-use std::time::Duration;
-use anyhow::Result;
-use sqlx::mysql::{MySqlPool, MySqlPoolOptions, MySqlConnectOptions, MySqlSslMode};
-use std::str::FromStr;
 use crate::config::Config;
+use anyhow::Result;
+use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlSslMode};
+use std::str::FromStr;
+use std::time::Duration;
 
 /// Number of prepared statements cached per connection.
 /// Only effective when using sqlx prepared statement macros.
@@ -15,16 +15,22 @@ const POOL_IDLE_TIMEOUT_SECS: u64 = 300;
 const POOL_MAX_LIFETIME_SECS: u64 = 1800;
 
 pub async fn build_pool(config: &Config) -> Result<MySqlPool> {
-    let connect_options = build_connect_options(config)?
-        .statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
+    let connect_options =
+        build_connect_options(config)?.statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
 
     // sqlx manages its own internal connection queue; there is no queue_limit API.
     // Backpressure is provided by acquire_timeout: callers that cannot obtain a
     // connection within that window receive an error rather than queuing forever.
-    create_pool(connect_options, config.pool.size, config.pool.connect_timeout_ms).await
+    create_pool(
+        connect_options,
+        config.pool.size,
+        config.pool.connect_timeout_ms,
+    )
+    .await
 }
 
 /// Build a small pool (max 5) for a named session from raw connection fields.
+#[allow(clippy::too_many_arguments)]
 pub async fn build_session_pool(
     host: &str,
     port: u16,
@@ -41,7 +47,11 @@ pub async fn build_session_pool(
         .port(port)
         .username(user)
         .password(password)
-        .ssl_mode(determine_ssl_mode(ssl, ssl_accept_invalid_certs, ssl_ca.is_some()));
+        .ssl_mode(determine_ssl_mode(
+            ssl,
+            ssl_accept_invalid_certs,
+            ssl_ca.is_some(),
+        ));
     if let Some(db) = database {
         opts = opts.database(db);
     }
@@ -52,7 +62,11 @@ pub async fn build_session_pool(
 }
 
 /// Apply consistent pool sizing, timeouts, and lifetime settings.
-async fn create_pool(opts: MySqlConnectOptions, max_connections: u32, acquire_timeout_ms: u64) -> Result<MySqlPool> {
+async fn create_pool(
+    opts: MySqlConnectOptions,
+    max_connections: u32,
+    acquire_timeout_ms: u64,
+) -> Result<MySqlPool> {
     let pool = MySqlPoolOptions::new()
         .max_connections(max_connections)
         .acquire_timeout(Duration::from_millis(acquire_timeout_ms))
@@ -73,11 +87,90 @@ async fn create_pool(opts: MySqlConnectOptions, max_connections: u32, acquire_ti
 /// | true  | false         | false  | VerifyIdentity   |
 fn determine_ssl_mode(ssl: bool, accept_invalid: bool, has_ca: bool) -> MySqlSslMode {
     match (ssl, accept_invalid, has_ca) {
-        (false, _, _)        => MySqlSslMode::Disabled,
-        (true, true, _)      => MySqlSslMode::Required,
-        (true, false, true)  => MySqlSslMode::VerifyCa,
+        (false, _, _) => MySqlSslMode::Disabled,
+        (true, true, _) => MySqlSslMode::Required,
+        (true, false, true) => MySqlSslMode::VerifyCa,
         (true, false, false) => MySqlSslMode::VerifyIdentity,
     }
+}
+
+/// Build a pool that connects through an already-established SSH tunnel.
+/// Connects sqlx to `127.0.0.1:{tunnel.local_port}` rather than the real DB host/port.
+async fn build_pool_tunneled(
+    config: &Config,
+    tunnel: &crate::tunnel::TunnelHandle,
+) -> Result<MySqlPool> {
+    let ssl_mode = determine_ssl_mode(
+        config.security.ssl,
+        config.security.ssl_accept_invalid_certs,
+        config.security.ssl_ca.is_some(),
+    );
+    let mut opts = MySqlConnectOptions::new()
+        .host("127.0.0.1")
+        .port(tunnel.local_port)
+        .username(&config.connection.user)
+        .password(&config.connection.password)
+        .ssl_mode(ssl_mode)
+        .statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
+    if let Some(ref db) = config.connection.database {
+        opts = opts.database(db);
+    }
+    if let Some(ref ca_path) = config.security.ssl_ca {
+        opts = opts.ssl_ca(ca_path);
+    }
+    create_pool(opts, config.pool.size, config.pool.connect_timeout_ms).await
+}
+
+/// Build a connection pool through an SSH tunnel.
+/// Spawns the SSH subprocess, waits for it to be ready, then connects sqlx through it.
+/// Returns both the pool and the tunnel handle — the caller must keep the handle alive
+/// for the duration the pool is in use.
+pub async fn build_pool_and_tunnel(
+    config: &Config,
+    ssh: &crate::config::SshConfig,
+) -> Result<(MySqlPool, crate::tunnel::TunnelHandle)> {
+    let tunnel =
+        crate::tunnel::spawn_ssh_tunnel(ssh, &config.connection.host, config.connection.port)
+            .await?;
+    let pool = build_pool_tunneled(config, &tunnel).await?;
+    Ok((pool, tunnel))
+}
+
+/// Build a small session pool through an SSH tunnel.
+/// Spawns the tunnel to reach `host:port` via the bastion in `ssh`, then connects sqlx
+/// to `127.0.0.1:{tunnel.local_port}`.
+#[allow(clippy::too_many_arguments)]
+pub async fn build_session_pool_with_tunnel(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: &str,
+    database: Option<&str>,
+    ssl: bool,
+    ssl_accept_invalid_certs: bool,
+    ssl_ca: Option<&str>,
+    connect_timeout_ms: u64,
+    ssh: &crate::config::SshConfig,
+) -> Result<(MySqlPool, crate::tunnel::TunnelHandle)> {
+    let tunnel = crate::tunnel::spawn_ssh_tunnel(ssh, host, port).await?;
+    let mut opts = MySqlConnectOptions::new()
+        .host("127.0.0.1")
+        .port(tunnel.local_port)
+        .username(user)
+        .password(password)
+        .ssl_mode(determine_ssl_mode(
+            ssl,
+            ssl_accept_invalid_certs,
+            ssl_ca.is_some(),
+        ));
+    if let Some(db) = database {
+        opts = opts.database(db);
+    }
+    if let Some(ca_path) = ssl_ca {
+        opts = opts.ssl_ca(ca_path);
+    }
+    let pool = create_pool(opts, 5, connect_timeout_ms).await?;
+    Ok((pool, tunnel))
 }
 
 pub fn build_connect_options(config: &Config) -> Result<MySqlConnectOptions> {
@@ -92,7 +185,8 @@ pub fn build_connect_options(config: &Config) -> Result<MySqlConnectOptions> {
         } else {
             anyhow::bail!(
                 "connection_string must start with 'mysql://' or 'mysql+ssl://', got: '{}'",
-                cs.split_at(cs.find("://").map(|i| i + 3).unwrap_or(cs.len().min(32))).0
+                cs.split_at(cs.find("://").map(|i| i + 3).unwrap_or(cs.len().min(32)))
+                    .0
             );
         }
     }

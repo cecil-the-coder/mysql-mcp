@@ -1,8 +1,8 @@
-use std::sync::{Arc, OnceLock};
 use crate::config::Config;
+use std::sync::{Arc, OnceLock};
 use testcontainers_modules::{
     mysql::Mysql,
-    testcontainers::{runners::AsyncRunner, ContainerAsync},
+    testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt},
 };
 
 /// Global semaphore that limits how many tests may CREATE a new MySQL connection
@@ -85,10 +85,7 @@ pub async fn setup_test_db() -> Option<TestDb> {
         // parallelism.  The permit is released as soon as connect_with()
         // returns, so it only serialises connection *creation*, not the
         // entire test.
-        let _permit = db_semaphore()
-            .acquire()
-            .await
-            .expect("DB semaphore closed");
+        let _permit = db_semaphore().acquire().await.expect("DB semaphore closed");
 
         // max_connections=1: integration tests issue queries sequentially, so
         // a single connection is always sufficient.
@@ -111,7 +108,10 @@ pub async fn setup_test_db() -> Option<TestDb> {
         {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[SKIP] Failed to connect to MySQL ({}), skipping integration test", e);
+                eprintln!(
+                    "[SKIP] Failed to connect to MySQL ({}), skipping integration test",
+                    e
+                );
                 return None;
             }
         };
@@ -127,10 +127,22 @@ pub async fn setup_test_db() -> Option<TestDb> {
         });
     }
 
-    let container = match Mysql::default().start().await {
+    start_mysql_container("8.1").await
+}
+
+/// Start a MySQL container using the specified Docker image tag and return a
+/// connected `TestDb`.  Skips (returns `None`) when Docker is unavailable.
+///
+/// The tag can be any valid Docker Hub MySQL tag, e.g. `"8.1"` or `"9.2"`.
+/// Useful for running the same integration tests against multiple MySQL versions.
+pub async fn start_mysql_container(tag: &str) -> Option<TestDb> {
+    let container = match Mysql::default().with_tag(tag).start().await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[SKIP] Docker not available ({}), skipping integration test", e);
+            eprintln!(
+                "[SKIP] Docker not available for MySQL {} ({}), skipping integration test",
+                tag, e
+            );
             return None;
         }
     };
@@ -138,14 +150,20 @@ pub async fn setup_test_db() -> Option<TestDb> {
     let host = match container.get_host().await {
         Ok(h) => h.to_string(),
         Err(e) => {
-            eprintln!("[SKIP] Failed to get container host ({}), skipping integration test", e);
+            eprintln!(
+                "[SKIP] Failed to get container host ({}), skipping integration test",
+                e
+            );
             return None;
         }
     };
     let port = match container.get_host_port_ipv4(3306).await {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("[SKIP] Failed to get container port ({}), skipping integration test", e);
+            eprintln!(
+                "[SKIP] Failed to get container port ({}), skipping integration test",
+                e
+            );
             return None;
         }
     };
@@ -170,7 +188,10 @@ pub async fn setup_test_db() -> Option<TestDb> {
     {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("[SKIP] Failed to connect to MySQL container ({}), skipping integration test", e);
+            eprintln!(
+                "[SKIP] Failed to connect to MySQL {} container ({}), skipping integration test",
+                tag, e
+            );
             return None;
         }
     };

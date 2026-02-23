@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::explain::ExplainResult;
+use super::explain::{ExplainResult, ExplainTier};
 
 const VERY_SLOW_ROW_THRESHOLD: u64 = 10_000;
 const SLOW_ROW_THRESHOLD: u64 = 1_000;
@@ -19,7 +19,7 @@ struct PlanStats {
 ///
 /// Each node has:
 ///   - "access_type": "table" | "index" | "join" | "filter" | "sort" | "limit" |
-///                    "rows_fetched_before_execution" | ...
+///     "rows_fetched_before_execution" | ...
 ///   - "inputs": [ <child nodes> ]
 ///   - "estimated_rows": f64
 ///   - "index_name": str   (for index nodes)
@@ -57,6 +57,39 @@ fn walk_plan_node(node: &Value, stats: &mut PlanStats) {
     }
 }
 
+/// Convert accumulated PlanStats into a final ExplainResult.
+fn make_result(stats: PlanStats) -> Result<ExplainResult> {
+    let full_table_scan = stats.has_full_table_scan;
+    // Guard against NaN / Infinity before casting to u64: non-finite values
+    // produce u64::MAX (Infinity) or 0 (NaN) in Rust's as-cast, both wrong.
+    let rows_examined_estimate = if stats.total_estimated_rows.is_finite() {
+        stats.total_estimated_rows.ceil() as u64
+    } else {
+        0
+    };
+    let extra_flags = if stats.has_sort {
+        vec!["Using filesort"]
+    } else {
+        vec![]
+    };
+
+    let tier = if full_table_scan && rows_examined_estimate > VERY_SLOW_ROW_THRESHOLD {
+        ExplainTier::VerySlow
+    } else if full_table_scan || rows_examined_estimate > SLOW_ROW_THRESHOLD {
+        ExplainTier::Slow
+    } else {
+        ExplainTier::Fast
+    };
+
+    Ok(ExplainResult {
+        full_table_scan,
+        index_used: stats.index_name,
+        rows_examined_estimate,
+        extra_flags,
+        tier,
+    })
+}
+
 /// Parse MySQL 8.0 EXPLAIN FORMAT=JSON schema v2.
 ///
 /// Structure (abbreviated):
@@ -75,37 +108,112 @@ fn walk_plan_node(node: &Value, stats: &mut PlanStats) {
 pub(crate) fn parse_v2(v: &Value) -> Result<ExplainResult> {
     let mut stats = PlanStats::default();
     walk_plan_node(&v["query_plan"], &mut stats);
+    make_result(stats)
+}
 
-    let full_table_scan = stats.has_full_table_scan;
-    // Guard against NaN / Infinity before casting to u64: non-finite values
-    // produce u64::MAX (Infinity) or 0 (NaN) in Rust's as-cast, both wrong.
-    let rows_examined_estimate = if stats.total_estimated_rows.is_finite() {
-        stats.total_estimated_rows.ceil() as u64
+// ---------------------------------------------------------------------------
+// Schema v1 parser — MySQL 5.7 / 8.0 EXPLAIN FORMAT=JSON
+// ---------------------------------------------------------------------------
+
+/// Walk a single `table` leaf in schema v1.
+///
+/// | Field                   | Meaning                                  |
+/// |-------------------------|------------------------------------------|
+/// | `access_type`           | "ALL" = full scan, others use an index   |
+/// | `key`                   | index name when access uses one          |
+/// | `rows_examined_per_scan`| row-count estimate for this table        |
+/// | `using_filesort`        | true when filesort is applied            |
+fn walk_v1_table(table: &Value, stats: &mut PlanStats) {
+    if table["access_type"].as_str().unwrap_or("") == "ALL" {
+        stats.has_full_table_scan = true;
+    }
+    if let Some(key) = table["key"].as_str() {
+        if stats.index_name.is_none() {
+            stats.index_name = Some(key.to_string());
+        }
+    }
+    let rows = table["rows_examined_per_scan"]
+        .as_f64()
+        .or_else(|| table["rows"].as_f64())
+        .unwrap_or(0.0);
+    stats.total_estimated_rows += rows;
+
+    if table["using_filesort"].as_bool().unwrap_or(false) {
+        stats.has_sort = true;
+    }
+    // Derived / materialized subquery inside a table node
+    if let Some(mat) = table.get("materialized_from_subquery") {
+        if let Some(qb) = mat.get("query_block") {
+            walk_v1_block(qb, stats);
+        }
+    }
+}
+
+/// Recursively walk a schema v1 query_block node.
+fn walk_v1_block(node: &Value, stats: &mut PlanStats) {
+    if let Some(table) = node.get("table") {
+        walk_v1_table(table, stats);
+    }
+    // JOIN: nested_loop is an array of per-table wrappers
+    if let Some(nl) = node["nested_loop"].as_array() {
+        for item in nl {
+            walk_v1_block(item, stats);
+        }
+    }
+    // ORDER BY (may have using_filesort at the operation level)
+    if let Some(ordering) = node.get("ordering_operation") {
+        if ordering["using_filesort"].as_bool().unwrap_or(false) {
+            stats.has_sort = true;
+        }
+        walk_v1_block(ordering, stats);
+    }
+    // GROUP BY
+    if let Some(grouping) = node.get("grouping_operation") {
+        walk_v1_block(grouping, stats);
+    }
+    // UNION
+    if let Some(union) = node.get("union_result") {
+        if let Some(specs) = union["query_specifications"].as_array() {
+            for spec in specs {
+                if let Some(qb) = spec.get("query_block") {
+                    walk_v1_block(qb, stats);
+                }
+            }
+        }
+    }
+}
+
+/// Parse MySQL 5.7 / 8.0 EXPLAIN FORMAT=JSON schema v1.
+fn parse_v1(v: &Value) -> Result<ExplainResult> {
+    let mut stats = PlanStats::default();
+    if let Some(qb) = v.get("query_block") {
+        walk_v1_block(qb, &mut stats);
+    }
+    make_result(stats)
+}
+
+// ---------------------------------------------------------------------------
+// Public dispatcher
+// ---------------------------------------------------------------------------
+
+/// Parse `EXPLAIN FORMAT=JSON` output from any supported MySQL version.
+///
+/// Dispatches to schema v2 (`query_plan` key, MySQL 8.0.16+ / 9.x) or
+/// schema v1 (`query_block` key, MySQL 5.7 / 8.0.x) based on JSON structure.
+pub(crate) fn parse(v: &Value) -> Result<ExplainResult> {
+    if v["query_plan"].is_object() {
+        parse_v2(v)
     } else {
-        0
-    };
-    let extra_flags = if stats.has_sort { vec!["Using filesort"] } else { vec![] };
-
-    let tier = if full_table_scan && rows_examined_estimate > VERY_SLOW_ROW_THRESHOLD {
-        "very_slow"
-    } else if full_table_scan || rows_examined_estimate > SLOW_ROW_THRESHOLD {
-        "slow"
-    } else {
-        "fast"
-    };
-
-    Ok(ExplainResult {
-        full_table_scan,
-        index_used: stats.index_name,
-        rows_examined_estimate,
-        extra_flags,
-        tier,
-    })
+        // Covers schema v1 (query_block present) and any unknown format
+        // (returns zero stats rather than an error).
+        parse_v1(v)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::explain::ExplainTier;
     use serde_json::json;
 
     fn make_v2(query_plan: serde_json::Value) -> serde_json::Value {
@@ -142,7 +250,7 @@ mod tests {
         assert!(result.index_used.is_none(), "no index expected");
         assert_eq!(result.rows_examined_estimate, 5);
         assert!(result.extra_flags.is_empty());
-        assert_eq!(result.tier, "slow"); // full_table_scan && rows <= 10_000
+        assert_eq!(result.tier, ExplainTier::Slow); // full_table_scan && rows <= 10_000
     }
 
     #[test]
@@ -165,7 +273,7 @@ mod tests {
         assert!(!result.full_table_scan, "no full table scan");
         assert_eq!(result.index_used.as_deref(), Some("PRIMARY"));
         assert_eq!(result.rows_examined_estimate, 1);
-        assert_eq!(result.tier, "fast");
+        assert_eq!(result.tier, ExplainTier::Fast);
     }
 
     #[test]
@@ -190,7 +298,10 @@ mod tests {
         }));
         let result = parse_v2(&v).unwrap();
         assert!(result.full_table_scan, "child table scan detected");
-        assert!(result.extra_flags.iter().any(|&s| s == "Using filesort"), "should flag filesort");
+        assert!(
+            result.extra_flags.iter().any(|&s| s == "Using filesort"),
+            "should flag filesort"
+        );
     }
 
     #[test]
@@ -255,6 +366,143 @@ mod tests {
         assert!(!result.full_table_scan, "no table scan for constant query");
         assert!(result.index_used.is_none());
         assert_eq!(result.rows_examined_estimate, 1);
-        assert_eq!(result.tier, "fast");
+        assert_eq!(result.tier, ExplainTier::Fast);
+    }
+
+    // -----------------------------------------------------------------------
+    // Schema v1 unit tests (MySQL 5.7 / 8.0 query_block format)
+    // -----------------------------------------------------------------------
+
+    fn make_v1(query_block: serde_json::Value) -> serde_json::Value {
+        json!({ "query_block": query_block })
+    }
+
+    #[test]
+    fn test_v1_full_table_scan() {
+        let v = make_v1(json!({
+            "select_id": 1,
+            "table": {
+                "table_name": "t",
+                "access_type": "ALL",
+                "rows_examined_per_scan": 5,
+                "rows_produced_per_join": 5,
+                "filtered": "100.00"
+            }
+        }));
+        let result = parse(&v).unwrap();
+        assert!(result.full_table_scan, "ALL access_type → full table scan");
+        assert!(result.index_used.is_none(), "no index for ALL scan");
+        assert_eq!(result.rows_examined_estimate, 5);
+    }
+
+    #[test]
+    fn test_v1_index_lookup() {
+        let v = make_v1(json!({
+            "select_id": 1,
+            "table": {
+                "table_name": "t",
+                "access_type": "ref",
+                "possible_keys": ["idx_val"],
+                "key": "idx_val",
+                "key_length": "203",
+                "ref": ["const"],
+                "rows_examined_per_scan": 1,
+                "filtered": "100.00"
+            }
+        }));
+        let result = parse(&v).unwrap();
+        assert!(
+            !result.full_table_scan,
+            "ref access_type → no full table scan"
+        );
+        assert_eq!(result.index_used.as_deref(), Some("idx_val"));
+        assert_eq!(result.rows_examined_estimate, 1);
+    }
+
+    #[test]
+    fn test_v1_nested_loop_join() {
+        // Typical JOIN: outer table is ALL, inner uses an index
+        let v = make_v1(json!({
+            "select_id": 1,
+            "nested_loop": [
+                {
+                    "table": {
+                        "table_name": "a",
+                        "access_type": "ALL",
+                        "rows_examined_per_scan": 2
+                    }
+                },
+                {
+                    "table": {
+                        "table_name": "b",
+                        "access_type": "ref",
+                        "key": "idx_a_id",
+                        "rows_examined_per_scan": 2
+                    }
+                }
+            ]
+        }));
+        let result = parse(&v).unwrap();
+        assert!(
+            result.full_table_scan,
+            "outer table is ALL → full table scan"
+        );
+        assert_eq!(result.index_used.as_deref(), Some("idx_a_id"));
+        assert_eq!(result.rows_examined_estimate, 4);
+    }
+
+    #[test]
+    fn test_v1_sort_with_filesort() {
+        let v = make_v1(json!({
+            "select_id": 1,
+            "ordering_operation": {
+                "using_filesort": true,
+                "table": {
+                    "table_name": "t",
+                    "access_type": "ALL",
+                    "rows_examined_per_scan": 3
+                }
+            }
+        }));
+        let result = parse(&v).unwrap();
+        assert!(result.full_table_scan);
+        assert!(
+            result.extra_flags.iter().any(|&s| s == "Using filesort"),
+            "filesort flagged"
+        );
+        assert_eq!(result.rows_examined_estimate, 3);
+    }
+
+    #[test]
+    fn test_v1_primary_key_lookup() {
+        // eq_ref on PRIMARY — very fast
+        let v = make_v1(json!({
+            "select_id": 1,
+            "table": {
+                "table_name": "t",
+                "access_type": "eq_ref",
+                "key": "PRIMARY",
+                "rows_examined_per_scan": 1
+            }
+        }));
+        let result = parse(&v).unwrap();
+        assert!(!result.full_table_scan);
+        assert_eq!(result.index_used.as_deref(), Some("PRIMARY"));
+        assert_eq!(result.rows_examined_estimate, 1);
+        assert_eq!(result.tier, ExplainTier::Fast);
+    }
+
+    #[test]
+    fn test_dispatcher_picks_v2_when_query_plan_present() {
+        // make_v2 produces a v2 envelope — dispatcher should route to parse_v2
+        let v = make_v2(json!({
+            "access_type": "table",
+            "estimated_rows": 7.0,
+            "operation": "Table scan on t",
+            "table_name": "t"
+        }));
+        let result = parse(&v).unwrap();
+        assert!(result.full_table_scan);
+        assert_eq!(result.rows_examined_estimate, 7);
     }
 }

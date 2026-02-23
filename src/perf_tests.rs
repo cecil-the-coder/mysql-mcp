@@ -66,7 +66,9 @@ pub mod perf_tests {
     /// Sequential SELECT 1 — measures raw round-trip latency.
     #[tokio::test]
     async fn perf_sequential_select_latency() {
-        let Some(test_db) = setup_test_db().await else { return; };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
         // Use an isolated pool (not the shared ENV_DB pool) to avoid cross-runtime
         // interference when multiple perf tests run in parallel.
         let pool = crate::test_helpers::make_pool(&test_db, 3).await;
@@ -83,9 +85,22 @@ pub mod perf_tests {
         // connection handler (server connect_timeout=10s).
         {
             let _permit = crate::test_helpers::db_semaphore()
-                .acquire().await.expect("DB semaphore closed");
+                .acquire()
+                .await
+                .expect("DB semaphore closed");
             for _ in 0..WARMUP {
-                crate::query::read::execute_read_query(pool, "SELECT 1", &parsed_select1, false, 0, "none", 0).await.unwrap();
+                crate::query::read::execute_read_query(
+                    pool,
+                    "SELECT 1",
+                    &parsed_select1,
+                    false,
+                    0,
+                    "none",
+                    0,
+                    0,
+                )
+                .await
+                .unwrap();
             }
         }
 
@@ -93,19 +108,36 @@ pub mod perf_tests {
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(pool, "SELECT 1", &parsed_select1, false, 0, "none", 0).await.unwrap();
+            crate::query::read::execute_read_query(
+                pool,
+                "SELECT 1",
+                &parsed_select1,
+                false,
+                0,
+                "none",
+                0,
+                0,
+            )
+            .await
+            .unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
         print(&format!("Sequential SELECT 1 (n={N})"), &stats);
 
-        assert!(stats.p99_ms < 5_000.0, "p99 too high: {:.1}ms", stats.p99_ms);
+        assert!(
+            stats.p99_ms < 5_000.0,
+            "p99 too high: {:.1}ms",
+            stats.p99_ms
+        );
     }
 
     /// Sequential SELECT on a real table with joins.
     #[tokio::test]
     async fn perf_sequential_join_query() {
-        let Some(test_db) = setup_test_db().await else { return; };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
         let pool = crate::test_helpers::make_pool(&test_db, 3).await;
         let pool = &pool;
 
@@ -113,7 +145,9 @@ pub mod perf_tests {
         // creates it lazily, so new TCP+SSL connections are throttled under parallel load.
         {
             let _permit = crate::test_helpers::db_semaphore()
-                .acquire().await.expect("DB semaphore closed");
+                .acquire()
+                .await
+                .expect("DB semaphore closed");
             sqlx::query("SELECT 1").fetch_one(pool).await.unwrap();
         }
 
@@ -141,13 +175,19 @@ pub mod perf_tests {
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(pool, sql, &parsed_join, false, 0, "none", 0).await.unwrap();
+            crate::query::read::execute_read_query(pool, sql, &parsed_join, false, 0, "none", 0, 0)
+                .await
+                .unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
         print(&format!("Sequential 3-table JOIN (n={N})"), &stats);
 
-        assert!(stats.p99_ms < 5_000.0, "p99 too high: {:.1}ms", stats.p99_ms);
+        assert!(
+            stats.p99_ms < 5_000.0,
+            "p99 too high: {:.1}ms",
+            stats.p99_ms
+        );
     }
 
     /// Concurrent SELECTs — measures throughput and tail latency under load.
@@ -156,7 +196,9 @@ pub mod perf_tests {
     /// tests (pool_saturation) that run concurrently in the same test binary.
     #[tokio::test]
     async fn perf_concurrent_select_throughput() {
-        let Some(test_db) = setup_test_db().await else { return; };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
         let pool = crate::test_helpers::make_pool(&test_db, 15).await;
         const CONCURRENCY: usize = 10;
         const PER_TASK: usize = 5;
@@ -173,7 +215,9 @@ pub mod perf_tests {
             let mut warm_conns: Vec<_> = Vec::with_capacity(CONCURRENCY);
             for _ in 0..CONCURRENCY {
                 let _permit = crate::test_helpers::db_semaphore()
-                    .acquire().await.expect("DB semaphore closed");
+                    .acquire()
+                    .await
+                    .expect("DB semaphore closed");
                 warm_conns.push(
                     pool.acquire()
                         .await
@@ -195,7 +239,11 @@ pub mod perf_tests {
                 let mut v = Vec::with_capacity(PER_TASK);
                 for _ in 0..PER_TASK {
                     let t = Instant::now();
-                    crate::query::read::execute_read_query(&pool, "SELECT 1", &parsed, false, 0, "none", 0).await.unwrap();
+                    crate::query::read::execute_read_query(
+                        &pool, "SELECT 1", &parsed, false, 0, "none", 0, 0,
+                    )
+                    .await
+                    .unwrap();
                     v.push(t.elapsed().as_secs_f64() * 1000.0);
                 }
                 v
@@ -207,8 +255,18 @@ pub mod perf_tests {
             all.extend(r.unwrap());
         }
         let stats = compute(all, wall.elapsed().as_secs_f64() * 1000.0);
-        print(&format!("Concurrent SELECT 1 (concurrency={CONCURRENCY}, n={})", CONCURRENCY * PER_TASK), &stats);
+        print(
+            &format!(
+                "Concurrent SELECT 1 (concurrency={CONCURRENCY}, n={})",
+                CONCURRENCY * PER_TASK
+            ),
+            &stats,
+        );
 
-        assert!(stats.p99_ms < 10_000.0, "p99 under load too high: {:.1}ms", stats.p99_ms);
+        assert!(
+            stats.p99_ms < 10_000.0,
+            "p99 under load too high: {:.1}ms",
+            stats.p99_ms
+        );
     }
 }

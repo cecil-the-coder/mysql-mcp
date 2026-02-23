@@ -1,27 +1,23 @@
-use std::sync::Arc;
-use std::collections::HashMap;
 use anyhow::Result;
 use rmcp::{
-    ServerHandler, ServiceExt,
     model::{
-        ServerInfo, ServerCapabilities, Implementation, ProtocolVersion,
-        ListToolsResult, CallToolResult, CallToolRequestParams,
-        Tool, PaginatedRequestParams,
-        ErrorCode,
+        CallToolRequestParams, CallToolResult, ErrorCode, Implementation, ListToolsResult,
+        PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerInfo, Tool,
     },
     service::RequestContext,
-    RoleServer,
-    ErrorData as McpError,
     transport::stdio,
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
 };
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::config::Config;
 use crate::schema::SchemaIntrospector;
 
-mod tool_schemas;
-mod sessions;
 mod handlers;
+mod sessions;
+mod tool_schemas;
 
 use sessions::SessionStore;
 use tool_schemas::*;
@@ -40,11 +36,11 @@ pub(crate) fn is_private_host(host: &str) -> bool {
                 v4.is_loopback()           // 127.0.0.0/8 — localhost services
                 || v4.is_link_local()      // 169.254.0.0/16 — cloud metadata
                 || v4.is_broadcast()       // 255.255.255.255
-                || v4.is_unspecified()     // 0.0.0.0
+                || v4.is_unspecified() // 0.0.0.0
             }
             IpAddr::V6(v6) => {
                 v6.is_loopback()           // ::1
-                || v6.is_unspecified()     // ::
+                || v6.is_unspecified() // ::
             }
         }
     } else {
@@ -57,15 +53,23 @@ pub struct McpServer {
     pub db: Arc<sqlx::MySqlPool>,
     pub introspector: Arc<SchemaIntrospector>,
     store: SessionStore,
+    /// Holds the SSH tunnel for the default session alive for the server's lifetime.
+    /// None when not using SSH tunneling.
+    _default_tunnel: Option<crate::tunnel::TunnelHandle>,
 }
 
 impl McpServer {
-    pub fn new(config: Arc<Config>, db: Arc<sqlx::MySqlPool>) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        db: Arc<sqlx::MySqlPool>,
+        tunnel: Option<crate::tunnel::TunnelHandle>,
+    ) -> Self {
         let introspector = Arc::new(SchemaIntrospector::new(
             db.clone(),
             config.pool.cache_ttl_secs,
         ));
-        let sessions: Arc<Mutex<HashMap<String, sessions::Session>>> = Arc::new(Mutex::new(HashMap::new()));
+        let sessions: Arc<Mutex<HashMap<String, sessions::Session>>> =
+            Arc::new(Mutex::new(HashMap::new()));
 
         // Background task: drop sessions idle for > 10 minutes (600 s).
         // "default" is never dropped.
@@ -74,8 +78,7 @@ impl McpServer {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
                 interval.tick().await;
-                let cutoff = std::time::Instant::now()
-                    - std::time::Duration::from_secs(600);
+                let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(600);
                 let mut map = sessions_reaper.lock().await;
                 map.retain(|_name, session| session.last_used > cutoff);
             }
@@ -88,7 +91,13 @@ impl McpServer {
             introspector: introspector.clone(),
         };
 
-        Self { config, db, introspector, store }
+        Self {
+            config,
+            db,
+            introspector,
+            store,
+            _default_tunnel: tunnel,
+        }
     }
 
     pub async fn run(self) -> Result<()> {
@@ -102,29 +111,30 @@ impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation {
                 name: "mysql-mcp".to_string(),
                 title: Some("MySQL MCP Server".to_string()),
                 version: env!("CARGO_PKG_VERSION").to_string(),
-                description: Some("Expose MySQL databases via the Model Context Protocol".to_string()),
+                description: Some(
+                    "Expose MySQL databases via the Model Context Protocol".to_string(),
+                ),
                 icons: None,
                 website_url: None,
             },
             instructions: Some(
-                "Use mysql_query to execute SQL queries against the connected MySQL database.".to_string()
+                "Use mysql_query to execute SQL queries against the connected MySQL database."
+                    .to_string(),
             ),
         }
     }
 
-    fn list_tools(
+    async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
-        async move {
+    ) -> Result<ListToolsResult, McpError> {
+        {
             let tools = vec![
                 Tool::new(
                     "mysql_query",
@@ -192,21 +202,21 @@ impl ServerHandler for McpServer {
         }
     }
 
-    fn call_tool(
+    async fn call_tool(
         &self,
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
-        async move {
+    ) -> Result<CallToolResult, McpError> {
+        {
             let args = request.arguments.unwrap_or_default();
             match request.name.as_ref() {
-                "mysql_connect"       => self.store.handle_connect(args).await,
-                "mysql_disconnect"    => self.store.handle_disconnect(args).await,
+                "mysql_connect" => self.store.handle_connect(args).await,
+                "mysql_disconnect" => self.store.handle_disconnect(args).await,
                 "mysql_list_sessions" => self.store.handle_list_sessions(args).await,
-                "mysql_schema_info"   => self.store.handle_schema_info(args).await,
-                "mysql_server_info"   => self.store.handle_server_info(args).await,
-                "mysql_explain_plan"  => self.store.handle_explain_plan(args).await,
-                "mysql_query"         => self.store.handle_query(args).await,
+                "mysql_schema_info" => self.store.handle_schema_info(args).await,
+                "mysql_server_info" => self.store.handle_server_info(args).await,
+                "mysql_explain_plan" => self.store.handle_explain_plan(args).await,
+                "mysql_query" => self.store.handle_query(args).await,
                 name => Err(McpError::new(
                     ErrorCode::METHOD_NOT_FOUND,
                     format!("Unknown tool: {}", name),

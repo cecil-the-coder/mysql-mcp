@@ -7,12 +7,13 @@ pub mod merge;
 mod tests;
 
 /// Top-level configuration
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     pub connection: ConnectionConfig,
     pub pool: PoolConfig,
     pub security: SecurityConfig,
+    pub ssh: Option<SshConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -65,6 +66,36 @@ pub struct SecurityConfig {
     pub max_sessions: u32,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct SshConfig {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub private_key: Option<String>,
+    pub private_key_passphrase: Option<String>,
+    pub use_agent: bool,
+    /// One of: "strict", "accept-new", "insecure"
+    /// Maps to SSH StrictHostKeyChecking: yes, accept-new, no
+    pub known_hosts_check: String,
+    pub known_hosts_file: Option<String>,
+}
+
+impl Default for SshConfig {
+    fn default() -> Self {
+        Self {
+            host: String::new(),
+            port: 22,
+            user: String::new(),
+            private_key: None,
+            private_key_passphrase: None,
+            use_agent: false,
+            known_hosts_check: "strict".to_string(),
+            known_hosts_file: None,
+        }
+    }
+}
+
 /// Per-schema permission overrides
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct SchemaPermissions {
@@ -72,16 +103,6 @@ pub struct SchemaPermissions {
     pub allow_update: Option<bool>,
     pub allow_delete: Option<bool>,
     pub allow_ddl: Option<bool>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            connection: ConnectionConfig::default(),
-            pool: PoolConfig::default(),
-            security: SecurityConfig::default(),
-        }
-    }
 }
 
 impl Default for ConnectionConfig {
@@ -173,7 +194,10 @@ impl Config {
         }
 
         // performance_hints must be one of the recognised modes
-        if !matches!(self.pool.performance_hints.as_str(), "none" | "auto" | "always") {
+        if !matches!(
+            self.pool.performance_hints.as_str(),
+            "none" | "auto" | "always"
+        ) {
             anyhow::bail!(
                 "Config error: MYSQL_PERFORMANCE_HINTS must be one of: none, auto, always (got: '{}')",
                 self.pool.performance_hints
@@ -183,10 +207,36 @@ impl Config {
         // SSL CA file must exist if specified
         if let Some(ref ca) = self.security.ssl_ca {
             if !std::path::Path::new(ca).exists() {
+                anyhow::bail!("Config error: MYSQL_SSL_CA path does not exist: {}", ca);
+            }
+        }
+
+        // SSH validation (only when SSH is configured)
+        if let Some(ref ssh) = self.ssh {
+            if ssh.host.is_empty() {
+                anyhow::bail!("ssh.host must not be empty when SSH tunnel is configured");
+            }
+            if ssh.user.is_empty() {
+                anyhow::bail!("ssh.user must not be empty when SSH tunnel is configured");
+            }
+            if !matches!(
+                ssh.known_hosts_check.as_str(),
+                "strict" | "accept-new" | "insecure"
+            ) {
                 anyhow::bail!(
-                    "Config error: MYSQL_SSL_CA path does not exist: {}",
-                    ca
+                    "ssh.known_hosts_check must be one of: strict, accept-new, insecure (got: '{}')",
+                    ssh.known_hosts_check
                 );
+            }
+            if let Some(ref key_path) = ssh.private_key {
+                if !std::path::Path::new(key_path).exists() {
+                    anyhow::bail!("ssh.private_key path does not exist: {}", key_path);
+                }
+            }
+            if let Some(ref khf) = ssh.known_hosts_file {
+                if !std::path::Path::new(khf).exists() {
+                    anyhow::bail!("ssh.known_hosts_file path does not exist: {}", khf);
+                }
             }
         }
 

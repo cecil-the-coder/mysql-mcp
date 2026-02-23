@@ -351,7 +351,10 @@ fn test_parse_warnings_leading_wildcard_like() {
         "Expected has_leading_wildcard_like=true"
     );
     assert!(
-        parsed.warnings.iter().any(|w| w.contains("Leading wildcard")),
+        parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("Leading wildcard")),
         "Expected leading wildcard warning, got: {:?}",
         parsed.warnings
     );
@@ -365,7 +368,10 @@ fn test_parse_warnings_no_leading_wildcard() {
         "Expected has_leading_wildcard_like=false for trailing wildcard"
     );
     assert!(
-        !parsed.warnings.iter().any(|w| w.contains("Leading wildcard")),
+        !parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("Leading wildcard")),
         "Should not warn for trailing wildcard, got: {:?}",
         parsed.warnings
     );
@@ -380,6 +386,21 @@ fn test_parse_warnings_no_reparse() {
     assert!(
         !parsed.warnings.is_empty(),
         "SELECT * FROM users with no LIMIT should produce warnings, got: {:?}",
+        parsed.warnings
+    );
+}
+
+#[test]
+fn test_union_query_gets_compound_warning() {
+    let parsed = parse_sql("SELECT 1 UNION SELECT 2").unwrap();
+    assert_eq!(
+        parsed.statement_type,
+        StatementType::Select,
+        "UNION should still be Select"
+    );
+    assert!(
+        parsed.warnings.iter().any(|w| w.contains("UNION")),
+        "UNION query should have a compound-query warning, got: {:?}",
         parsed.warnings
     );
 }

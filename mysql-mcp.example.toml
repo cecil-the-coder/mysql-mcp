@@ -115,3 +115,40 @@ metrics_enabled = false
 
 # Return date/datetime values as strings instead of native types (default: false)
 date_strings = false
+
+# ─── SSH Tunnel ───────────────────────────────────────────────────────────────
+# Route the MySQL connection through an SSH tunnel (jump host / bastion).
+# Useful when the database is not directly reachable from the machine running
+# mysql-mcp (e.g., DB is in a private VPC, accessible only via a bastion host).
+#
+# Prerequisites:
+#   macOS / Linux : OpenSSH is built-in. No extra installation needed.
+#   Windows       : OpenSSH must be installed. Enable via Windows Features or:
+#                   winget install Microsoft.OpenSSH.Beta
+#                   Verify with: ssh -V
+#
+# [ssh]
+# # Bastion / jump host (required to enable SSH tunneling)
+# host = "bastion.example.com"
+#
+# # SSH server port (default: 22)
+# port = 22
+#
+# # SSH user on the bastion (required)
+# user = "ubuntu"
+#
+# # Path to PEM private key file (optional — omit to rely on SSH agent)
+# private_key = "/home/user/.ssh/id_rsa"
+#
+# # Use the system SSH agent for authentication (MYSQL_SSH_USE_AGENT=true)
+# use_agent = false
+#
+# # Host key verification mode (default: "strict")
+# #   "strict"     — fail if the host key is unknown (most secure; pre-populate
+# #                  known_hosts with: ssh-keyscan bastion >> ~/.ssh/known_hosts)
+# #   "accept-new" — automatically add new host keys, verify known ones
+# #   "insecure"   — skip all host key verification (not recommended)
+# known_hosts_check = "strict"
+#
+# # Override the known_hosts file path (default: ~/.ssh/known_hosts)
+# # known_hosts_file = "/etc/ssh/known_hosts"

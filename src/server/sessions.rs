@@ -1,12 +1,12 @@
-use std::sync::Arc;
-use std::collections::HashMap;
 use rmcp::model::{CallToolResult, Content};
 use serde_json::json;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use super::tool_schemas::serialize_response;
 use crate::config::Config;
 use crate::schema::SchemaIntrospector;
-use super::tool_schemas::serialize_response;
 
 /// A named database session (non-default, runtime-created connection).
 pub(crate) struct Session {
@@ -16,6 +16,10 @@ pub(crate) struct Session {
     /// Human-readable display info for mysql_list_sessions
     pub(crate) host: String,
     pub(crate) database: Option<String>,
+    /// SSH tunnel keeping the connection alive (None for direct connections).
+    pub(crate) tunnel: Option<crate::tunnel::TunnelHandle>,
+    /// Bastion hostname shown in mysql_list_sessions when tunneling.
+    pub(crate) ssh_host: Option<String>,
 }
 
 /// Named context returned by get_session(): pool, schema introspector, and optional database.
@@ -39,17 +43,23 @@ pub(crate) struct SessionStore {
 fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToolResult> {
     if value.is_empty() {
         return Err(CallToolResult::error(vec![Content::text(format!(
-            "{} cannot be empty", kind
+            "{} cannot be empty",
+            kind
         ))]));
     }
     if value.len() > 64 {
         return Err(CallToolResult::error(vec![Content::text(format!(
-            "{} too long (max 64 characters)", kind
+            "{} too long (max 64 characters)",
+            kind
         ))]));
     }
-    if !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return Err(CallToolResult::error(vec![Content::text(format!(
-            "{} must contain only alphanumeric characters, underscores, or hyphens", kind
+            "{} must contain only alphanumeric characters, underscores, or hyphens",
+            kind
         ))]));
     }
     Ok(())
@@ -100,10 +110,16 @@ impl SessionStore {
     ) -> anyhow::Result<CallToolResult, rmcp::ErrorData> {
         let name = match args.get("name").and_then(|v| v.as_str()) {
             Some(n) if !n.is_empty() => n.to_string(),
-            _ => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: name")])),
+            _ => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Missing required argument: name",
+                )]))
+            }
         };
         if name == "default" {
-            return Ok(CallToolResult::error(vec![Content::text("Session name 'default' is reserved")]));
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Session name 'default' is reserved",
+            )]));
         }
 
         // Validate session name: max 64 chars, alphanumeric + underscore + hyphen only
@@ -119,38 +135,99 @@ impl SessionStore {
 
         let host = match args.get("host").and_then(|v| v.as_str()) {
             Some(h) if !h.is_empty() => h.to_string(),
-            Some(_) => return Ok(CallToolResult::error(vec![Content::text("Host cannot be empty")])),
-            None => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: host")])),
+            Some(_) => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Host cannot be empty",
+                )]))
+            }
+            None => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Missing required argument: host",
+                )]))
+            }
         };
         if super::is_private_host(&host) {
             return Ok(CallToolResult::error(vec![Content::text(format!(
-                "Connecting to loopback/link-local IP addresses is not allowed: {}", host
+                "Connecting to loopback/link-local IP addresses is not allowed: {}",
+                host
             ))]));
         }
         let port = match args.get("port").and_then(|v| v.as_u64()) {
-            Some(p) if p >= 1 && p <= 65535 => p as u16,
-            Some(_) => return Ok(CallToolResult::error(vec![Content::text("Port out of range (1–65535)")])),
+            Some(p) if (1..=65535).contains(&p) => p as u16,
+            Some(_) => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Port out of range (1–65535)",
+                )]))
+            }
             None => 3306,
         };
         let user = match args.get("user").and_then(|v| v.as_str()) {
-            Some(u) if u.is_empty() => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: user")])),
-            Some(u) if u.len() > 255 => return Ok(CallToolResult::error(vec![Content::text("User too long (max 255 characters)")])),
+            Some("") | None => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Missing required argument: user",
+                )]))
+            }
+            Some(u) if u.len() > 255 => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "User too long (max 255 characters)",
+                )]))
+            }
             Some(u) => u.to_string(),
-            None => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: user")])),
         };
         let password = match args.get("password").and_then(|v| v.as_str()) {
-            Some(p) if p.len() > 2048 => return Ok(CallToolResult::error(vec![Content::text("Password too long (max 2048 characters)")])),
+            Some(p) if p.len() > 2048 => {
+                return Ok(CallToolResult::error(vec![Content::text(
+                    "Password too long (max 2048 characters)",
+                )]))
+            }
             Some(p) => p.to_string(),
             None => String::new(),
         };
-        let database = args.get("database").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let database = args
+            .get("database")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         if let Some(ref db) = database {
             if let Err(e) = validate_identifier(db, "Database name") {
                 return Ok(e);
             }
         }
         let ssl = args.get("ssl").and_then(|v| v.as_bool()).unwrap_or(false);
-        let ssl_ca = args.get("ssl_ca").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let ssl_ca = args
+            .get("ssl_ca")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        // SSH tunnel parameters (optional)
+        let ssh_host = args
+            .get("ssh_host")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let ssh_port = args
+            .get("ssh_port")
+            .and_then(|v| v.as_u64())
+            .map(|p| p as u16)
+            .unwrap_or(22);
+        let ssh_user = args
+            .get("ssh_user")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let ssh_private_key = args
+            .get("ssh_private_key")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let ssh_use_agent = args
+            .get("ssh_use_agent")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let ssh_known_hosts_check = args
+            .get("ssh_known_hosts_check")
+            .and_then(|v| v.as_str())
+            .unwrap_or("strict")
+            .to_string();
 
         tracing::debug!(
             name = %name,
@@ -161,43 +238,108 @@ impl SessionStore {
             "mysql_connect: creating session"
         );
 
-        match crate::db::build_session_pool(
-            &host, port, &user, &password,
-            database.as_deref(), ssl, false, ssl_ca.as_deref(),
-            self.config.pool.connect_timeout_ms,
-        ).await {
-            Ok(pool) => {
-                let pool_arc = Arc::new(pool.clone());
-                let introspector = Arc::new(SchemaIntrospector::new(pool_arc, self.config.pool.cache_ttl_secs));
-                let info = json!({
-                    "connected": true,
-                    "session": &name,
-                    "host": &host,
-                    "database": &database,
-                });
-                let session = Session {
-                    pool,
-                    introspector,
-                    last_used: std::time::Instant::now(),
-                    host,
-                    database,
-                };
-                let mut sessions = self.sessions.lock().await;
-                if sessions.len() >= self.config.security.max_sessions as usize {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "Maximum session limit ({}) reached. Disconnect an existing session first.",
-                        self.config.security.max_sessions
-                    ))]));
+        let (pool, tunnel) = if let Some(ref ssh_host_str) = ssh_host {
+            // Validate SSH user is present
+            let ssh_user_str = match ssh_user {
+                Some(ref u) => u.clone(),
+                None => {
+                    return Ok(CallToolResult::error(vec![Content::text(
+                        "ssh_user is required when ssh_host is provided",
+                    )]))
                 }
-                sessions.insert(name, session);
-                Ok(serialize_response(&info))
+            };
+            let ssh_config = crate::config::SshConfig {
+                host: ssh_host_str.clone(),
+                port: ssh_port,
+                user: ssh_user_str,
+                private_key: ssh_private_key.clone(),
+                private_key_passphrase: None,
+                use_agent: ssh_use_agent,
+                known_hosts_check: ssh_known_hosts_check.clone(),
+                known_hosts_file: None,
+            };
+            match crate::db::build_session_pool_with_tunnel(
+                &host,
+                port,
+                &user,
+                &password,
+                database.as_deref(),
+                ssl,
+                false,
+                ssl_ca.as_deref(),
+                self.config.pool.connect_timeout_ms,
+                &ssh_config,
+            )
+            .await
+            {
+                Ok((p, t)) => (p, Some(t)),
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "SSH tunnel or connection failed: {}",
+                        e
+                    ))]))
+                }
             }
-            Err(e) => {
-                Ok(CallToolResult::error(vec![
-                    Content::text(format!("Connection failed: {}", e)),
-                ]))
+        } else {
+            match crate::db::build_session_pool(
+                &host,
+                port,
+                &user,
+                &password,
+                database.as_deref(),
+                ssl,
+                false,
+                ssl_ca.as_deref(),
+                self.config.pool.connect_timeout_ms,
+            )
+            .await
+            {
+                Ok(p) => (p, None),
+                Err(e) => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Connection failed: {}",
+                        e
+                    ))]))
+                }
             }
+        };
+
+        let pool_arc = Arc::new(pool.clone());
+        let introspector = Arc::new(SchemaIntrospector::new(
+            pool_arc,
+            self.config.pool.cache_ttl_secs,
+        ));
+        let info = json!({
+            "connected": true,
+            "session": &name,
+            "host": &host,
+            "database": &database,
+            "ssh_host": &ssh_host,
+        });
+        let session = Session {
+            pool,
+            introspector,
+            last_used: std::time::Instant::now(),
+            host,
+            database,
+            tunnel,
+            ssh_host,
+        };
+        let mut sessions = self.sessions.lock().await;
+        if sessions.len() >= self.config.security.max_sessions as usize {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "Maximum session limit ({}) reached. Disconnect an existing session first.",
+                self.config.security.max_sessions
+            ))]));
         }
+        if sessions.contains_key(&name) {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
+                name
+            ))]));
+        }
+        sessions.insert(name, session);
+        Ok(serialize_response(&info))
     }
 
     // ------------------------------------------------------------------
@@ -208,20 +350,32 @@ impl SessionStore {
         args: serde_json::Map<String, serde_json::Value>,
     ) -> anyhow::Result<CallToolResult, rmcp::ErrorData> {
         let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
-            return Ok(CallToolResult::error(vec![Content::text("Missing required argument: name")]));
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Missing required argument: name",
+            )]));
         };
         if name == "default" {
-            return Ok(CallToolResult::error(vec![Content::text("The default session cannot be closed")]));
+            return Ok(CallToolResult::error(vec![Content::text(
+                "The default session cannot be closed",
+            )]));
         }
         let mut sessions = self.sessions.lock().await;
-        if sessions.remove(name).is_some() {
-            Ok(CallToolResult::success(vec![
-                Content::text(format!("Session '{}' closed", name)),
-            ]))
+        if let Some(session) = sessions.remove(name) {
+            // Clean up SSH tunnel if present
+            if let Some(tunnel) = session.tunnel {
+                if let Err(e) = tunnel.close().await {
+                    tracing::warn!("SSH tunnel close error on disconnect: {}", e);
+                }
+            }
+            Ok(CallToolResult::success(vec![Content::text(format!(
+                "Session '{}' closed",
+                name
+            ))]))
         } else {
-            Ok(CallToolResult::error(vec![
-                Content::text(format!("Session '{}' not found", name)),
-            ]))
+            Ok(CallToolResult::error(vec![Content::text(format!(
+                "Session '{}' not found",
+                name
+            ))]))
         }
     }
 
@@ -240,7 +394,8 @@ impl SessionStore {
             "name": "default",
             "host": self.config.connection.host,
             "database": self.config.connection.database,
-            "idle_seconds": null,
+            "idle_seconds": serde_json::Value::Null,
+            "ssh_host": self.config.ssh.as_ref().map(|s| &s.host),
         }));
         for (name, session) in sessions.iter() {
             list.push(json!({
@@ -248,6 +403,7 @@ impl SessionStore {
                 "host": session.host,
                 "database": session.database,
                 "idle_seconds": session.last_used.elapsed().as_secs(),
+                "ssh_host": session.ssh_host,
             }));
         }
 

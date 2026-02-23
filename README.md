@@ -452,6 +452,108 @@ Remote clients must send `Authorization: Bearer your-secret-token` with every re
 
 ---
 
+## SSH Tunneling
+
+mysql-mcp can route database connections through an SSH tunnel (jump host / bastion),
+enabling access to databases that are not directly reachable from the machine running
+the server.
+
+```
+[Local machine] → [SSH tunnel → bastion:22] → [DB host:3306]
+```
+
+### Prerequisites
+
+| Platform | Requirement |
+|----------|------------|
+| macOS | Built-in OpenSSH — no installation needed |
+| Linux | OpenSSH almost universally pre-installed |
+| Windows | Install OpenSSH: enable via **Windows Features → Optional Features → OpenSSH Client**, or run `winget install Microsoft.OpenSSH.Beta`. Verify with `ssh -V`. |
+
+### Configuration
+
+**TOML (`mysql-mcp.toml`):**
+
+```toml
+[connection]
+host = "db.internal"      # DB host as seen from the bastion
+port = 3306
+user = "dbuser"
+password = "secret"
+
+[ssh]
+host = "bastion.example.com"
+user = "ubuntu"
+private_key = "/home/user/.ssh/id_rsa"   # or use SSH agent
+known_hosts_check = "strict"             # strict | accept-new | insecure
+```
+
+**Environment variables:**
+
+| Variable | Description |
+|----------|-------------|
+| `MYSQL_SSH_HOST` | SSH bastion hostname |
+| `MYSQL_SSH_PORT` | SSH port (default: 22) |
+| `MYSQL_SSH_USER` | SSH username |
+| `MYSQL_SSH_PRIVATE_KEY` | Path to PEM private key |
+| `MYSQL_SSH_USE_AGENT` | `true` to use SSH agent |
+| `MYSQL_SSH_KNOWN_HOSTS_CHECK` | `strict` / `accept-new` / `insecure` |
+| `MYSQL_SSH_KNOWN_HOSTS_FILE` | Override known_hosts path |
+
+### Authentication
+
+- **Key file (recommended for automation):** Set `private_key` to a passphrase-free key path.
+- **SSH agent:** Set `use_agent = true` (or `MYSQL_SSH_USE_AGENT=true`). The agent must be running and have the key loaded (`ssh-add /path/to/key`).
+
+### Known Hosts
+
+The default `known_hosts_check = "strict"` refuses connections to unknown hosts. For first-time setup, pre-populate your known_hosts file:
+
+```bash
+ssh-keyscan -H bastion.example.com >> ~/.ssh/known_hosts
+```
+
+Or temporarily use `accept-new` to add the key automatically on first connect:
+
+```toml
+[ssh]
+known_hosts_check = "accept-new"
+```
+
+### Dynamic tunnels via `mysql_connect`
+
+The `mysql_connect` tool also accepts SSH parameters for on-demand tunneled sessions:
+
+```json
+{
+  "name": "mysql_connect",
+  "arguments": {
+    "name": "prod-tunneled",
+    "host": "db.internal",
+    "port": 3306,
+    "user": "dbuser",
+    "password": "secret",
+    "ssh_host": "bastion.example.com",
+    "ssh_user": "ubuntu",
+    "ssh_known_hosts_check": "accept-new"
+  }
+}
+```
+
+Requires `MYSQL_ALLOW_RUNTIME_CONNECTIONS=true`.
+
+### Troubleshooting
+
+| Error | Fix |
+|-------|-----|
+| `'ssh' binary not found` | Install OpenSSH (see Prerequisites above) |
+| `Host key verification failed` | Pre-add host with `ssh-keyscan`, or set `known_hosts_check = "accept-new"` |
+| `Permission denied (publickey)` | Verify key path, check `ssh-add -l` if using agent |
+| `Timed out waiting for local port` | Check SSH connectivity: `ssh user@bastion` interactively |
+| Connection resets after idle | Expected — the 10-minute session reaper closes idle sessions |
+
+---
+
 ## Development
 
 ```bash

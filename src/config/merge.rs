@@ -1,7 +1,7 @@
+use crate::config::env_config::load_env_config;
+use crate::config::Config;
 use anyhow::Result;
 use std::path::Path;
-use crate::config::Config;
-use crate::config::env_config::load_env_config;
 
 /// Load config from a TOML file path. Returns default config if file doesn't exist.
 pub(crate) fn load_toml_config(path: &Path) -> Result<Config> {

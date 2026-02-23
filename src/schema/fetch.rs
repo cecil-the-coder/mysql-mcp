@@ -1,7 +1,7 @@
 use anyhow::Result;
 use sqlx::MySqlPool;
 
-use super::{TableInfo, ColumnInfo, IndexDef};
+use super::{ColumnInfo, IndexDef, TableInfo};
 
 // MySQL information_schema columns (TABLE_NAME, DATA_TYPE, COLUMN_KEY, etc.) are
 // sometimes returned as binary blobs by sqlx. These helpers try String first,
@@ -18,7 +18,8 @@ pub(crate) fn is_col_str(row: &sqlx::mysql::MySqlRow, col: &str) -> String {
 
 pub(crate) fn is_col_str_opt(row: &sqlx::mysql::MySqlRow, col: &str) -> Option<String> {
     use sqlx::Row;
-    let s = row.try_get::<Option<String>, _>(col)
+    let s = row
+        .try_get::<Option<String>, _>(col)
         .ok()
         .flatten()
         .or_else(|| {
@@ -27,7 +28,11 @@ pub(crate) fn is_col_str_opt(row: &sqlx::mysql::MySqlRow, col: &str) -> Option<S
                 .flatten()
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
         })?;
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Escape a MySQL identifier for use in backtick-quoted contexts.
@@ -36,7 +41,10 @@ pub(crate) fn escape_mysql_identifier(name: &str) -> String {
     name.replace('`', "``")
 }
 
-pub(crate) async fn fetch_tables(pool: &MySqlPool, database: Option<&str>) -> Result<Vec<TableInfo>> {
+pub(crate) async fn fetch_tables(
+    pool: &MySqlPool,
+    database: Option<&str>,
+) -> Result<Vec<TableInfo>> {
     let rows = if let Some(db) = database {
         sqlx::query(
             r#"SELECT
@@ -72,24 +80,37 @@ pub(crate) async fn fetch_tables(pool: &MySqlPool, database: Option<&str>) -> Re
         .await?
     };
 
-    let tables = rows.iter().map(|row| {
-        use sqlx::Row;
-        TableInfo {
-            name: is_col_str(row, "name"),
-            schema: is_col_str(row, "schema"),
-            row_count: row.try_get("row_count").ok(),
-            data_size_bytes: row.try_get("data_size_bytes").ok(),
-            create_time: row.try_get::<Option<chrono::NaiveDateTime>, _>("create_time")
-                .ok().flatten().map(|d| d.to_string()),
-            update_time: row.try_get::<Option<chrono::NaiveDateTime>, _>("update_time")
-                .ok().flatten().map(|d| d.to_string()),
-        }
-    }).collect();
+    let tables = rows
+        .iter()
+        .map(|row| {
+            use sqlx::Row;
+            TableInfo {
+                name: is_col_str(row, "name"),
+                schema: is_col_str(row, "schema"),
+                row_count: row.try_get("row_count").ok(),
+                data_size_bytes: row.try_get("data_size_bytes").ok(),
+                create_time: row
+                    .try_get::<Option<chrono::NaiveDateTime>, _>("create_time")
+                    .ok()
+                    .flatten()
+                    .map(|d| d.to_string()),
+                update_time: row
+                    .try_get::<Option<chrono::NaiveDateTime>, _>("update_time")
+                    .ok()
+                    .flatten()
+                    .map(|d| d.to_string()),
+            }
+        })
+        .collect();
 
     Ok(tables)
 }
 
-pub(crate) async fn fetch_columns(pool: &MySqlPool, table_name: &str, database: Option<&str>) -> Result<Vec<ColumnInfo>> {
+pub(crate) async fn fetch_columns(
+    pool: &MySqlPool,
+    table_name: &str,
+    database: Option<&str>,
+) -> Result<Vec<ColumnInfo>> {
     let sql = format!(
         r#"SELECT
             COLUMN_NAME as name,
@@ -102,7 +123,11 @@ pub(crate) async fn fetch_columns(pool: &MySqlPool, table_name: &str, database: 
         FROM information_schema.COLUMNS
         WHERE TABLE_NAME = ?{}
         ORDER BY ORDINAL_POSITION"#,
-        if database.is_some() { " AND TABLE_SCHEMA = ?" } else { "" }
+        if database.is_some() {
+            " AND TABLE_SCHEMA = ?"
+        } else {
+            ""
+        }
     );
     let q = sqlx::query(&sql).bind(table_name);
     let rows = if let Some(db) = database {
@@ -111,25 +136,36 @@ pub(crate) async fn fetch_columns(pool: &MySqlPool, table_name: &str, database: 
         q.fetch_all(pool).await?
     };
 
-    let columns = rows.iter().map(|row| {
-        let nullable_str = is_col_str(row, "is_nullable");
-        ColumnInfo {
-            name: is_col_str(row, "name"),
-            data_type: is_col_str(row, "data_type"),
-            column_type: is_col_str(row, "column_type"),
-            is_nullable: nullable_str == "YES",
-            column_default: is_col_str_opt(row, "column_default"),
-            column_key: is_col_str_opt(row, "column_key"),
-            extra: is_col_str_opt(row, "extra"),
-        }
-    }).collect();
+    let columns = rows
+        .iter()
+        .map(|row| {
+            let nullable_str = is_col_str(row, "is_nullable");
+            ColumnInfo {
+                name: is_col_str(row, "name"),
+                data_type: is_col_str(row, "data_type"),
+                column_type: is_col_str(row, "column_type"),
+                is_nullable: nullable_str == "YES",
+                column_default: is_col_str_opt(row, "column_default"),
+                column_key: is_col_str_opt(row, "column_key"),
+                extra: is_col_str_opt(row, "extra"),
+            }
+        })
+        .collect();
 
     Ok(columns)
 }
 
-pub(crate) async fn fetch_indexed_columns(pool: &MySqlPool, table: &str, database: Option<&str>) -> Result<Vec<String>> {
+pub(crate) async fn fetch_indexed_columns(
+    pool: &MySqlPool,
+    table: &str,
+    database: Option<&str>,
+) -> Result<Vec<String>> {
     let qualified = match database {
-        Some(db) => format!("`{}`.`{}`", escape_mysql_identifier(db), escape_mysql_identifier(table)),
+        Some(db) => format!(
+            "`{}`.`{}`",
+            escape_mysql_identifier(db),
+            escape_mysql_identifier(table)
+        ),
         None => format!("`{}`", escape_mysql_identifier(table)),
     };
     // SHOW INDEX FROM does not support bound parameters in MySQL; identifiers
@@ -147,13 +183,21 @@ pub(crate) async fn fetch_indexed_columns(pool: &MySqlPool, table: &str, databas
     Ok(cols)
 }
 
-pub(crate) async fn fetch_composite_indexes(pool: &MySqlPool, table: &str, database: Option<&str>) -> Result<Vec<IndexDef>> {
+pub(crate) async fn fetch_composite_indexes(
+    pool: &MySqlPool,
+    table: &str,
+    database: Option<&str>,
+) -> Result<Vec<IndexDef>> {
     let sql = format!(
         "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME \
          FROM information_schema.STATISTICS \
          WHERE TABLE_NAME = ?{} \
          ORDER BY INDEX_NAME, SEQ_IN_INDEX",
-        if database.is_some() { " AND TABLE_SCHEMA = ?" } else { "" }
+        if database.is_some() {
+            " AND TABLE_SCHEMA = ?"
+        } else {
+            ""
+        }
     );
     let q = sqlx::query(&sql).bind(table);
     let rows = if let Some(db) = database {
@@ -162,7 +206,8 @@ pub(crate) async fn fetch_composite_indexes(pool: &MySqlPool, table: &str, datab
         q.fetch_all(pool).await?
     };
 
-    let mut index_map: std::collections::BTreeMap<String, IndexDef> = std::collections::BTreeMap::new();
+    let mut index_map: std::collections::BTreeMap<String, IndexDef> =
+        std::collections::BTreeMap::new();
     for row in &rows {
         use sqlx::Row;
         let name = is_col_str(row, "INDEX_NAME");

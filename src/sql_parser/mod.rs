@@ -102,7 +102,6 @@ pub struct ParsedStatement {
     // Cached AST-derived fields populated once during parse_sql().
     // These allow check_limit_presence() and related helpers to reuse parse results
     // rather than re-invoking the sqlparser crate.
-
     /// True if the outermost SELECT (or Query) has a LIMIT clause.
     /// Only meaningful for Select statements; false otherwise.
     pub has_limit: bool,
@@ -126,8 +125,8 @@ pub struct ParsedStatement {
 /// Returns an error if the SQL is invalid or cannot be parsed.
 pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
     let dialect = MySqlDialect {};
-    let statements = Parser::parse_sql(&dialect, sql)
-        .map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
+    let statements =
+        Parser::parse_sql(&dialect, sql).map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
 
     if statements.is_empty() {
         bail!("Empty SQL statement");
@@ -176,5 +175,3 @@ pub fn parse_write_warnings(parsed: &ParsedStatement) -> Vec<String> {
 
     warnings
 }
-
-

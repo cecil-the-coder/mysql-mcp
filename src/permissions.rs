@@ -1,6 +1,6 @@
-use anyhow::{bail, Result};
 use crate::config::Config;
 use crate::sql_parser::StatementType;
+use anyhow::{bail, Result};
 
 /// Check if a SQL statement is allowed based on config.
 /// Returns Ok(()) if allowed, Err with descriptive message if denied.
@@ -17,9 +17,13 @@ pub fn check_permission(
     //   `INSERT INTO users ...` implicitly targets the connected database).
     // Keys in schema_permissions are stored lowercase (env var parser lowercases them),
     // so normalise to lowercase for the lookup.
-    let effective_schema: Option<String> = target_schema
-        .map(|s| s.to_lowercase())
-        .or_else(|| config.connection.database.as_ref().map(|d| d.to_lowercase()));
+    let effective_schema: Option<String> = target_schema.map(|s| s.to_lowercase()).or_else(|| {
+        config
+            .connection
+            .database
+            .as_ref()
+            .map(|d| d.to_lowercase())
+    });
 
     // Get schema-specific permissions if we have an effective schema
     let schema_perms = effective_schema
@@ -32,19 +36,48 @@ pub fn check_permission(
             Ok(())
         }
         StatementType::Insert => {
-            let allowed = schema_perms.and_then(|p| p.allow_insert).unwrap_or(sec.allow_insert);
-            check_write_op(allowed, "INSERT", "MYSQL_ALLOW_INSERT", config, target_schema)
+            let allowed = schema_perms
+                .and_then(|p| p.allow_insert)
+                .unwrap_or(sec.allow_insert);
+            check_write_op(
+                allowed,
+                "INSERT",
+                "MYSQL_ALLOW_INSERT",
+                config,
+                target_schema,
+            )
         }
         StatementType::Update => {
-            let allowed = schema_perms.and_then(|p| p.allow_update).unwrap_or(sec.allow_update);
-            check_write_op(allowed, "UPDATE", "MYSQL_ALLOW_UPDATE", config, target_schema)
+            let allowed = schema_perms
+                .and_then(|p| p.allow_update)
+                .unwrap_or(sec.allow_update);
+            check_write_op(
+                allowed,
+                "UPDATE",
+                "MYSQL_ALLOW_UPDATE",
+                config,
+                target_schema,
+            )
         }
         StatementType::Delete => {
-            let allowed = schema_perms.and_then(|p| p.allow_delete).unwrap_or(sec.allow_delete);
-            check_write_op(allowed, "DELETE", "MYSQL_ALLOW_DELETE", config, target_schema)
+            let allowed = schema_perms
+                .and_then(|p| p.allow_delete)
+                .unwrap_or(sec.allow_delete);
+            check_write_op(
+                allowed,
+                "DELETE",
+                "MYSQL_ALLOW_DELETE",
+                config,
+                target_schema,
+            )
         }
-        StatementType::Create | StatementType::Alter | StatementType::Drop | StatementType::Truncate => {
-            let allowed = schema_perms.and_then(|p| p.allow_ddl).unwrap_or(sec.allow_ddl);
+        StatementType::Create
+        | StatementType::Alter
+        | StatementType::Drop
+        | StatementType::Truncate => {
+            let allowed = schema_perms
+                .and_then(|p| p.allow_ddl)
+                .unwrap_or(sec.allow_ddl);
             let label = format!("DDL ({})", stmt_type.name());
             check_write_op(allowed, &label, "MYSQL_ALLOW_DDL", config, target_schema)
         }
@@ -87,7 +120,11 @@ fn check_write_op(
     target_schema: Option<&str>,
 ) -> Result<()> {
     if !allowed {
-        bail!("{} operations are not allowed. Set {}=true to enable.", op, env_var);
+        bail!(
+            "{} operations are not allowed. Set {}=true to enable.",
+            op,
+            env_var
+        );
     }
     check_multi_db_write(config, target_schema)
 }
@@ -166,7 +203,8 @@ mod tests {
     #[test]
     fn test_other_always_denied() {
         let config = Config::default();
-        let err = check_permission(&config, &StatementType::Other("CALL".to_string()), None).unwrap_err();
+        let err =
+            check_permission(&config, &StatementType::Other("CALL".to_string()), None).unwrap_err();
         assert!(err.to_string().contains("Unsupported statement type"));
     }
 
@@ -233,7 +271,10 @@ mod tests {
         config.security.allow_insert = false;
         config.security.schema_permissions.insert(
             "allowed_schema".to_string(),
-            SchemaPermissions { allow_insert: Some(true), ..Default::default() }
+            SchemaPermissions {
+                allow_insert: Some(true),
+                ..Default::default()
+            },
         );
         // Denied for other schemas (falls back to global allow_insert = false)
         assert!(check_permission(&config, &StatementType::Insert, Some("denied_schema")).is_err());
@@ -249,10 +290,15 @@ mod tests {
         config.security.allow_insert = true;
         config.security.schema_permissions.insert(
             "restricted_schema".to_string(),
-            SchemaPermissions { allow_insert: Some(false), ..Default::default() }
+            SchemaPermissions {
+                allow_insert: Some(false),
+                ..Default::default()
+            },
         );
         // Global allows, but schema-specific denies
-        assert!(check_permission(&config, &StatementType::Insert, Some("restricted_schema")).is_err());
+        assert!(
+            check_permission(&config, &StatementType::Insert, Some("restricted_schema")).is_err()
+        );
         // Other schema falls back to global allow
         assert!(check_permission(&config, &StatementType::Insert, Some("other_schema")).is_ok());
     }
@@ -309,7 +355,10 @@ mod tests {
         config.security.allow_insert = false; // global: deny
         config.security.schema_permissions.insert(
             "mcp_test".to_string(),
-            SchemaPermissions { allow_insert: Some(true), ..Default::default() },
+            SchemaPermissions {
+                allow_insert: Some(true),
+                ..Default::default()
+            },
         );
         // target_schema = None (unqualified SQL), but connected DB = mcp_test -> override allows
         assert!(check_permission(&config, &StatementType::Insert, None).is_ok());
@@ -324,7 +373,10 @@ mod tests {
         config.security.allow_insert = true; // global: allow
         config.security.schema_permissions.insert(
             "mcp_test".to_string(),
-            SchemaPermissions { allow_insert: Some(false), ..Default::default() },
+            SchemaPermissions {
+                allow_insert: Some(false),
+                ..Default::default()
+            },
         );
         // target_schema = None (unqualified SQL), but connected DB = mcp_test -> override denies
         assert!(check_permission(&config, &StatementType::Insert, None).is_err());
@@ -340,7 +392,10 @@ mod tests {
         // Key stored lowercase (as the env var parser does)
         config.security.schema_permissions.insert(
             "myschema".to_string(),
-            SchemaPermissions { allow_insert: Some(true), ..Default::default() },
+            SchemaPermissions {
+                allow_insert: Some(true),
+                ..Default::default()
+            },
         );
         // SQL-extracted schema in mixed case should still match
         assert!(check_permission(&config, &StatementType::Insert, Some("MySchema")).is_ok());

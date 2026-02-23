@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::config::{Config, SchemaPermissions};
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Helpers — use eprintln! because this runs before the logging system starts.
@@ -70,6 +70,26 @@ pub fn load_env_config() -> EnvConfig {
         warmup_connections: parse_env_num::<u32>("MYSQL_POOL_WARMUP"),
         max_rows: parse_env_num::<u32>("MYSQL_MAX_ROWS"),
         max_sessions: parse_env_num::<u32>("MYSQL_MAX_SESSIONS"),
+        ssh_host: std::env::var("MYSQL_SSH_HOST")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        ssh_port: parse_env_num::<u16>("MYSQL_SSH_PORT"),
+        ssh_user: std::env::var("MYSQL_SSH_USER")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        ssh_private_key: std::env::var("MYSQL_SSH_PRIVATE_KEY")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        ssh_private_key_passphrase: std::env::var("MYSQL_SSH_PRIVATE_KEY_PASSPHRASE")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        ssh_use_agent: parse_bool_env("MYSQL_SSH_USE_AGENT"),
+        ssh_known_hosts_check: std::env::var("MYSQL_SSH_KNOWN_HOSTS_CHECK")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        ssh_known_hosts_file: std::env::var("MYSQL_SSH_KNOWN_HOSTS_FILE")
+            .ok()
+            .filter(|s| !s.is_empty()),
     }
 }
 
@@ -78,7 +98,10 @@ pub fn load_env_config() -> EnvConfig {
 fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
     let mut map = HashMap::new();
     for (key, val) in std::env::vars() {
-        if let Some(schema_name) = key.strip_prefix("MYSQL_SCHEMA_").and_then(|s| s.strip_suffix("_PERMISSIONS")) {
+        if let Some(schema_name) = key
+            .strip_prefix("MYSQL_SCHEMA_")
+            .and_then(|s| s.strip_suffix("_PERMISSIONS"))
+        {
             let schema_name = schema_name.to_lowercase();
             if schema_name.is_empty() {
                 eprintln!("Warning: {key} has an empty schema name (double underscore?); expected MYSQL_SCHEMA_<name>_PERMISSIONS — skipping");
@@ -135,40 +158,139 @@ pub struct EnvConfig {
     pub warmup_connections: Option<u32>,
     pub max_rows: Option<u32>,
     pub max_sessions: Option<u32>,
+    pub ssh_host: Option<String>,
+    pub ssh_port: Option<u16>,
+    pub ssh_user: Option<String>,
+    pub ssh_private_key: Option<String>,
+    pub ssh_private_key_passphrase: Option<String>,
+    pub ssh_use_agent: Option<bool>,
+    pub ssh_known_hosts_check: Option<String>,
+    pub ssh_known_hosts_file: Option<String>,
 }
 
 impl EnvConfig {
     /// Apply env var overrides onto a base Config, returning the merged result.
     pub fn apply_to(self, mut base: Config) -> Config {
-        if let Some(v) = self.host { base.connection.host = v; }
-        if let Some(v) = self.port { base.connection.port = v; }
-        if let Some(v) = self.socket { base.connection.socket = Some(v); }
-        if let Some(v) = self.user { base.connection.user = v; }
-        if let Some(v) = self.password { base.connection.password = v; }
-        if let Some(v) = self.database { base.connection.database = Some(v); }
-        if let Some(v) = self.connection_string { base.connection.connection_string = Some(v); }
-        if let Some(v) = self.pool_size { base.pool.size = v; }
-        if let Some(v) = self.query_timeout_ms { base.pool.query_timeout_ms = v; }
-        if let Some(v) = self.connect_timeout_ms { base.pool.connect_timeout_ms = v; }
-        if let Some(v) = self.cache_ttl_secs { base.pool.cache_ttl_secs = v; }
-        if let Some(v) = self.allow_insert { base.security.allow_insert = v; }
-        if let Some(v) = self.allow_update { base.security.allow_update = v; }
-        if let Some(v) = self.allow_delete { base.security.allow_delete = v; }
-        if let Some(v) = self.allow_ddl { base.security.allow_ddl = v; }
-        if let Some(v) = self.readonly_transaction { base.pool.readonly_transaction = v; }
-        if let Some(v) = self.ssl { base.security.ssl = v; }
-        if let Some(v) = self.ssl_accept_invalid_certs { base.security.ssl_accept_invalid_certs = v; }
-        if let Some(v) = self.ssl_ca { base.security.ssl_ca = Some(v); }
-        if let Some(v) = self.multi_db_write_mode { base.security.multi_db_write_mode = v; }
-        if let Some(v) = self.allow_runtime_connections { base.security.allow_runtime_connections = v; }
-        if !self.schema_permissions.is_empty() {
-            base.security.schema_permissions.extend(self.schema_permissions);
+        if let Some(v) = self.host {
+            base.connection.host = v;
         }
-        if let Some(v) = self.performance_hints { base.pool.performance_hints = v; }
-        if let Some(v) = self.slow_query_threshold_ms { base.pool.slow_query_threshold_ms = v; }
-        if let Some(v) = self.warmup_connections { base.pool.warmup_connections = v; }
-        if let Some(v) = self.max_rows { base.pool.max_rows = v; }
-        if let Some(v) = self.max_sessions { base.security.max_sessions = v; }
+        if let Some(v) = self.port {
+            base.connection.port = v;
+        }
+        if let Some(v) = self.socket {
+            base.connection.socket = Some(v);
+        }
+        if let Some(v) = self.user {
+            base.connection.user = v;
+        }
+        if let Some(v) = self.password {
+            base.connection.password = v;
+        }
+        if let Some(v) = self.database {
+            base.connection.database = Some(v);
+        }
+        if let Some(v) = self.connection_string {
+            base.connection.connection_string = Some(v);
+        }
+        if let Some(v) = self.pool_size {
+            base.pool.size = v;
+        }
+        if let Some(v) = self.query_timeout_ms {
+            base.pool.query_timeout_ms = v;
+        }
+        if let Some(v) = self.connect_timeout_ms {
+            base.pool.connect_timeout_ms = v;
+        }
+        if let Some(v) = self.cache_ttl_secs {
+            base.pool.cache_ttl_secs = v;
+        }
+        if let Some(v) = self.allow_insert {
+            base.security.allow_insert = v;
+        }
+        if let Some(v) = self.allow_update {
+            base.security.allow_update = v;
+        }
+        if let Some(v) = self.allow_delete {
+            base.security.allow_delete = v;
+        }
+        if let Some(v) = self.allow_ddl {
+            base.security.allow_ddl = v;
+        }
+        if let Some(v) = self.readonly_transaction {
+            base.pool.readonly_transaction = v;
+        }
+        if let Some(v) = self.ssl {
+            base.security.ssl = v;
+        }
+        if let Some(v) = self.ssl_accept_invalid_certs {
+            base.security.ssl_accept_invalid_certs = v;
+        }
+        if let Some(v) = self.ssl_ca {
+            base.security.ssl_ca = Some(v);
+        }
+        if let Some(v) = self.multi_db_write_mode {
+            base.security.multi_db_write_mode = v;
+        }
+        if let Some(v) = self.allow_runtime_connections {
+            base.security.allow_runtime_connections = v;
+        }
+        if !self.schema_permissions.is_empty() {
+            base.security
+                .schema_permissions
+                .extend(self.schema_permissions);
+        }
+        if let Some(v) = self.performance_hints {
+            base.pool.performance_hints = v;
+        }
+        if let Some(v) = self.slow_query_threshold_ms {
+            base.pool.slow_query_threshold_ms = v;
+        }
+        if let Some(v) = self.warmup_connections {
+            base.pool.warmup_connections = v;
+        }
+        if let Some(v) = self.max_rows {
+            base.pool.max_rows = v;
+        }
+        if let Some(v) = self.max_sessions {
+            base.security.max_sessions = v;
+        }
+        // SSH tunnel config: if any MYSQL_SSH_* env var is set, build/update the SshConfig
+        let any_ssh = self.ssh_host.is_some()
+            || self.ssh_user.is_some()
+            || self.ssh_port.is_some()
+            || self.ssh_private_key.is_some()
+            || self.ssh_use_agent.is_some()
+            || self.ssh_known_hosts_check.is_some()
+            || self.ssh_known_hosts_file.is_some()
+            || self.ssh_private_key_passphrase.is_some();
+        if any_ssh {
+            let mut ssh = base.ssh.take().unwrap_or_default();
+            if let Some(v) = self.ssh_host {
+                ssh.host = v;
+            }
+            if let Some(v) = self.ssh_port {
+                ssh.port = v;
+            }
+            if let Some(v) = self.ssh_user {
+                ssh.user = v;
+            }
+            if let Some(v) = self.ssh_private_key {
+                ssh.private_key = Some(v);
+            }
+            if let Some(v) = self.ssh_private_key_passphrase {
+                ssh.private_key_passphrase = Some(v);
+            }
+            if let Some(v) = self.ssh_use_agent {
+                ssh.use_agent = v;
+            }
+            if let Some(v) = self.ssh_known_hosts_check {
+                ssh.known_hosts_check = v;
+            }
+            if let Some(v) = self.ssh_known_hosts_file {
+                ssh.known_hosts_file = Some(v);
+            }
+            base.ssh = Some(ssh);
+        }
         base
     }
 }
