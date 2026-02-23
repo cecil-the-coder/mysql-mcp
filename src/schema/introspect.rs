@@ -140,11 +140,13 @@ impl SchemaIntrospector {
             return vec![];
         }
 
-        let indexed_cols = self.list_indexed_columns(table, database).await.unwrap_or_default();
-        let composite_indexes = self.list_composite_indexes(table, database).await.unwrap_or_default();
+        let indexed_cols = self.list_indexed_columns(table, database).await
+            .unwrap_or_else(|e| { tracing::warn!("index suggestions: failed to list indexed columns for {}: {}", table, e); Vec::new() });
+        let composite_indexes = self.list_composite_indexes(table, database).await
+            .unwrap_or_else(|e| { tracing::warn!("index suggestions: failed to list composite indexes for {}: {}", table, e); Vec::new() });
         let col_info: std::collections::HashMap<String, ColumnInfo> = self
             .get_columns(table, database).await
-            .unwrap_or_default()
+            .unwrap_or_else(|e| { tracing::warn!("index suggestions: failed to get columns for {}: {}", table, e); Vec::new() })
             .into_iter()
             .map(|c| (c.name.to_lowercase(), c))
             .collect();

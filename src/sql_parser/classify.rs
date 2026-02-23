@@ -47,7 +47,8 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
                     sqlparser::ast::GroupByExpr::Expressions(exprs, _) => !exprs.is_empty(),
                     sqlparser::ast::GroupByExpr::All(_) => true,
                 };
-                has_aggregate = has_aggregate_function(&select.projection);
+                has_aggregate = has_aggregate_function(&select.projection)
+                    || select.having.as_ref().is_some_and(expr_has_aggregate);
                 join_count = select.from.iter().map(|twj| 1 + twj.joins.len()).sum();
             }
             (StatementType::Select, None, tname)

@@ -118,7 +118,8 @@ impl SessionStore {
         }
 
         let host = match args.get("host").and_then(|v| v.as_str()) {
-            Some(h) => h.to_string(),
+            Some(h) if !h.is_empty() => h.to_string(),
+            Some(_) => return Ok(CallToolResult::error(vec![Content::text("Host cannot be empty")])),
             None => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: host")])),
         };
         if super::is_private_host(&host) {
@@ -137,7 +138,11 @@ impl SessionStore {
             Some(u) => u.to_string(),
             None => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: user")])),
         };
-        let password = args.get("password").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let password = match args.get("password").and_then(|v| v.as_str()) {
+            Some(p) if p.len() > 2048 => return Ok(CallToolResult::error(vec![Content::text("Password too long (max 2048 characters)")])),
+            Some(p) => p.to_string(),
+            None => String::new(),
+        };
         let database = args.get("database").and_then(|v| v.as_str()).map(|s| s.to_string());
         if let Some(ref db) = database {
             if let Err(e) = validate_identifier(db, "Database name") {

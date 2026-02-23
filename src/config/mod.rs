@@ -139,6 +139,11 @@ impl Config {
             anyhow::bail!("Config error: connection host must not be empty");
         }
 
+        // Port must be in valid range
+        if self.connection.port == 0 {
+            anyhow::bail!("connection.port must be between 1 and 65535 (got: 0)");
+        }
+
         // pool.size must be at least 1
         if self.pool.size == 0 {
             anyhow::bail!("pool.size must be >= 1");

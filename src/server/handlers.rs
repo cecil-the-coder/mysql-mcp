@@ -42,6 +42,7 @@ impl SessionStore {
         let database = args
             .get("database")
             .and_then(|v: &serde_json::Value| v.as_str())
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
         let include_arr = args.get("include").and_then(|v| v.as_array());
         let include_indexes = include_arr.is_some_and(|a| a.iter().any(|v| v.as_str() == Some("indexes")));
@@ -197,12 +198,8 @@ impl SessionStore {
         args: serde_json::Map<String, serde_json::Value>,
     ) -> anyhow::Result<CallToolResult, rmcp::ErrorData> {
         let sql = match args.get("sql").and_then(|v| v.as_str()) {
-            Some(s) => s.to_string(),
-            None => {
-                return Ok(CallToolResult::error(vec![
-                    Content::text("Missing required argument: sql"),
-                ]));
-            }
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: sql")])),
         };
         if let Err(e) = check_sql_length(&sql) {
             return Ok(e);
