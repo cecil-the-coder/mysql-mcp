@@ -160,7 +160,6 @@ A `.env` file in the working directory is loaded automatically if present.
 | `ssh.user` | `MYSQL_SSH_USER` | string | — | SSH username |
 | `ssh.private_key` | `MYSQL_SSH_PRIVATE_KEY` | string | — | Path to PEM private key file |
 | `ssh.private_key_passphrase` | `MYSQL_SSH_PRIVATE_KEY_PASSPHRASE` | string | — | Passphrase for the private key (if encrypted) |
-| `ssh.use_agent` | `MYSQL_SSH_USE_AGENT` | bool | `false` | Use the system SSH agent for authentication |
 | `ssh.known_hosts_check` | `MYSQL_SSH_KNOWN_HOSTS_CHECK` | string | `strict` | Host key verification: `strict`, `accept-new`, or `insecure` |
 | `ssh.known_hosts_file` | `MYSQL_SSH_KNOWN_HOSTS_FILE` | string | — | Override path to known_hosts file |
 
@@ -349,7 +348,6 @@ Create a named session to a different MySQL server or database. Requires `MYSQL_
 | `ssh_port` | integer | no | SSH port (default: 22) |
 | `ssh_user` | string | no | SSH username (required when `ssh_host` is set) |
 | `ssh_private_key` | string | no | Path to SSH private key file |
-| `ssh_use_agent` | boolean | no | Use system SSH agent for authentication |
 | `ssh_known_hosts_check` | string | no | Host key verification: `strict` (default), `accept-new`, or `insecure` |
 
 Sessions idle for more than 10 minutes are closed automatically. Pass the session `name` to other tools via the `session` parameter.

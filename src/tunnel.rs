@@ -203,8 +203,6 @@ mod tests {
             port: 22,
             user: "ubuntu".to_string(),
             private_key: None,
-            private_key_passphrase: None,
-            use_agent: false,
             known_hosts_check: "strict".to_string(),
             known_hosts_file: None,
         }
@@ -363,8 +361,6 @@ mod integration_tests {
             port: 22,
             user,
             private_key,
-            private_key_passphrase: None,
-            use_agent: false,
             known_hosts_check: "accept-new".to_string(),
             known_hosts_file: None,
         };
@@ -477,8 +473,6 @@ mod integration_tests {
             port: 22,
             user: "nobody".to_string(),
             private_key: None,
-            private_key_passphrase: None,
-            use_agent: false,
             known_hosts_check: "insecure".to_string(),
             known_hosts_file: None,
         };

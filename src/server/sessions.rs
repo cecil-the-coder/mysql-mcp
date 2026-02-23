@@ -186,6 +186,7 @@ impl SessionStore {
         let database = args
             .get("database")
             .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
         if let Some(ref db) = database {
             if let Err(e) = validate_identifier(db, "Database name") {
@@ -223,10 +224,6 @@ impl SessionStore {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        let ssh_use_agent = args
-            .get("ssh_use_agent")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
         let ssh_known_hosts_check = args
             .get("ssh_known_hosts_check")
             .and_then(|v| v.as_str())
@@ -257,8 +254,6 @@ impl SessionStore {
                 port: ssh_port,
                 user: ssh_user_str,
                 private_key: ssh_private_key.clone(),
-                private_key_passphrase: None,
-                use_agent: ssh_use_agent,
                 known_hosts_check: ssh_known_hosts_check.clone(),
                 known_hosts_file: None,
             };

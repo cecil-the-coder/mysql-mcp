@@ -87,11 +87,6 @@ pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::
                 "type": "string",
                 "description": "Path to the SSH private key file (PEM format). If omitted, relies on SSH agent."
             },
-            "ssh_use_agent": {
-                "type": "boolean",
-                "description": "Use the system SSH agent (SSH_AUTH_SOCK) for authentication.",
-                "default": false
-            },
             "ssh_known_hosts_check": {
                 "type": "string",
                 "enum": ["strict", "accept-new", "insecure"],

@@ -489,7 +489,6 @@ private_key = "/tmp/key.pem"
             "MYSQL_SSH_USER",
             "MYSQL_SSH_PORT",
             "MYSQL_SSH_PRIVATE_KEY",
-            "MYSQL_SSH_USE_AGENT",
             "MYSQL_SSH_KNOWN_HOSTS_CHECK",
             "MYSQL_SSH_KNOWN_HOSTS_FILE",
         ] {

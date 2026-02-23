@@ -80,10 +80,6 @@ pub fn load_env_config() -> EnvConfig {
         ssh_private_key: std::env::var("MYSQL_SSH_PRIVATE_KEY")
             .ok()
             .filter(|s| !s.is_empty()),
-        ssh_private_key_passphrase: std::env::var("MYSQL_SSH_PRIVATE_KEY_PASSPHRASE")
-            .ok()
-            .filter(|s| !s.is_empty()),
-        ssh_use_agent: parse_bool_env("MYSQL_SSH_USE_AGENT"),
         ssh_known_hosts_check: std::env::var("MYSQL_SSH_KNOWN_HOSTS_CHECK")
             .ok()
             .filter(|s| !s.is_empty()),
@@ -162,8 +158,6 @@ pub struct EnvConfig {
     pub ssh_port: Option<u16>,
     pub ssh_user: Option<String>,
     pub ssh_private_key: Option<String>,
-    pub ssh_private_key_passphrase: Option<String>,
-    pub ssh_use_agent: Option<bool>,
     pub ssh_known_hosts_check: Option<String>,
     pub ssh_known_hosts_file: Option<String>,
 }
@@ -259,10 +253,8 @@ impl EnvConfig {
             || self.ssh_user.is_some()
             || self.ssh_port.is_some()
             || self.ssh_private_key.is_some()
-            || self.ssh_use_agent.is_some()
             || self.ssh_known_hosts_check.is_some()
-            || self.ssh_known_hosts_file.is_some()
-            || self.ssh_private_key_passphrase.is_some();
+            || self.ssh_known_hosts_file.is_some();
         if any_ssh {
             let mut ssh = base.ssh.take().unwrap_or_default();
             if let Some(v) = self.ssh_host {
@@ -276,12 +268,6 @@ impl EnvConfig {
             }
             if let Some(v) = self.ssh_private_key {
                 ssh.private_key = Some(v);
-            }
-            if let Some(v) = self.ssh_private_key_passphrase {
-                ssh.private_key_passphrase = Some(v);
-            }
-            if let Some(v) = self.ssh_use_agent {
-                ssh.use_agent = v;
             }
             if let Some(v) = self.ssh_known_hosts_check {
                 ssh.known_hosts_check = v;

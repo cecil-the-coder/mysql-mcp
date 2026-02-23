@@ -16,7 +16,7 @@ pub struct Config {
     pub ssh: Option<SshConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ConnectionConfig {
     pub host: String,
@@ -73,8 +73,6 @@ pub struct SshConfig {
     pub port: u16,
     pub user: String,
     pub private_key: Option<String>,
-    pub private_key_passphrase: Option<String>,
-    pub use_agent: bool,
     /// One of: "strict", "accept-new", "insecure"
     /// Maps to SSH StrictHostKeyChecking: yes, accept-new, no
     pub known_hosts_check: String,
@@ -88,8 +86,6 @@ impl Default for SshConfig {
             port: 22,
             user: String::new(),
             private_key: None,
-            private_key_passphrase: None,
-            use_agent: false,
             known_hosts_check: "strict".to_string(),
             known_hosts_file: None,
         }
@@ -116,6 +112,23 @@ impl Default for ConnectionConfig {
             database: None,
             connection_string: None,
         }
+    }
+}
+
+impl std::fmt::Debug for ConnectionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectionConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("socket", &self.socket)
+            .field("user", &self.user)
+            .field("password", &"[redacted]")
+            .field("database", &self.database)
+            .field(
+                "connection_string",
+                &self.connection_string.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
     }
 }
 

@@ -177,7 +177,13 @@ fn row_to_json(row: &sqlx::mysql::MySqlRow, warnings: &mut Vec<String>) -> Map<S
                 if !map.contains_key(&candidate) {
                     break candidate;
                 }
-                n += 1;
+                // Overflow guard: in practice this is unreachable (SQL length limits
+                // column counts to thousands, not quintillions), but prevents a debug-
+                // mode panic if somehow u64::MAX is reached.
+                n = match n.checked_add(1) {
+                    Some(next) => next,
+                    None => break format!("{}_dup", base),
+                };
             }
         };
         map.insert(key, column_to_json(row, i, col, warnings));
@@ -320,28 +326,33 @@ fn column_to_json(
     // where MySQL returns string columns as binary blobs), fall back to hex only for
     // genuinely binary data.
     if let Ok(v) = row.try_get::<Option<Vec<u8>>, _>(idx) {
-        return v
-            .map(|b| {
-                String::from_utf8(b).map(Value::String).unwrap_or_else(|e| {
-                    let bytes = e.into_bytes();
-                    let total = bytes.len();
-                    let display = &bytes[..total.min(MAX_BINARY_DISPLAY_BYTES)];
-                    let mut hex = String::with_capacity(display.len() * 2 + 2);
-                    hex.push_str("0x");
-                    for b in display {
-                        use std::fmt::Write as _;
-                        let _ = write!(hex, "{:02x}", b);
-                    }
-                    if total > MAX_BINARY_DISPLAY_BYTES {
-                        hex.push_str(&format!(
-                            "... [{} bytes total, truncated at {}]",
-                            total, MAX_BINARY_DISPLAY_BYTES
-                        ));
-                    }
-                    Value::String(hex)
-                })
-            })
-            .unwrap_or(Value::Null);
+        return match v {
+            None => Value::Null,
+            Some(b) => String::from_utf8(b).map(Value::String).unwrap_or_else(|e| {
+                let bytes = e.into_bytes();
+                let total = bytes.len();
+                let display = &bytes[..total.min(MAX_BINARY_DISPLAY_BYTES)];
+                let mut hex = String::with_capacity(display.len() * 2 + 2);
+                hex.push_str("0x");
+                for b in display {
+                    use std::fmt::Write as _;
+                    let _ = write!(hex, "{:02x}", b);
+                }
+                if total > MAX_BINARY_DISPLAY_BYTES {
+                    hex.push_str(&format!(
+                        "... [{} bytes total, truncated at {}]",
+                        total, MAX_BINARY_DISPLAY_BYTES
+                    ));
+                    warnings.push(format!(
+                        "Binary column '{}' truncated: {} bytes total, displayed first {} bytes as hex",
+                        col.name(),
+                        total,
+                        MAX_BINARY_DISPLAY_BYTES
+                    ));
+                }
+                Value::String(hex)
+            }),
+        };
     }
     Value::Null
 }
