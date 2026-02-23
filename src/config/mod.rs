@@ -157,6 +157,14 @@ impl Config {
             anyhow::bail!("security.max_sessions must be >= 1");
         }
 
+        // performance_hints must be one of the recognised modes
+        if !matches!(self.pool.performance_hints.as_str(), "none" | "auto" | "always") {
+            anyhow::bail!(
+                "Config error: MYSQL_PERFORMANCE_HINTS must be one of: none, auto, always (got: '{}')",
+                self.pool.performance_hints
+            );
+        }
+
         // SSL CA file must exist if specified
         if let Some(ref ca) = self.security.ssl_ca {
             if !std::path::Path::new(ca).exists() {

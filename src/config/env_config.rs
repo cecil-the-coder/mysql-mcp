@@ -81,6 +81,14 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
         if let Some(schema_name) = key.strip_prefix("MYSQL_SCHEMA_").and_then(|s| s.strip_suffix("_PERMISSIONS")) {
             let schema_name = schema_name.to_lowercase();
             let ops: Vec<&str> = val.split(',').map(|s| s.trim()).collect();
+            for op in &ops {
+                if !op.is_empty() && !matches!(*op, "insert" | "update" | "delete" | "ddl") {
+                    eprintln!(
+                        "Warning: unrecognized permission '{}' in {}; valid values: insert, update, delete, ddl",
+                        op, key
+                    );
+                }
+            }
             let perms = SchemaPermissions {
                 allow_insert: Some(ops.contains(&"insert")),
                 allow_update: Some(ops.contains(&"update")),

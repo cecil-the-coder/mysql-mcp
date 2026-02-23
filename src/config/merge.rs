@@ -19,9 +19,11 @@ pub(crate) fn load_toml_config(path: &Path) -> Result<Config> {
 /// 3. Load env var overrides
 /// 4. Apply overrides onto base
 pub fn load_config() -> Result<Config> {
-    // 1. Load .env if present
+    // 1. Load .env if present (log parse errors rather than silencing them)
     if std::path::Path::new(".env").exists() {
-        dotenv::dotenv().ok();
+        if let Err(e) = dotenv::dotenv() {
+            eprintln!("Warning: failed to parse .env file: {}", e);
+        }
     }
 
     // 2. TOML base (MCP_CONFIG_FILE env var or default mysql-mcp.toml)
