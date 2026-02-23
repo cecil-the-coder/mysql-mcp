@@ -74,10 +74,10 @@ impl McpServer {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
                 interval.tick().await;
+                let cutoff = std::time::Instant::now()
+                    - std::time::Duration::from_secs(600);
                 let mut map = sessions_reaper.lock().await;
-                map.retain(|_name, session| {
-                    session.last_used.elapsed().as_secs() < 600
-                });
+                map.retain(|_name, session| session.last_used > cutoff);
             }
         });
 

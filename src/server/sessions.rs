@@ -37,6 +37,11 @@ pub(crate) struct SessionStore {
 /// Validate a MySQL identifier (session name or database name): max 64 chars,
 /// alphanumeric/underscore/hyphen only. Returns `Err(CallToolResult)` on failure.
 fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToolResult> {
+    if value.is_empty() {
+        return Err(CallToolResult::error(vec![Content::text(format!(
+            "{} cannot be empty", kind
+        ))]));
+    }
     if value.len() > 64 {
         return Err(CallToolResult::error(vec![Content::text(format!(
             "{} too long (max 64 characters)", kind
@@ -121,8 +126,14 @@ impl SessionStore {
                 "Connecting to loopback/link-local IP addresses is not allowed: {}", host
             ))]));
         }
-        let port = args.get("port").and_then(|v| v.as_u64()).unwrap_or(3306) as u16;
+        let port = match args.get("port").and_then(|v| v.as_u64()) {
+            Some(p) if p >= 1 && p <= 65535 => p as u16,
+            Some(_) => return Ok(CallToolResult::error(vec![Content::text("Port out of range (1–65535)")])),
+            None => 3306,
+        };
         let user = match args.get("user").and_then(|v| v.as_str()) {
+            Some(u) if u.is_empty() => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: user")])),
+            Some(u) if u.len() > 255 => return Ok(CallToolResult::error(vec![Content::text("User too long (max 255 characters)")])),
             Some(u) => u.to_string(),
             None => return Ok(CallToolResult::error(vec![Content::text("Missing required argument: user")])),
         };
@@ -135,16 +146,6 @@ impl SessionStore {
         }
         let ssl = args.get("ssl").and_then(|v| v.as_bool()).unwrap_or(false);
         let ssl_ca = args.get("ssl_ca").and_then(|v| v.as_str()).map(|s| s.to_string());
-
-        {
-            let sessions = self.sessions.lock().await;
-            if sessions.len() >= self.config.security.max_sessions as usize {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Maximum session limit ({}) reached. Disconnect an existing session first.",
-                    self.config.security.max_sessions
-                ))]));
-            }
-        }
 
         tracing::debug!(
             name = %name,
@@ -177,6 +178,12 @@ impl SessionStore {
                     database,
                 };
                 let mut sessions = self.sessions.lock().await;
+                if sessions.len() >= self.config.security.max_sessions as usize {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "Maximum session limit ({}) reached. Disconnect an existing session first.",
+                        self.config.security.max_sessions
+                    ))]));
+                }
                 sessions.insert(name, session);
                 Ok(serialize_response(&info))
             }
