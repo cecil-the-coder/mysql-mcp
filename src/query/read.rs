@@ -194,13 +194,13 @@ fn column_to_json(
     let type_name = col.type_info().name();
     match type_name {
         "TINYINT(1)" | "BOOLEAN" | "BOOL" => {
-            if let Ok(v) = row.try_get::<bool, _>(idx) {
-                return Value::Bool(v);
+            if let Ok(v) = row.try_get::<Option<bool>, _>(idx) {
+                return v.map(Value::Bool).unwrap_or(Value::Null);
             }
         }
         "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "BIGINT" => {
-            if let Ok(v) = row.try_get::<i64, _>(idx) {
-                return Value::Number(v.into());
+            if let Ok(v) = row.try_get::<Option<i64>, _>(idx) {
+                return v.map(|n| Value::Number(n.into())).unwrap_or(Value::Null);
             }
         }
         "TINYINT UNSIGNED" | "SMALLINT UNSIGNED" | "MEDIUMINT UNSIGNED" | "INT UNSIGNED"
@@ -209,20 +209,22 @@ fn column_to_json(
                 return v.map(|n| serde_json::json!(n)).unwrap_or(Value::Null);
             }
         }
-        "FLOAT" | "DOUBLE" => {
-            if let Ok(v) = row.try_get::<f64, _>(idx) {
+        "FLOAT" | "DOUBLE" => match row.try_get::<Option<f64>, _>(idx) {
+            Ok(Some(v)) => {
                 return serde_json::Number::from_f64(v)
                     .map(Value::Number)
                     .unwrap_or_else(|| {
                         warnings.push(format!(
                             "Column '{}' contains a non-finite float value (NaN or Infinity); \
-                             serialized as null",
+                                 serialized as null",
                             col.name()
                         ));
                         Value::Null
                     });
             }
-        }
+            Ok(None) => return Value::Null,
+            Err(_) => {}
+        },
         // MySQL sends DECIMAL/NUMERIC as text over the wire even in binary protocol.
         // sqlx's type compatibility check rejects String decode for DECIMAL column types,
         // so use try_get_unchecked to bypass it and decode the raw text value.
@@ -243,18 +245,18 @@ fn column_to_json(
         }
         "BIT" => {
             // BIT columns: decode as u64 bitmask
-            if let Ok(v) = row.try_get::<u64, _>(idx) {
-                return serde_json::json!(v);
+            if let Ok(v) = row.try_get::<Option<u64>, _>(idx) {
+                return v.map(|n| serde_json::json!(n)).unwrap_or(Value::Null);
             }
             // single-bit BIT(1): try bool
-            if let Ok(v) = row.try_get::<bool, _>(idx) {
-                return Value::Bool(v);
+            if let Ok(v) = row.try_get::<Option<bool>, _>(idx) {
+                return v.map(Value::Bool).unwrap_or(Value::Null);
             }
         }
         "YEAR" => {
             // YEAR(4): return as number
-            if let Ok(v) = row.try_get::<u16, _>(idx) {
-                return Value::Number(v.into());
+            if let Ok(v) = row.try_get::<Option<u16>, _>(idx) {
+                return v.map(|y| Value::Number(y.into())).unwrap_or(Value::Null);
             }
         }
         "JSON" => {
@@ -502,5 +504,37 @@ mod integration_tests {
         );
         assert_eq!(row["a"], serde_json::json!(1), "first a should be 1");
         assert_eq!(row["a_2"], serde_json::json!(2), "second a should be 2");
+    }
+
+    #[tokio::test]
+    async fn test_triple_duplicate_column_names_deduped() {
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+        // All three columns are aliased "a"; they should become "a", "a_2", "a_3".
+        let result = read_query(
+            &test_db.pool,
+            "SELECT 1 AS a, 2 AS a, 3 AS a",
+            false,
+            0,
+            "none",
+            0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.row_count, 1);
+        let row = &result.rows[0];
+        assert!(row.contains_key("a"), "first 'a' column should be present");
+        assert!(
+            row.contains_key("a_2"),
+            "second 'a' should be renamed to 'a_2'"
+        );
+        assert!(
+            row.contains_key("a_3"),
+            "third 'a' should be renamed to 'a_3'"
+        );
+        assert_eq!(row["a"], serde_json::json!(1), "first a should be 1");
+        assert_eq!(row["a_2"], serde_json::json!(2), "second a should be 2");
+        assert_eq!(row["a_3"], serde_json::json!(3), "third a should be 3");
     }
 }

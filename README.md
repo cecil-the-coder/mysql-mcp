@@ -199,6 +199,7 @@ Execute a SQL statement.
 | `capped_hint` | string | only when capped | Suggested query with LIMIT/OFFSET to fetch the next page |
 | `plan` | object | only when EXPLAIN ran | Query execution plan (see below) |
 | `suggestions` | array of strings | only when applicable | Index suggestions when a full table scan is detected |
+| `explain_error` | string | only when applicable | Error message when the automatic EXPLAIN run failed |
 
 **`plan` object fields**
 
@@ -207,8 +208,6 @@ Execute a SQL statement.
 | `full_table_scan` | boolean | Whether MySQL performed a full table scan |
 | `index_used` | string or null | Name of the index used, or null if none |
 | `rows_examined_estimate` | number | MySQL's estimate of rows examined |
-| `filtered_pct` | number | Estimated percentage of rows remaining after filtering |
-| `efficiency` | number | rows_returned / rows_examined_estimate |
 | `extra_flags` | array of strings | MySQL EXPLAIN Extra field tokens (e.g. `Using filesort`) |
 | `tier` | string | `fast` (index used, ≤1k rows examined), `slow` (full scan or >1k rows), `very_slow` (full scan + >10k rows) |
 
@@ -261,8 +260,6 @@ With `performance_hints=always` (or `explain: true`):
     "full_table_scan": true,
     "index_used": null,
     "rows_examined_estimate": 98000,
-    "filtered_pct": 10.0,
-    "efficiency": 0.0097,
     "extra_flags": ["Using where"],
     "tier": "slow"
   },
@@ -305,6 +302,13 @@ Get MySQL server metadata: version, current database, current user, sql_mode, ch
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `session` | string | no | Named session to use |
+
+
+**Response**
+
+Returns a JSON object with:
+- `mysql_version`, `current_user`, `current_database`, `sql_mode`, `character_set`, `collation`, `time_zone`, `read_only`
+- `accessible_features` — array of statement types enabled for this connection (always includes `SELECT`, `SHOW`, `EXPLAIN`; includes `INSERT`, `UPDATE`, `DELETE`, `DDL (CREATE/ALTER/DROP)` when the corresponding permission is enabled)
 
 ---
 

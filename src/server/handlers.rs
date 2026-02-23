@@ -356,7 +356,9 @@ impl SessionStore {
                             result.row_count, result.row_count, result.row_count
                         ));
                     }
-                    output["parse_warnings"] = json!(result.parse_warnings);
+                    if !result.parse_warnings.is_empty() {
+                        output["parse_warnings"] = json!(result.parse_warnings);
+                    }
                     if let Some(plan) = result.plan {
                         output["plan"] = plan;
                     }
@@ -473,6 +475,8 @@ fn write_result_content(result: &crate::query::write::WriteResult) -> serde_json
     if let Some(id) = result.last_insert_id {
         output["last_insert_id"] = json!(id);
     }
-    output["parse_warnings"] = json!(result.parse_warnings);
+    if !result.parse_warnings.is_empty() {
+        output["parse_warnings"] = json!(result.parse_warnings);
+    }
     output
 }
