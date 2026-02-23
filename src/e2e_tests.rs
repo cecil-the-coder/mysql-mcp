@@ -487,7 +487,14 @@ mod e2e_tests {
             }),
         )
         .await;
-        let _ = read_response(&mut reader).await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no response to DROP TABLE");
+        assert_ne!(
+            r["result"]["isError"], true,
+            "DROP TABLE should succeed, got: {}",
+            r
+        );
 
         child.kill().await.ok();
     }

@@ -103,6 +103,22 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
                 eprintln!("Warning: {key} has an empty schema name (double underscore?); expected MYSQL_SCHEMA_<name>_PERMISSIONS — skipping");
                 continue;
             }
+            if schema_name.len() > 64 {
+                eprintln!(
+                    "Warning: {key} schema name is too long (max 64 characters) — skipping"
+                );
+                continue;
+            }
+            if !schema_name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                eprintln!(
+                    "Warning: {key} schema name contains invalid characters \
+                     (only alphanumeric and underscores allowed) — skipping"
+                );
+                continue;
+            }
             let ops: Vec<&str> = val
                 .split(',')
                 .map(|s| s.trim())

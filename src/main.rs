@@ -71,7 +71,28 @@ async fn main() -> Result<()> {
     // Create and run the MCP server
     let mcp_server = server::McpServer::new(config, db, _default_tunnel);
     info!("MCP server starting on stdio");
-    mcp_server.run().await?;
+
+    tokio::select! {
+        result = mcp_server.run() => {
+            result?;
+        }
+        _ = tokio::signal::ctrl_c() => {
+            info!("Received Ctrl-C, shutting down");
+        }
+        _ = async {
+            #[cfg(unix)]
+            {
+                let mut sigterm = tokio::signal::unix::signal(
+                    tokio::signal::unix::SignalKind::terminate(),
+                ).expect("failed to install SIGTERM handler");
+                sigterm.recv().await;
+            }
+            #[cfg(not(unix))]
+            std::future::pending::<()>().await;
+        } => {
+            info!("Received SIGTERM, shutting down");
+        }
+    }
 
     Ok(())
 }

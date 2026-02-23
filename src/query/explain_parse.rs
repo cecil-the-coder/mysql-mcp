@@ -141,7 +141,13 @@ fn walk_v1_table(table: &Value, stats: &mut PlanStats) {
     let rows = table["rows_examined_per_scan"]
         .as_f64()
         .or_else(|| table["rows"].as_f64())
-        .unwrap_or(0.0);
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                "EXPLAIN v1 table node missing row count fields \
+                 (rows_examined_per_scan, rows); treating as 0"
+            );
+            0.0
+        });
 
     if table["using_filesort"].as_bool().unwrap_or(false) {
         stats.has_sort = true;
@@ -221,7 +227,8 @@ pub(crate) fn parse(v: &Value) -> Result<ExplainResult> {
         // Neither structure found — return an error so the caller surfaces
         // explain_error instead of a misleading tier:fast / rows:0 result.
         anyhow::bail!(
-            "Unrecognized EXPLAIN FORMAT=JSON structure              (has neither 'query_plan' nor 'query_block')"
+            "Unrecognized EXPLAIN FORMAT=JSON structure \
+             (has neither 'query_plan' nor 'query_block')"
         )
     }
 }

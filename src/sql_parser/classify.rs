@@ -77,7 +77,8 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
 
         Statement::Insert(insert) => {
             let schema = extract_schema_from_object_name(&insert.table_name);
-            (StatementType::Insert, schema, None)
+            let table = extract_table_from_object_name(&insert.table_name);
+            (StatementType::Insert, schema, table)
         }
 
         Statement::Update {
@@ -100,7 +101,8 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
 
         Statement::CreateTable(ct) => {
             let schema = extract_schema_from_object_name(&ct.name);
-            (StatementType::Create, schema, None)
+            let table = extract_table_from_object_name(&ct.name);
+            (StatementType::Create, schema, table)
         }
 
         Statement::CreateDatabase { db_name, .. } => {
@@ -110,19 +112,24 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
 
         Statement::AlterTable { name, .. } => {
             let schema = extract_schema_from_object_name(name);
-            (StatementType::Alter, schema, None)
+            let table = extract_table_from_object_name(name);
+            (StatementType::Alter, schema, table)
         }
 
         Statement::Drop { names, .. } => {
             let schema = names.first().and_then(extract_schema_from_object_name);
-            (StatementType::Drop, schema, None)
+            let table = names.first().and_then(extract_table_from_object_name);
+            (StatementType::Drop, schema, table)
         }
 
         Statement::Truncate { table_names, .. } => {
             let schema = table_names
                 .first()
                 .and_then(|t| extract_schema_from_object_name(&t.name));
-            (StatementType::Truncate, schema, None)
+            let table = table_names
+                .first()
+                .and_then(|t| extract_table_from_object_name(&t.name));
+            (StatementType::Truncate, schema, table)
         }
 
         Statement::Use(use_stmt) => {
@@ -351,6 +358,12 @@ pub(super) fn extract_schema_from_table_factor(factor: &TableFactor) -> Option<S
         TableFactor::Table { name, .. } => extract_schema_from_object_name(name),
         _ => None,
     }
+}
+
+/// Extract the bare table name (last identifier) from an ObjectName.
+/// For `schema.table` returns `"table"`; for bare `table` returns `"table"`.
+fn extract_table_from_object_name(name: &ObjectName) -> Option<String> {
+    name.0.last().map(|ident| ident.value.clone())
 }
 
 /// Extract the primary FROM table name from a SELECT query AST.

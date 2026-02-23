@@ -416,6 +416,24 @@ fn test_is_low_cardinality_type() {
         !is_low_cardinality_type("datetime"),
         "datetime is not low cardinality"
     );
+
+    // Real MySQL column_type strings (information_schema returns these)
+    assert!(
+        is_low_cardinality_type("enum('Y','N')"),
+        "enum('Y','N') is low cardinality"
+    );
+    assert!(
+        is_low_cardinality_type("set('a','b','c')"),
+        "set('a','b','c') is low cardinality"
+    );
+    assert!(
+        is_low_cardinality_type("bit(1)"),
+        "bit(1) is low cardinality"
+    );
+    assert!(
+        is_low_cardinality_type("tinyint(1) unsigned"),
+        "tinyint(1) unsigned is low cardinality"
+    );
 }
 
 // mysql-mcp-ttl: non-zero TTL expires and triggers re-fetch
