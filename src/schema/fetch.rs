@@ -132,6 +132,8 @@ pub(crate) async fn fetch_indexed_columns(pool: &MySqlPool, table: &str, databas
         Some(db) => format!("`{}`.`{}`", escape_mysql_identifier(db), escape_mysql_identifier(table)),
         None => format!("`{}`", escape_mysql_identifier(table)),
     };
+    // SHOW INDEX FROM does not support bound parameters in MySQL; identifiers
+    // must be escaped and interpolated directly (see escape_mysql_identifier).
     let sql = format!("SHOW INDEX FROM {}", qualified);
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();

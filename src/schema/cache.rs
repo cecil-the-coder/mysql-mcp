@@ -46,9 +46,10 @@ where
     }
 
     let data = fetch_fn().await?;
+    let fetched_at = Instant::now();
     {
         let mut cache_guard = cache.lock().await;
-        cache_guard.insert(cache_key, CacheEntry { data: data.clone(), fetched_at: Instant::now() });
+        cache_guard.insert(cache_key, CacheEntry { data: data.clone(), fetched_at });
     }
     Ok(data)
 }
