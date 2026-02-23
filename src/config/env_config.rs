@@ -104,9 +104,7 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
                 continue;
             }
             if schema_name.len() > 64 {
-                eprintln!(
-                    "Warning: {key} schema name is too long (max 64 characters) — skipping"
-                );
+                eprintln!("Warning: {key} schema name is too long (max 64 characters) — skipping");
                 continue;
             }
             if !schema_name

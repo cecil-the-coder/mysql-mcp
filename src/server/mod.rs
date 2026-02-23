@@ -39,7 +39,7 @@ pub(crate) fn is_private_host(host: &str) -> bool {
                 || v4.is_link_local()  // 169.254.0.0/16 — cloud metadata
                 || v4.is_broadcast()   // 255.255.255.255
                 || v4.is_unspecified() // 0.0.0.0
-                || v4.is_multicast()   // 224.0.0.0/4
+                || v4.is_multicast() // 224.0.0.0/4
             }
             IpAddr::V6(v6) => {
                 // IPv6-mapped IPv4 (::ffff:x.x.x.x) — apply the same IPv4 rules so that
@@ -54,7 +54,7 @@ pub(crate) fn is_private_host(host: &str) -> bool {
                 v6.is_loopback()              // ::1
                 || v6.is_unspecified()        // ::
                 || v6.is_unicast_link_local()  // fe80::/10 — cloud metadata / link-local
-                || v6.is_multicast()           // ff00::/8
+                || v6.is_multicast() // ff00::/8
             }
         }
     } else {
@@ -193,7 +193,10 @@ mod tests {
     fn ipv4_private_rfc1918_is_allowed() {
         assert!(!is_private_host("10.0.0.1"), "10.0.0.1 must be allowed");
         assert!(!is_private_host("172.16.0.1"), "172.16.0.1 must be allowed");
-        assert!(!is_private_host("192.168.1.1"), "192.168.1.1 must be allowed");
+        assert!(
+            !is_private_host("192.168.1.1"),
+            "192.168.1.1 must be allowed"
+        );
     }
 }
 
