@@ -137,7 +137,42 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
     }
 
     let stmt = &statements[0];
-    classify::classify_statement(stmt)
+    let mut parsed = classify::classify_statement(stmt)?;
+
+    // Post-parse safety checks for SELECT variants that sqlparser's AST doesn't expose.
+    if parsed.statement_type == StatementType::Select {
+        // Normalize whitespace for reliable keyword detection (e.g. newlines, multiple spaces).
+        let normalized: String = sql
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_uppercase();
+
+        // SELECT INTO OUTFILE/DUMPFILE writes to the server filesystem — never safe.
+        if normalized.contains("INTO OUTFILE") || normalized.contains("INTO DUMPFILE") {
+            bail!(
+                "SELECT INTO OUTFILE/DUMPFILE is not supported — \
+                 retrieve data with SELECT and export it client-side"
+            );
+        }
+
+        // SELECT FOR UPDATE/FOR SHARE/LOCK IN SHARE MODE: row-level locking.
+        // sqlparser doesn't expose the FOR clause in the Query AST, so detect
+        // it from the raw SQL. Reclassify as Other so the permissions check
+        // rejects it with a clear message.
+        if normalized.contains("FOR UPDATE")
+            || normalized.contains("FOR SHARE")
+            || normalized.contains("FOR NO KEY UPDATE")
+            || normalized.contains("FOR KEY SHARE")
+            || normalized.contains("LOCK IN SHARE MODE")
+        {
+            parsed.statement_type = StatementType::Other(
+                "SELECT with locking clauses (FOR UPDATE/SHARE) is not supported".to_string(),
+            );
+        }
+    }
+
+    Ok(parsed)
 }
 
 /// Inspect a parsed write statement and return safety warnings.

@@ -55,7 +55,7 @@ pub(crate) fn spawn_server(
     let mut cmd = Command::new(binary);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .env("MYSQL_HOST", &cfg.connection.host)
         .env("MYSQL_PORT", cfg.connection.port.to_string())
         .env("MYSQL_USER", &cfg.connection.user)

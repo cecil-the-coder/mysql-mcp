@@ -498,4 +498,427 @@ mod e2e_tests {
 
         child.kill().await.ok();
     }
+
+    // -------------------------------------------------------------------------
+    // Test 8: mysql_schema_info returns column metadata for an existing table
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_mcp_schema_info_call() {
+        let Some(binary) = binary_path() else {
+            eprintln!("Skipping E2E: binary not found. Run `cargo build` first.");
+            return;
+        };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+        let table = format!("_e2e_si{}", std::process::id());
+        let Some(mut child) = spawn_server(&binary, &test_db, &[("MYSQL_ALLOW_DDL", "true")])
+        else {
+            return;
+        };
+        let (mut stdin, mut reader) = setup_io(&mut child);
+        do_handshake(&mut stdin, &mut reader).await;
+
+        // Create table
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": format!(
+                            "CREATE TABLE `{}` (id INT PRIMARY KEY, name VARCHAR(100))",
+                            table
+                        )
+                    }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no CREATE response");
+        assert_ne!(r["result"]["isError"], true, "CREATE TABLE failed: {}", r);
+
+        // Call mysql_schema_info
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 11, "method": "tools/call",
+                "params": {
+                    "name": "mysql_schema_info",
+                    "arguments": { "table": table }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no schema_info response");
+        assert_ne!(
+            r["result"]["isError"], true,
+            "mysql_schema_info failed: {}",
+            r
+        );
+        let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.contains("id") && text.contains("name"),
+            "schema_info should list both columns, got: {}",
+            text
+        );
+
+        // Cleanup
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 12, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": { "sql": format!("DROP TABLE `{}`", table) }
+                }
+            }),
+        )
+        .await;
+        let _ = read_response(&mut reader).await;
+        child.kill().await.ok();
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 9: mysql_server_info returns version and current database fields
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_mcp_server_info_call() {
+        let Some(binary) = binary_path() else {
+            eprintln!("Skipping E2E: binary not found. Run `cargo build` first.");
+            return;
+        };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
+            return;
+        };
+        let (mut stdin, mut reader) = setup_io(&mut child);
+        do_handshake(&mut stdin, &mut reader).await;
+
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 20, "method": "tools/call",
+                "params": { "name": "mysql_server_info", "arguments": {} }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no server_info response");
+        child.kill().await.ok();
+
+        assert_ne!(
+            r["result"]["isError"], true,
+            "mysql_server_info failed: {}",
+            r
+        );
+        let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.contains("version"),
+            "server_info should include 'version', got: {}",
+            text
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 10: mysql_explain_plan returns a plan for a simple SELECT
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_mcp_explain_plan_call() {
+        let Some(binary) = binary_path() else {
+            eprintln!("Skipping E2E: binary not found. Run `cargo build` first.");
+            return;
+        };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
+            return;
+        };
+        let (mut stdin, mut reader) = setup_io(&mut child);
+        do_handshake(&mut stdin, &mut reader).await;
+
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 30, "method": "tools/call",
+                "params": {
+                    "name": "mysql_explain_plan",
+                    "arguments": { "sql": "SELECT 1 + 1" }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no explain_plan response");
+        child.kill().await.ok();
+
+        assert_ne!(
+            r["result"]["isError"], true,
+            "mysql_explain_plan failed: {}",
+            r
+        );
+        let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
+        // Should return some JSON plan structure
+        assert!(
+            !text.is_empty(),
+            "explain_plan should return non-empty result, got empty"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 11: UPDATE and DELETE succeed when the respective permissions are set
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_mcp_update_delete_allowed() {
+        let Some(binary) = binary_path() else {
+            eprintln!("Skipping E2E: binary not found. Run `cargo build` first.");
+            return;
+        };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+        let table = format!("_e2e_ud{}", std::process::id());
+        let Some(mut child) = spawn_server(
+            &binary,
+            &test_db,
+            &[
+                ("MYSQL_ALLOW_DDL", "true"),
+                ("MYSQL_ALLOW_INSERT", "true"),
+                ("MYSQL_ALLOW_UPDATE", "true"),
+                ("MYSQL_ALLOW_DELETE", "true"),
+            ],
+        ) else {
+            return;
+        };
+        let (mut stdin, mut reader) = setup_io(&mut child);
+        do_handshake(&mut stdin, &mut reader).await;
+
+        // CREATE TABLE
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 40, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": format!(
+                            "CREATE TABLE `{}` (id INT PRIMARY KEY, val INT)",
+                            table
+                        )
+                    }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no CREATE response");
+        assert_ne!(r["result"]["isError"], true, "CREATE TABLE failed: {}", r);
+
+        // INSERT
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 41, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": format!("INSERT INTO `{}` (id, val) VALUES (1, 10)", table)
+                    }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no INSERT response");
+        assert_ne!(r["result"]["isError"], true, "INSERT failed: {}", r);
+
+        // UPDATE
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 42, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": format!("UPDATE `{}` SET val = 20 WHERE id = 1", table)
+                    }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no UPDATE response");
+        assert_ne!(r["result"]["isError"], true, "UPDATE failed: {}", r);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.contains("rows_affected"),
+            "UPDATE response should include rows_affected, got: {}",
+            text
+        );
+
+        // DELETE
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 43, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": format!("DELETE FROM `{}` WHERE id = 1", table)
+                    }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no DELETE response");
+        assert_ne!(r["result"]["isError"], true, "DELETE failed: {}", r);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.contains("rows_affected"),
+            "DELETE response should include rows_affected, got: {}",
+            text
+        );
+
+        // Cleanup
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 44, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": { "sql": format!("DROP TABLE `{}`", table) }
+                }
+            }),
+        )
+        .await;
+        let _ = read_response(&mut reader).await;
+        child.kill().await.ok();
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 12: max_rows truncation — capped/next_offset/capped_hint are returned
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_mcp_max_rows_truncation() {
+        let Some(binary) = binary_path() else {
+            eprintln!("Skipping E2E: binary not found. Run `cargo build` first.");
+            return;
+        };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+        let table = format!("_e2e_mr{}", std::process::id());
+        let Some(mut child) = spawn_server(
+            &binary,
+            &test_db,
+            &[
+                ("MYSQL_ALLOW_DDL", "true"),
+                ("MYSQL_ALLOW_INSERT", "true"),
+                ("MYSQL_MAX_ROWS", "3"),
+            ],
+        ) else {
+            return;
+        };
+        let (mut stdin, mut reader) = setup_io(&mut child);
+        do_handshake(&mut stdin, &mut reader).await;
+
+        // CREATE TABLE
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 50, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": format!("CREATE TABLE `{}` (n INT)", table)
+                    }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no CREATE response");
+        assert_ne!(r["result"]["isError"], true, "CREATE TABLE failed: {}", r);
+
+        // INSERT 5 rows
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 51, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": format!(
+                            "INSERT INTO `{}` (n) VALUES (1),(2),(3),(4),(5)",
+                            table
+                        )
+                    }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no INSERT response");
+        assert_ne!(r["result"]["isError"], true, "INSERT failed: {}", r);
+
+        // SELECT all — should be capped at 3
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 52, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": { "sql": format!("SELECT n FROM `{}` ORDER BY n", table) }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no SELECT response");
+        assert_ne!(r["result"]["isError"], true, "SELECT failed: {}", r);
+        let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.contains("capped"),
+            "Response should include 'capped' field when max_rows is hit, got: {}",
+            text
+        );
+        assert!(
+            text.contains("next_offset") || text.contains("capped_hint"),
+            "Response should include pagination hint, got: {}",
+            text
+        );
+
+        // Cleanup
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 53, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": { "sql": format!("DROP TABLE `{}`", table) }
+                }
+            }),
+        )
+        .await;
+        let _ = read_response(&mut reader).await;
+        child.kill().await.ok();
+    }
 }

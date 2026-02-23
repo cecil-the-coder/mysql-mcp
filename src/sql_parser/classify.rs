@@ -180,6 +180,12 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         | Statement::SetNamesDefault { .. }
         | Statement::SetTimeZone { .. } => (StatementType::Set, None, None),
 
+        Statement::CreateIndex(idx) => {
+            let schema = extract_schema_from_object_name(&idx.table_name);
+            let table = extract_table_from_object_name(&idx.table_name);
+            (StatementType::Create, schema, table)
+        }
+
         other => {
             // Extract only the variant name from the debug representation.
             // `format!("{:?}", other)` produces strings like "Call(...)" or

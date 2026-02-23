@@ -209,10 +209,25 @@ fn column_to_json(
                 return v.map(|n| Value::Number(n.into())).unwrap_or(Value::Null);
             }
         }
-        "TINYINT UNSIGNED" | "SMALLINT UNSIGNED" | "MEDIUMINT UNSIGNED" | "INT UNSIGNED"
-        | "BIGINT UNSIGNED" => {
+        "TINYINT UNSIGNED" | "SMALLINT UNSIGNED" | "MEDIUMINT UNSIGNED" | "INT UNSIGNED" => {
             if let Ok(v) = row.try_get::<Option<u64>, _>(idx) {
                 return v.map(|n| serde_json::json!(n)).unwrap_or(Value::Null);
+            }
+        }
+        // BIGINT UNSIGNED can exceed 2^53 (the largest integer exactly representable
+        // as f64). serde_json serialises u64 via f64, so values above 9_007_199_254_740_992
+        // would silently lose precision. Return those as JSON strings instead.
+        "BIGINT UNSIGNED" => {
+            if let Ok(v) = row.try_get::<Option<u64>, _>(idx) {
+                return v
+                    .map(|n| {
+                        if n > 9_007_199_254_740_992u64 {
+                            Value::String(n.to_string())
+                        } else {
+                            serde_json::json!(n)
+                        }
+                    })
+                    .unwrap_or(Value::Null);
             }
         }
         "FLOAT" | "DOUBLE" => match row.try_get::<Option<f64>, _>(idx) {
@@ -339,10 +354,6 @@ fn column_to_json(
                     let _ = write!(hex, "{:02x}", b);
                 }
                 if total > MAX_BINARY_DISPLAY_BYTES {
-                    hex.push_str(&format!(
-                        "... [{} bytes total, truncated at {}]",
-                        total, MAX_BINARY_DISPLAY_BYTES
-                    ));
                     warnings.push(format!(
                         "Binary column '{}' truncated: {} bytes total, displayed first {} bytes as hex",
                         col.name(),

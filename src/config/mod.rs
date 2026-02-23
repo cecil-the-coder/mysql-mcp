@@ -181,6 +181,16 @@ impl Config {
             );
         }
 
+        // ssl_accept_invalid_certs=true disables TLS certificate validation entirely.
+        // Warn prominently so it isn't set in production by accident.
+        if self.security.ssl_accept_invalid_certs {
+            eprintln!(
+                "Warning: ssl_accept_invalid_certs is enabled — TLS certificate validation is \
+                 disabled. Connections are vulnerable to MITM attacks. \
+                 Only use this in development or testing environments."
+            );
+        }
+
         // query_timeout_ms=0 disables query timeouts entirely (infinite wait).
         // This is intentionally allowed for operators who need unbounded query time,
         // but warn so it doesn't go unnoticed.
