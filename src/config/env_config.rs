@@ -103,7 +103,11 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
                 eprintln!("Warning: {key} has an empty schema name (double underscore?); expected MYSQL_SCHEMA_<name>_PERMISSIONS — skipping");
                 continue;
             }
-            let ops: Vec<&str> = val.split(',').map(|s| s.trim()).collect();
+            let ops: Vec<&str> = val
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
             for op in &ops {
                 if !op.is_empty() && !matches!(*op, "insert" | "update" | "delete" | "ddl") {
                     eprintln!(

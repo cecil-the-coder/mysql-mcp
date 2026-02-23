@@ -10,7 +10,7 @@ pub enum ExplainTier {
     VerySlow,
 }
 
-#[derive(serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub struct ExplainResult {
     pub full_table_scan: bool,
     pub index_used: Option<String>,

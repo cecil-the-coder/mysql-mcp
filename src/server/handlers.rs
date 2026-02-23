@@ -387,7 +387,9 @@ impl SessionStore {
                     // Invalidate the schema cache so subsequent mysql_schema_info /
                     // list_resources calls reflect the DDL change immediately.
                     if let Some(tname) = &parsed.target_table {
-                        query_introspector.invalidate_table(tname).await;
+                        query_introspector
+                            .invalidate_table(tname, parsed.target_schema.as_deref())
+                            .await;
                     } else {
                         query_introspector.invalidate_all().await;
                     }

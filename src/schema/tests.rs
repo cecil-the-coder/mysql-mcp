@@ -164,7 +164,7 @@ async fn test_indexed_columns_cache_invalidated_on_ddl() {
         .unwrap();
 
     // With TTL=0 the cache never serves stale data, so the next call should see the new index.
-    introspector.invalidate_table("test_idx_inval").await;
+    introspector.invalidate_table("test_idx_inval", db).await;
     let after = introspector
         .list_indexed_columns("test_idx_inval", db)
         .await

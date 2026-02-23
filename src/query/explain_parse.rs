@@ -65,6 +65,10 @@ fn make_result(stats: PlanStats) -> Result<ExplainResult> {
     let rows_examined_estimate = if stats.total_estimated_rows.is_finite() {
         stats.total_estimated_rows.ceil() as u64
     } else {
+        tracing::warn!(
+            estimated_rows = stats.total_estimated_rows,
+            "EXPLAIN row count estimate is non-finite (Infinity or NaN); reporting as 0"
+        );
         0
     };
     let extra_flags = if stats.has_sort {
@@ -206,11 +210,17 @@ fn parse_v1(v: &Value) -> Result<ExplainResult> {
 /// schema v1 (`query_block` key, MySQL 5.7 / 8.0.x) based on JSON structure.
 pub(crate) fn parse(v: &Value) -> Result<ExplainResult> {
     if v["query_plan"].is_object() {
+        // MySQL 8.0.16+ / 9.x schema v2
         parse_v2(v)
-    } else {
-        // Covers schema v1 (query_block present) and any unknown format
-        // (returns zero stats rather than an error).
+    } else if v.get("query_block").is_some() {
+        // MySQL 5.7 / 8.0 schema v1
         parse_v1(v)
+    } else {
+        // Neither structure found — return an error so the caller surfaces
+        // explain_error instead of a misleading tier:fast / rows:0 result.
+        anyhow::bail!(
+            "Unrecognized EXPLAIN FORMAT=JSON structure              (has neither 'query_plan' nor 'query_block')"
+        )
     }
 }
 
@@ -544,6 +554,23 @@ mod tests {
         assert_eq!(
             result.rows_examined_estimate, 1_000_000,
             "outer derived rows must not be double-counted"
+        );
+    }
+
+    #[test]
+    fn test_parse_empty_object_returns_error() {
+        let result = parse(&serde_json::json!({}));
+        assert!(
+            result.is_err(),
+            "empty EXPLAIN JSON should return an error, not tier:fast"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Unrecognized")
+                || msg.contains("query_plan")
+                || msg.contains("query_block"),
+            "error message should mention the missing keys, got: {}",
+            msg
         );
     }
 }

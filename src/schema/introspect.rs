@@ -70,9 +70,10 @@ pub struct SchemaIntrospector {
 }
 
 /// Returns true if the cache key's table segment matches `table` (case-insensitive).
-/// Cache keys have the form "{database}.{table}" where database may be empty.
+/// Cache keys have the form "{database}\t{table}" where database may be empty.
+/// Tab is used as separator because it is not a valid MySQL identifier character.
 fn key_matches_table(key: &str, table: &str) -> bool {
-    let key_table = key.split_once('.').map(|x| x.1).unwrap_or(key);
+    let key_table = key.split_once('\t').map(|x| x.1).unwrap_or(key);
     key_table.eq_ignore_ascii_case(table)
 }
 
@@ -116,7 +117,7 @@ impl SchemaIntrospector {
         table: &str,
         database: Option<&str>,
     ) -> Result<Vec<String>> {
-        let cache_key = format!("{}.{}", database.unwrap_or(""), table);
+        let cache_key = format!("{}\t{}", database.unwrap_or(""), table);
         let pool = Arc::clone(&self.inner.pool);
         let owned_table = table.to_owned();
         let owned_database = database.map(|s| s.to_owned());
@@ -145,7 +146,7 @@ impl SchemaIntrospector {
         table: &str,
         database: Option<&str>,
     ) -> Result<Vec<IndexDef>> {
-        let cache_key = format!("{}.{}", database.unwrap_or(""), table);
+        let cache_key = format!("{}\t{}", database.unwrap_or(""), table);
         let pool = Arc::clone(&self.inner.pool);
         let owned_table = table.to_owned();
         let owned_database = database.map(|s| s.to_owned());
@@ -169,7 +170,7 @@ impl SchemaIntrospector {
         table_name: &str,
         database: Option<&str>,
     ) -> Result<Vec<ColumnInfo>> {
-        let cache_key = format!("{}.{}", database.unwrap_or(""), table_name);
+        let cache_key = format!("{}\t{}", database.unwrap_or(""), table_name);
         let pool = Arc::clone(&self.inner.pool);
         let owned_table = table_name.to_owned();
         let owned_database = database.map(|s| s.to_owned());
@@ -352,7 +353,7 @@ impl SchemaIntrospector {
     /// Invalidate cached column data for a specific table (case-insensitive match on the
     /// table-name segment of the cache key, ignoring the database qualifier).
     /// Use after DDL that targets a known table (CREATE TABLE, ALTER TABLE, TRUNCATE).
-    pub async fn invalidate_table(&self, table: &str) {
+    pub async fn invalidate_table(&self, table: &str, database: Option<&str>) {
         if table.is_empty() {
             // Caller bug: empty table name should not reach here. The handler calls
             // invalidate_all() directly when the target table is unknown.
@@ -371,9 +372,15 @@ impl SchemaIntrospector {
             let mut cidx_cache = self.inner.composite_indexes_cache.lock().await;
             cidx_cache.retain(|key, _| !key_matches_table(key, table));
         }
-        // Also clear the tables list so row-count / existence info is refreshed.
+        // Clear only the affected database's table list. When the database is unknown,
+        // clear all entries conservatively (we'd rather re-fetch than serve stale data).
         let mut tables_cache = self.inner.tables_cache.lock().await;
-        tables_cache.clear();
+        match database {
+            Some(db) => {
+                tables_cache.remove(db);
+            }
+            None => tables_cache.clear(),
+        }
     }
 
     /// Invalidate ALL cached schema data (tables list + all column caches).

@@ -125,8 +125,8 @@ pub async fn spawn_ssh_tunnel(
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        // Inherit stderr so SSH error messages appear in server logs
-        .stderr(Stdio::inherit())
+        // Capture stderr so we can include it in error messages on premature exit
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -148,12 +148,36 @@ pub async fn spawn_ssh_tunnel(
         // Check if the child process has already exited (tunnel failed to start)
         match handle.child.try_wait() {
             Ok(Some(status)) => {
+                // Collect any buffered stderr for diagnostics (best effort, 500 ms cap).
+                let stderr_snippet = if let Some(mut stderr) = handle.child.stderr.take() {
+                    let mut buf = vec![0u8; 2048];
+                    let n = tokio::time::timeout(
+                        Duration::from_millis(500),
+                        tokio::io::AsyncReadExt::read(&mut stderr, &mut buf),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .unwrap_or(0);
+                    let s = String::from_utf8_lossy(&buf[..n]).trim().to_string();
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                } else {
+                    None
+                };
                 return Err(anyhow::anyhow!(
-                    "SSH tunnel: ssh process exited prematurely with status {}. \
-                     Check server logs for SSH error output (bastion={}, user={}).",
+                    "SSH tunnel: ssh process exited prematurely with status {} \
+                     (bastion={}@{}). {}",
                     status,
+                    ssh.user,
                     ssh.host,
-                    ssh.user
+                    stderr_snippet
+                        .as_deref()
+                        .map(|s| format!("SSH error output: {}", s))
+                        .unwrap_or_else(|| "No stderr output captured.".to_string())
                 ));
             }
             Ok(None) => {} // still running, continue polling
