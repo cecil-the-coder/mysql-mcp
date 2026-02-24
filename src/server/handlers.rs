@@ -268,6 +268,11 @@ impl SessionStore {
                 )]))
             }
         };
+        if sql.contains('\0') {
+            return Ok(CallToolResult::error(vec![Content::text(
+                "SQL contains NUL bytes, which are not valid in SQL statements",
+            )]));
+        }
         if let Err(e) = check_sql_length(&sql) {
             return Ok(e);
         }

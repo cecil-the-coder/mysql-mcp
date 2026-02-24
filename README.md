@@ -1,5 +1,8 @@
 # mysql-mcp
 
+[![CI](https://github.com/cecil-the-coder/mysql-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/cecil-the-coder/mysql-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A MySQL MCP (Model Context Protocol) server written in Rust. It exposes a MySQL database to LLM assistants via the MCP standard, allowing them to run SQL queries, inspect table schemas, obtain query execution plans, and receive performance warnings — all through a simple tool interface.
 
 ## Features
@@ -368,7 +371,7 @@ Explicitly close a named session. The default session cannot be closed.
 
 ### `mysql_list_sessions`
 
-List all active named sessions with host, database, and idle time. The default session is omitted when it is the only active session.
+List all active named sessions with host, database, and idle time. The default session is always shown first.
 
 No parameters.
 

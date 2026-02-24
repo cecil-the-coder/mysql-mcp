@@ -112,7 +112,9 @@ impl McpServer {
                     if let Some(session) = map.remove(&name) {
                         drop(map); // release lock before awaiting async operations
                         if let Some(tunnel) = session.tunnel {
-                            let _ = tunnel.close().await;
+                            if let Err(e) = tunnel.close().await {
+                                tracing::warn!("SSH tunnel close error during session reap: {}", e);
+                            }
                         }
                         session.pool.close().await;
                     }
