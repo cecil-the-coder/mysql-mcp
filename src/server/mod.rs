@@ -51,6 +51,7 @@ fn get_dns_cache() -> Arc<Mutex<HashMap<String, DnsCacheEntry>>> {
 
 /// Clear the DNS cache (for testing).
 #[cfg(test)]
+#[allow(dead_code)]
 async fn clear_dns_cache() {
     let cache = get_dns_cache();
     {
@@ -152,7 +153,9 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
 
     // Cache miss or expired — perform DNS lookup
     tracing::debug!(hostname = %hostname, "DNS cache miss, performing lookup");
-    let (ips, resolution_error) = match tokio::net::lookup_host(&hostname).await {
+    // lookup_host expects "hostname:port" format; use a dummy port since we only care about IPs
+    let lookup_target = format!("{}:0", hostname);
+    let (ips, resolution_error) = match tokio::net::lookup_host(&lookup_target).await {
         Ok(addr_iter) => {
             let resolved_ips: Vec<IpAddr> = addr_iter.map(|addr| addr.ip()).collect();
             (resolved_ips, None)
