@@ -181,6 +181,14 @@ impl Config {
             );
         }
 
+        // ssl_ca is only effective when ssl=true; warn if it's set but ssl is disabled.
+        if self.security.ssl_ca.is_some() && !self.security.ssl {
+            eprintln!(
+                "Warning: MYSQL_SSL_CA is set but MYSQL_SSL is false (or not set). \
+                 The CA certificate will be ignored. Set MYSQL_SSL=true to enable SSL and use the CA cert."
+            );
+        }
+
         // ssl_accept_invalid_certs=true disables TLS certificate validation entirely.
         // Warn prominently so it isn't set in production by accident.
         if self.security.ssl_accept_invalid_certs {

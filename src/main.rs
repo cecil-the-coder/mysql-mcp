@@ -82,10 +82,18 @@ async fn main() -> Result<()> {
         _ = async {
             #[cfg(unix)]
             {
-                let mut sigterm = tokio::signal::unix::signal(
+                match tokio::signal::unix::signal(
                     tokio::signal::unix::SignalKind::terminate(),
-                ).expect("failed to install SIGTERM handler");
-                sigterm.recv().await;
+                ) {
+                    Ok(mut sigterm) => { sigterm.recv().await; }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to install SIGTERM handler (restricted environment?): {}. \
+                             Ctrl-C is still available.", e
+                        );
+                        std::future::pending::<()>().await;
+                    }
+                }
             }
             #[cfg(not(unix))]
             std::future::pending::<()>().await;

@@ -66,6 +66,26 @@ impl SessionStore {
             }
         }
         let include_arr = args.get("include").and_then(|v| v.as_array());
+        if let Some(arr) = include_arr {
+            const VALID: &[&str] = &["indexes", "foreign_keys", "size"];
+            for (i, elem) in arr.iter().enumerate() {
+                match elem.as_str() {
+                    Some(s) if VALID.contains(&s) => {}
+                    Some(s) => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "include[{}]: unrecognized value '{}'. Valid values: indexes, foreign_keys, size",
+                            i, s
+                        ))]));
+                    }
+                    None => {
+                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                            "include[{}]: expected a string, got {}",
+                            i, elem
+                        ))]));
+                    }
+                }
+            }
+        }
         let include_indexes =
             include_arr.is_some_and(|a| a.iter().any(|v| v.as_str() == Some("indexes")));
         let include_fk =

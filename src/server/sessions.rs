@@ -409,7 +409,9 @@ impl SessionStore {
         let mut sessions = self.sessions.lock().await;
         if sessions.len() >= self.config.security.max_sessions as usize {
             if let Some(t) = tunnel {
-                let _ = t.close().await;
+                if let Err(e) = t.close().await {
+                    tracing::warn!("SSH tunnel close error on session limit rejection: {}", e);
+                }
             }
             pool.close().await;
             return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -419,7 +421,12 @@ impl SessionStore {
         }
         if sessions.contains_key(&name) {
             if let Some(t) = tunnel {
-                let _ = t.close().await;
+                if let Err(e) = t.close().await {
+                    tracing::warn!(
+                        "SSH tunnel close error on duplicate session rejection: {}",
+                        e
+                    );
+                }
             }
             pool.close().await;
             return Ok(CallToolResult::error(vec![Content::text(format!(

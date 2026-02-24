@@ -151,7 +151,13 @@ pub(crate) async fn do_handshake(
         }),
     )
     .await;
-    let _ = read_response(reader).await; // consume initialize response
+    let init_resp = read_response(reader)
+        .await
+        .expect("no initialize response from server");
+    assert!(
+        init_resp.get("result").is_some(),
+        "initialize should return a result, got: {init_resp}"
+    );
     send_message(
         stdin,
         &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
