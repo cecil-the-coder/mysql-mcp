@@ -53,19 +53,6 @@ fn get_dns_cache() -> Arc<Mutex<HashMap<String, DnsCacheEntry>>> {
         .clone()
 }
 
-/// Clear the DNS cache (for testing).
-#[cfg(test)]
-#[allow(dead_code)]
-async fn clear_dns_cache() {
-    let cache = get_dns_cache();
-    {
-        let _guard = cache.lock().await;
-        // drop the guard to release the lock
-    }
-    let mut guard = cache.lock().await;
-    guard.clear();
-}
-
 /// Check if an IP address is in a blocked range (loopback, link-local, etc.).
 /// Used for direct IP address connections.
 fn is_blocked_ip(ip: IpAddr) -> bool {
@@ -121,7 +108,6 @@ pub(crate) struct HostValidation {
     pub(crate) allowed: bool,
     pub(crate) reason: Option<String>,
     pub(crate) resolved_ips: Vec<IpAddr>,
-    pub(crate) was_literal_ip: bool,
 }
 
 /// Validate a host string, resolving hostnames via DNS with caching.
@@ -141,7 +127,6 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
                 None
             },
             resolved_ips: vec![ip],
-            was_literal_ip: true,
         };
     }
 
@@ -152,7 +137,6 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
             allowed: false,
             reason: Some("Host cannot be empty".to_string()),
             resolved_ips: vec![],
-            was_literal_ip: false,
         };
     }
 
@@ -172,7 +156,6 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
                     allowed: !entry.blocked,
                     reason: entry.reason.clone(),
                     resolved_ips: entry.ips.clone(),
-                    was_literal_ip: false,
                 };
             }
         }
@@ -246,7 +229,6 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
         allowed: !blocked,
         reason,
         resolved_ips: ips,
-        was_literal_ip: false,
     }
 }
 

@@ -565,3 +565,79 @@ impl SessionStore {
         Ok(serialize_response(&json!({"sessions": list})))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_identifier_empty_returns_error() {
+        let result = validate_identifier("", "Identifier");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // CallToolResult wraps the error content; check the text
+        let text = err.content[0].raw.as_text().expect("expected text content");
+        assert!(text.text.contains("Identifier cannot be empty"));
+    }
+
+    #[test]
+    fn test_validate_identifier_too_long_returns_error() {
+        let long_id = "a".repeat(65);
+        let result = validate_identifier(&long_id, "Identifier");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let text = err.content[0].raw.as_text().expect("expected text content");
+        assert!(text.text.contains("Identifier too long"));
+    }
+
+    #[test]
+    fn test_validate_identifier_invalid_characters_returns_error() {
+        // Test with space
+        let result = validate_identifier("invalid name", "Identifier");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let text = err.content[0].raw.as_text().expect("expected text content");
+        assert!(text.text.contains("must contain only alphanumeric"));
+
+        // Test with dot
+        let result = validate_identifier("invalid.name", "Identifier");
+        assert!(result.is_err());
+
+        // Test with semicolon
+        let result = validate_identifier("invalid;name", "Identifier");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_identifier_valid_alphanumeric_and_underscores() {
+        let result = validate_identifier("valid_name_123", "Identifier");
+        assert!(result.is_ok());
+
+        let result = validate_identifier("SimpleName", "Identifier");
+        assert!(result.is_ok());
+
+        let result = validate_identifier("ALLCAPS_123", "Identifier");
+        assert!(result.is_ok());
+
+        let result = validate_identifier("_underscore_prefix", "Identifier");
+        assert!(result.is_ok());
+
+        let result = validate_identifier("underscore_suffix_", "Identifier");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_identifier_valid_with_hyphens() {
+        let result = validate_identifier("valid-name-123", "Identifier");
+        assert!(result.is_ok());
+
+        let result = validate_identifier("my-session", "Identifier");
+        assert!(result.is_ok());
+
+        let result = validate_identifier("test-db-name", "Identifier");
+        assert!(result.is_ok());
+
+        let result = validate_identifier("mixed_name-with-hyphens", "Identifier");
+        assert!(result.is_ok());
+    }
+}

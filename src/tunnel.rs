@@ -22,7 +22,9 @@ impl TunnelHandle {
     pub async fn close(mut self) -> Result<()> {
         self.child.kill().await?;
         // Wait for the child to be fully reaped so no zombie process is left behind.
-        let _ = self.child.wait().await;
+        if let Err(e) = self.child.wait().await {
+            tracing::debug!("Failed to wait for SSH process: {}", e);
+        }
         Ok(())
     }
 }
@@ -31,7 +33,9 @@ impl Drop for TunnelHandle {
     fn drop(&mut self) {
         // Non-blocking best-effort kill. Cannot await in Drop.
         // The OS will reap the child process when it exits.
-        let _ = self.child.start_kill();
+        if let Err(e) = self.child.start_kill() {
+            tracing::debug!("Failed to kill SSH process: {}", e);
+        }
     }
 }
 
@@ -172,10 +176,8 @@ pub async fn spawn_ssh_tunnel(
                 };
                 return Err(anyhow::anyhow!(
                     "SSH tunnel: ssh process exited prematurely with status {} \
-                     (bastion={}@{}). {}",
+                     (bastion=[REDACTED]). {}",
                     status,
-                    ssh.user,
-                    ssh.host,
                     stderr_snippet
                         .as_deref()
                         .map(|s| format!("SSH error output: {}", s))
@@ -205,7 +207,9 @@ pub async fn spawn_ssh_tunnel(
             Err(_) => {
                 if std::time::Instant::now() >= deadline {
                     // Timeout — kill the child before returning error
-                    let _ = handle.child.start_kill();
+                    if let Err(e) = handle.child.start_kill() {
+                        tracing::debug!("Failed to kill SSH process on timeout: {}", e);
+                    }
                     return Err(anyhow::anyhow!(
                         "SSH tunnel: timed out waiting for local port {} to become ready after 30s. \
                          Check SSH connectivity to {} and server logs for details.",

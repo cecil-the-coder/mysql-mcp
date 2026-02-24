@@ -207,11 +207,12 @@ impl SessionStore {
         if target_db.is_none() {
             return tool_error!("No database specified and no default database for this session");
         }
+        let target_db = target_db.unwrap();
 
         let rows = sqlx::query(
             "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME",
         )
-        .bind(target_db.unwrap())
+        .bind(target_db)
         .fetch_all(&ctx.pool)
         .await;
 
@@ -224,7 +225,7 @@ impl SessionStore {
                     .collect();
                 let output = json!({
                     "tables": tables,
-                    "database": target_db.unwrap(),
+                    "database": target_db,
                 });
                 Ok(serialize_response(&output))
             }
@@ -554,4 +555,43 @@ fn write_result_content(result: &crate::query::write::WriteResult) -> serde_json
         output["parse_warnings"] = json!(result.parse_warnings);
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_check_sql_length_empty_returns_error() {
+        let result = check_sql_length("");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // Verify it's an error response (CallToolResult with is_error=Some(true))
+        assert_eq!(err.is_error, Some(true));
+        // Verify error message contains expected text
+        let text = err.content[0].raw.as_text().expect("expected text content");
+        assert!(text.text.contains("SQL cannot be empty"));
+    }
+
+    #[test]
+    fn test_check_sql_length_exceeds_limit_returns_error() {
+        // Create a SQL string larger than 1MB
+        let large_sql = "x".repeat(1_000_001);
+        let result = check_sql_length(&large_sql);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.is_error, Some(true));
+        // Verify error message mentions size limit
+        let text = err.content[0].raw.as_text().expect("expected text content");
+        assert!(text.text.contains("SQL too large"));
+        assert!(text.text.contains("1 MB"));
+    }
+
+    #[test]
+    fn test_check_sql_length_within_limits_returns_ok() {
+        // Valid SQL within limits
+        let valid_sql = "SELECT * FROM users";
+        let result = check_sql_length(valid_sql);
+        assert!(result.is_ok());
+    }
 }

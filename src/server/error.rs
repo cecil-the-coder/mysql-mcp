@@ -23,7 +23,7 @@ static OS_ERROR_REGEX: LazyLock<Regex> =
 static MULTIPLE_SPACES_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
 pub(crate) fn sanitize_error(error: &str) -> String {
-    tracing::warn!("Original error (before sanitization): {}", error);
+    tracing::debug!("Original error (before sanitization): {}", error);
 
     let mut sanitized = error.to_string();
 
@@ -71,7 +71,7 @@ pub(crate) fn error_response(message: impl Into<String>) -> CallToolResult {
 /// Supports format strings with arguments.
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// // Simple message
 /// tool_error!("Missing required argument: sql");
 ///

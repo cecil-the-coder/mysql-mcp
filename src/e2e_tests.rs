@@ -676,7 +676,56 @@ mod e2e_tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 11: UPDATE and DELETE succeed when the respective permissions are set
+    // Test 11: mysql_explain_plan with non-SELECT returns an error
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_mcp_explain_plan_non_select_rejected() {
+        let Some(binary) = binary_path() else {
+            eprintln!("Skipping E2E: binary not found. Run `cargo build` first.");
+            return;
+        };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
+            return;
+        };
+        let (mut stdin, mut reader) = setup_io(&mut child);
+        do_handshake(&mut stdin, &mut reader).await;
+
+        // Call mysql_explain_plan with an INSERT statement
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 31, "method": "tools/call",
+                "params": {
+                    "name": "mysql_explain_plan",
+                    "arguments": { "sql": "INSERT INTO some_table (col) VALUES (1)" }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no explain_plan response");
+        child.kill().await.ok();
+
+        // Should return an error indicating only SELECT is supported
+        assert_eq!(
+            r["result"]["isError"], true,
+            "mysql_explain_plan with INSERT should return isError:true, got: {}",
+            r
+        );
+        let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.to_lowercase().contains("select"),
+            "Error message should mention SELECT, got: {}",
+            text
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 12: UPDATE and DELETE succeed when the respective permissions are set
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn test_mcp_update_delete_allowed() {

@@ -6,6 +6,7 @@ pub mod db;
 pub mod permissions;
 pub mod query;
 pub mod schema;
+pub mod server;
 pub mod sql_parser;
 pub mod tunnel;
 
