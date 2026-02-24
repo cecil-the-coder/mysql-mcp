@@ -72,6 +72,7 @@ allow_insert = true
         assert!(config.pool.size > 0);
         assert!(config.pool.query_timeout_ms > 0);
         assert!(config.pool.cache_ttl_secs > 0);
+        assert_eq!(config.pool.retry_attempts, 2); // default is 2 retries
     }
 
     // Test: SchemaPermissions default has all None
@@ -332,7 +333,7 @@ allow_update = false
         assert_eq!(config.connection.connection_string, Some(url));
     }
 
-    // Test: EnvConfig overrides pool size, query timeout, and cache TTL
+    // Test: EnvConfig overrides pool size, query timeout, cache TTL, and retry_attempts
     #[test]
     fn test_pool_env_override() {
         let base = Config::default();
@@ -340,12 +341,14 @@ allow_update = false
             pool_size: Some(50),
             query_timeout_ms: Some(60_000),
             cache_ttl_secs: Some(120),
+            retry_attempts: Some(5),
             ..Default::default()
         };
         let merged = env.apply_to(base);
         assert_eq!(merged.pool.size, 50);
         assert_eq!(merged.pool.query_timeout_ms, 60_000);
         assert_eq!(merged.pool.cache_ttl_secs, 120);
+        assert_eq!(merged.pool.retry_attempts, 5);
     }
 
     // Test: ConnectionConfig default fields match expected values

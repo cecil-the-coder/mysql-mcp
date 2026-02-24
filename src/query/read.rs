@@ -4,9 +4,31 @@ use serde_json::{Map, Value};
 use sqlx::{Acquire, Column, MySqlPool, Row, TypeInfo};
 use std::time::Instant;
 
+use super::retry::retry_on_transient_error;
+use super::with_timeout;
+
 /// Binary columns with invalid UTF-8 are hex-encoded. Cap the output at 512 KB
 /// of raw bytes (→ ~1 MB hex string) to prevent OOM on unexpectedly large BLOBs.
 const MAX_BINARY_DISPLAY_BYTES: usize = 512 * 1024;
+
+/// Default maximum result memory in MB (0 = unlimited).
+const DEFAULT_MAX_RESULT_MEMORY_MB: u32 = 256;
+
+/// Estimate the memory size of a JSON value in bytes.
+fn estimate_value_size(v: &Value) -> usize {
+    match v {
+        Value::Null => 8,
+        Value::Bool(_) => 1,
+        Value::Number(n) => n.to_string().len() + 16, // number struct overhead
+        Value::String(s) => s.len() + 24,             // string struct overhead
+        Value::Array(arr) => arr.iter().map(estimate_value_size).sum::<usize>() + arr.len() * 16,
+        Value::Object(obj) => {
+            obj.iter()
+                .map(|(k, v)| k.len() + estimate_value_size(v) + 32)
+                .sum()
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct QueryResult {
@@ -15,6 +37,7 @@ pub struct QueryResult {
     pub execution_time_ms: u64,
     pub serialization_time_ms: u64,
     pub capped: bool,
+    pub memory_capped: bool,
     pub parse_warnings: Vec<String>,
     pub plan: Option<Value>,
     pub explain_error: Option<String>,
@@ -32,6 +55,9 @@ pub struct QueryResult {
 /// If `max_rows > 0` and the SQL does not already contain a LIMIT clause, a
 /// `LIMIT {max_rows + 1}` is appended (one extra row to detect truncation) and
 /// `QueryResult::capped` is set to `true` when the result exceeds `max_rows`.
+///
+/// Retries on transient network errors (connection reset, broken pipe, timeout) up to
+/// `retry_attempts` times with exponential backoff.
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_read_query(
     pool: &MySqlPool,
@@ -42,6 +68,8 @@ pub async fn execute_read_query(
     performance_hints: &str,
     slow_query_threshold_ms: u64,
     query_timeout_ms: u64,
+    retry_attempts: u32,
+    max_result_memory_mb: u32,
 ) -> Result<QueryResult> {
     let stmt_type = &parsed.statement_type;
 
@@ -71,48 +99,70 @@ pub async fn execute_read_query(
         sql
     };
 
-    // DB phase
+    // DB phase with retry logic for transient network errors
     let db_start = Instant::now();
-    let db_fut = async {
-        if force_readonly_transaction {
-            // 4-RTT path: SET TRANSACTION READ ONLY → BEGIN → SQL → COMMIT
-            // For MySQL, SET TRANSACTION READ ONLY must be called before BEGIN.
-            let mut conn = pool.acquire().await?;
-            sqlx::query("SET TRANSACTION READ ONLY")
-                .execute(&mut *conn)
-                .await?;
-            let mut tx = conn.begin().await?;
-            let rows = sqlx::query(effective_sql_ref).fetch_all(&mut *tx).await?;
-            tx.commit().await?;
-            Ok::<Vec<sqlx::mysql::MySqlRow>, anyhow::Error>(rows)
-        } else {
-            // 1-RTT path: bare fetch_all, no transaction overhead
-            Ok(sqlx::query(effective_sql_ref).fetch_all(pool).await?)
-        }
-    };
-    let rows: Vec<sqlx::mysql::MySqlRow> = if query_timeout_ms > 0 {
-        match tokio::time::timeout(std::time::Duration::from_millis(query_timeout_ms), db_fut).await
-        {
-            Ok(result) => result?,
-            Err(_) => {
-                return Err(anyhow::anyhow!(
-                    "Query timed out after {}ms. Set MYSQL_QUERY_TIMEOUT to adjust.",
-                    query_timeout_ms
-                ))
+    let pool_clone = pool.clone();
+    let effective_sql_owned = effective_sql_ref.to_string();
+
+    let db_result = retry_on_transient_error(
+        || {
+            let pool = pool_clone.clone();
+            let sql = effective_sql_owned.clone();
+            async move {
+                if force_readonly_transaction {
+                    // 4-RTT path: SET TRANSACTION READ ONLY -> BEGIN -> SQL -> COMMIT
+                    // For MySQL, SET TRANSACTION READ ONLY must be called before BEGIN.
+                    let mut conn = pool.acquire().await?;
+                    sqlx::query("SET TRANSACTION READ ONLY")
+                        .execute(&mut *conn)
+                        .await?;
+                    let mut tx = conn.begin().await?;
+                    let rows = sqlx::query(&sql).fetch_all(&mut *tx).await?;
+                    tx.commit().await?;
+                    Ok::<Vec<sqlx::mysql::MySqlRow>, anyhow::Error>(rows)
+                } else {
+                    // 1-RTT path: bare fetch_all, no transaction overhead
+                    Ok(sqlx::query(&sql).fetch_all(&pool).await?)
+                }
             }
-        }
-    } else {
-        db_fut.await?
-    };
+        },
+        retry_attempts,
+        "read_query",
+    );
+
+    let rows: Vec<sqlx::mysql::MySqlRow> =
+        with_timeout(query_timeout_ms, "Query", db_result).await?;
     let db_elapsed = db_start.elapsed().as_millis() as u64;
 
-    // Serialization phase
+    // Serialization phase with memory tracking
     let ser_start = Instant::now();
     let mut warnings = warnings; // make mutable so row_to_json can push serialization warnings
-    let mut json_rows: Vec<Map<String, Value>> = rows
-        .iter()
-        .map(|row| row_to_json(row, &mut warnings))
-        .collect();
+    let max_memory_bytes = (max_result_memory_mb as usize) * 1024 * 1024;
+    let mut total_memory_bytes: usize = 0;
+    let mut memory_capped = false;
+
+    let mut json_rows: Vec<Map<String, Value>> = Vec::with_capacity(rows.len().min(max_rows as usize + 1));
+    for row in &rows {
+        let json_row = row_to_json(row, &mut warnings);
+
+        // Estimate memory usage of this row (rough approximation)
+        let row_size: usize = json_row.values().map(|v| estimate_value_size(v)).sum();
+        let row_overhead = json_row.len() * 32; // HashMap overhead per key
+        let row_total = row_size + row_overhead;
+
+        // Check if adding this row would exceed the memory limit
+        if max_memory_bytes > 0 && total_memory_bytes + row_total > max_memory_bytes {
+            memory_capped = true;
+            warnings.push(format!(
+                "Result truncated at {} rows due to memory limit ({} MB). Add a more specific WHERE clause or reduce selected columns.",
+                json_rows.len(), max_result_memory_mb
+            ));
+            break;
+        }
+
+        total_memory_bytes += row_total;
+        json_rows.push(json_row);
+    }
     let ser_elapsed = ser_start.elapsed().as_millis() as u64;
 
     // If we injected LIMIT max_rows+1 and got more than max_rows rows back, the result
@@ -175,6 +225,7 @@ pub async fn execute_read_query(
         execution_time_ms: db_elapsed,
         serialization_time_ms: ser_elapsed,
         capped: was_capped,
+        memory_capped,
         parse_warnings: warnings,
         plan,
         explain_error,
@@ -414,7 +465,7 @@ mod integration_tests {
         slow_ms: u64,
     ) -> anyhow::Result<QueryResult> {
         let parsed = parse_sql(sql).map_err(|e| anyhow::anyhow!(e))?;
-        execute_read_query(pool, sql, &parsed, force_ro, max_rows, hints, slow_ms, 0).await
+        execute_read_query(pool, sql, &parsed, force_ro, max_rows, hints, slow_ms, 0, 0, 256).await
     }
 
     #[tokio::test]
@@ -527,6 +578,8 @@ mod integration_tests {
             "none",
             0,
             1, // query_timeout_ms = 1
+            0, // retry_attempts = 0
+            256, // max_result_memory_mb
         )
         .await;
         assert!(result.is_err(), "query should have timed out");

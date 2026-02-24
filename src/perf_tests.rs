@@ -98,6 +98,7 @@ pub mod perf_tests {
                     "none",
                     0,
                     0,
+                    0,
                 )
                 .await
                 .unwrap();
@@ -115,6 +116,7 @@ pub mod perf_tests {
                 false,
                 0,
                 "none",
+                0,
                 0,
                 0,
             )
@@ -175,7 +177,7 @@ pub mod perf_tests {
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(pool, sql, &parsed_join, false, 0, "none", 0, 0)
+            crate::query::read::execute_read_query(pool, sql, &parsed_join, false, 0, "none", 0, 0, 0)
                 .await
                 .unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
@@ -240,7 +242,7 @@ pub mod perf_tests {
                 for _ in 0..PER_TASK {
                     let t = Instant::now();
                     crate::query::read::execute_read_query(
-                        &pool, "SELECT 1", &parsed, false, 0, "none", 0, 0,
+                        &pool, "SELECT 1", &parsed, false, 0, "none", 0, 0, 0,
                     )
                     .await
                     .unwrap();

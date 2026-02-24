@@ -49,7 +49,7 @@ mod perf_write_tests {
             let insert_sql = format!("INSERT INTO perf_write_test (v) VALUES ('{val}')");
             let insert_parsed = crate::sql_parser::parse_sql(&insert_sql).unwrap();
             let t = Instant::now();
-            let r = crate::query::write::execute_write_query(pool, &insert_sql, &insert_parsed, 0)
+            let r = crate::query::write::execute_write_query(pool, &insert_sql, &insert_parsed, 0, 0)
                 .await
                 .unwrap();
             insert_ms.push(t.elapsed().as_secs_f64() * 1000.0);
@@ -58,7 +58,7 @@ mod perf_write_tests {
             let update_sql = format!("UPDATE perf_write_test SET v='updated_{i}' WHERE id={id}");
             let update_parsed = crate::sql_parser::parse_sql(&update_sql).unwrap();
             let t = Instant::now();
-            crate::query::write::execute_write_query(pool, &update_sql, &update_parsed, 0)
+            crate::query::write::execute_write_query(pool, &update_sql, &update_parsed, 0, 0)
                 .await
                 .unwrap();
             update_ms.push(t.elapsed().as_secs_f64() * 1000.0);
@@ -66,7 +66,7 @@ mod perf_write_tests {
             let delete_sql = format!("DELETE FROM perf_write_test WHERE id={id}");
             let delete_parsed = crate::sql_parser::parse_sql(&delete_sql).unwrap();
             let t = Instant::now();
-            crate::query::write::execute_write_query(pool, &delete_sql, &delete_parsed, 0)
+            crate::query::write::execute_write_query(pool, &delete_sql, &delete_parsed, 0, 0)
                 .await
                 .unwrap();
             delete_ms.push(t.elapsed().as_secs_f64() * 1000.0);
@@ -211,6 +211,7 @@ mod perf_write_tests {
                         "none",
                         0,
                         0,
+                        0,
                     )
                     .await
                     .unwrap();
@@ -268,6 +269,7 @@ mod perf_write_tests {
                     "none",
                     0,
                     0,
+                    0,
                 )
                 .await
                 .unwrap();
@@ -286,6 +288,7 @@ mod perf_write_tests {
                 true,
                 0,
                 "none",
+                0,
                 0,
                 0,
             )
@@ -307,6 +310,7 @@ mod perf_write_tests {
                 false,
                 0,
                 "none",
+                0,
                 0,
                 0,
             )
@@ -409,6 +413,7 @@ mod perf_write_tests {
             "none",
             0,
             0,
+            0,
         )
         .await
         .unwrap();
@@ -421,6 +426,7 @@ mod perf_write_tests {
             false,
             0,
             "none",
+            0,
             0,
             0,
         )

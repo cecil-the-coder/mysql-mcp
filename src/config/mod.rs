@@ -41,6 +41,12 @@ pub struct PoolConfig {
     pub slow_query_threshold_ms: u64,
     pub warmup_connections: u32,
     pub max_rows: u32,
+    /// Number of retry attempts for transient network errors (default: 2).
+    /// Retries use exponential backoff (100ms, 200ms) between attempts.
+    pub retry_attempts: u32,
+    /// Maximum memory in MB for result sets (default: 256).
+    /// When exceeded, results are truncated with a memory_capped flag.
+    pub max_result_memory_mb: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -64,6 +70,12 @@ pub struct SecurityConfig {
     /// Maximum number of concurrent named sessions (not counting the default session).
     /// Prevents unbounded session creation when allow_runtime_connections is true.
     pub max_sessions: u32,
+    /// DNS cache TTL in seconds for hostname validation.
+    /// After this time, hostnames are re-resolved to detect DNS rebinding attacks.
+    pub dns_cache_ttl_secs: u64,
+    /// Maximum total database connections across all sessions (default pool + named session pools).
+    /// Named sessions use 5 connections each. Prevents resource exhaustion.
+    pub max_total_connections: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -144,7 +156,25 @@ impl Default for PoolConfig {
             slow_query_threshold_ms: 500,
             warmup_connections: 1,
             max_rows: 1000,
+            retry_attempts: 2,
+            max_result_memory_mb: 256,
         }
+    }
+}
+
+impl SecurityConfig {
+    /// Returns a list of security warnings that should be shown to tool users.
+    /// These warnings are surfaced in tool responses so LLM users are aware of
+    /// configuration choices that reduce security.
+    pub fn security_warnings(&self) -> Vec<String> {
+        let mut warnings = vec![];
+        if self.ssl_accept_invalid_certs {
+            warnings.push(
+                "SSL certificate validation is disabled — connection vulnerable to MITM attacks"
+                    .to_string(),
+            );
+        }
+        warnings
     }
 }
 
@@ -162,6 +192,8 @@ impl Default for SecurityConfig {
             multi_db_write_mode: false,
             allow_runtime_connections: false,
             max_sessions: 50,
+            dns_cache_ttl_secs: 60,
+            max_total_connections: 100,
         }
     }
 }

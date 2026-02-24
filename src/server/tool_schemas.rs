@@ -21,7 +21,7 @@ pub(crate) fn mysql_query_schema() -> Arc<serde_json::Map<String, serde_json::Va
             },
             "session": {
                 "type": "string",
-                "description": "Named session to route this query to (omit for default connection)"
+                "description": "Named session to route this query to (omit for default connection). Use 'default' or a session name from mysql_connect."
             }
         },
         "required": ["sql"]
@@ -41,7 +41,7 @@ pub(crate) fn mysql_schema_info_schema() -> Arc<serde_json::Map<String, serde_js
             },
             "session": {
                 "type": "string",
-                "description": "Named session to use (omit for default connection)"
+                "description": "Named session to use (omit for default connection). Use 'default' or a session name from mysql_connect."
             }
         },
         "required": ["table"]
@@ -52,7 +52,7 @@ pub(crate) fn mysql_server_info_schema() -> Arc<serde_json::Map<String, serde_js
     Arc::new(rmcp::model::object(json!({
         "type": "object",
         "properties": {
-            "session": { "type": "string", "description": "Named session to use (omit for default connection)" }
+            "session": { "type": "string", "description": "Named session to use (omit for default connection). Use 'default' or a session name from mysql_connect." }
         },
         "required": []
     })))
@@ -62,7 +62,7 @@ pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::
     Arc::new(rmcp::model::object(json!({
         "type": "object",
         "properties": {
-            "name": { "type": "string", "description": "Session identifier (alphanumeric, underscore, hyphen; max 64 chars). 'default' is reserved. Named sessions use a dedicated pool of up to 5 connections (vs. the default session's configured pool size)." },
+            "name": { "type": "string", "description": "Session identifier (alphanumeric, underscore, hyphen; max 64 chars). 'default' is reserved. Named sessions use a dedicated pool of up to 5 connections (vs. the default session's configured pool size). Use this name as the 'session' parameter in other tools." },
             "host": { "type": "string", "description": "MySQL host (required unless using preset)" },
             "port": { "type": "integer", "description": "MySQL port (default: 3306).", "minimum": 1, "maximum": 65535 },
             "user": { "type": "string", "description": "MySQL username" },
@@ -108,7 +108,7 @@ pub(crate) fn mysql_disconnect_schema() -> Arc<serde_json::Map<String, serde_jso
     Arc::new(rmcp::model::object(json!({
         "type": "object",
         "properties": {
-            "name": { "type": "string", "description": "Session name to disconnect" }
+            "name": { "type": "string", "description": "Session name to disconnect. Use the name that was provided to mysql_connect." }
         },
         "required": ["name"]
     })))
@@ -132,10 +132,27 @@ pub(crate) fn mysql_explain_plan_schema() -> Arc<serde_json::Map<String, serde_j
             },
             "session": {
                 "type": "string",
-                "description": "Named session to use (default: 'default')."
+                "description": "Named session to use (default: 'default'). Use 'default' or a session name from mysql_connect."
             }
         },
         "required": ["sql"]
+    })))
+}
+
+pub(crate) fn mysql_list_tables_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+    Arc::new(rmcp::model::object(json!({
+        "type": "object",
+        "properties": {
+            "database": {
+                "type": "string",
+                "description": "Database name to list tables from (optional, defaults to current database)"
+            },
+            "session": {
+                "type": "string",
+                "description": "Named session to use (omit for default connection)"
+            }
+        },
+        "required": []
     })))
 }
 

@@ -9,12 +9,16 @@ use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
 };
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
 use crate::config::Config;
 use crate::schema::SchemaIntrospector;
 
+mod error;
 mod handlers;
 mod sessions;
 mod tool_schemas;
@@ -22,43 +26,199 @@ mod tool_schemas;
 use sessions::SessionStore;
 use tool_schemas::*;
 
-/// Check whether a host string resolves to a blocked address category.
-///
-/// Blocks loopback, link-local (cloud metadata endpoint 169.254.169.254), and multicast.
-/// Also blocks IPv6-mapped IPv4 addresses (e.g. ::ffff:127.0.0.1) which would otherwise
-/// bypass the IPv4 loopback check.
-/// RFC 1918 private ranges (10/8, 172.16/12, 192.168/16) are intentionally ALLOWED:
-/// database servers legitimately live at those addresses in private networks.
-/// Hostnames are always allowed — DNS is the operator's responsibility.
-pub(crate) fn is_private_host(host: &str) -> bool {
-    use std::net::IpAddr;
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        match ip {
-            IpAddr::V4(v4) => {
-                v4.is_loopback()       // 127.0.0.0/8 — localhost services
-                || v4.is_link_local()  // 169.254.0.0/16 — cloud metadata
-                || v4.is_broadcast()   // 255.255.255.255
-                || v4.is_unspecified() // 0.0.0.0
-                || v4.is_multicast() // 224.0.0.0/4
+// ---------------------------------------------------------------------------
+// DNS cache for hostname validation (prevents DNS rebinding attacks)
+// ---------------------------------------------------------------------------
+
+/// Cached DNS resolution result with timestamp.
+struct DnsCacheEntry {
+    ips: Vec<IpAddr>,
+    cached_at: Instant,
+    blocked: bool,
+    reason: Option<String>,
+}
+
+/// Global DNS cache protected by a mutex.
+/// Key: lowercase hostname. Value: resolution result with TTL.
+static DNS_CACHE: std::sync::OnceLock<Arc<Mutex<HashMap<String, DnsCacheEntry>>>> =
+    std::sync::OnceLock::new();
+
+fn get_dns_cache() -> Arc<Mutex<HashMap<String, DnsCacheEntry>>> {
+    DNS_CACHE
+        .get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+        .clone()
+}
+
+/// Clear the DNS cache (for testing).
+#[cfg(test)]
+async fn clear_dns_cache() {
+    let cache = get_dns_cache();
+    {
+        let _guard = cache.lock().await;
+        // drop the guard to release the lock
+    }
+    let mut guard = cache.lock().await;
+    guard.clear();
+}
+
+/// Check if an IP address is in a blocked range (loopback, link-local, etc.).
+fn is_blocked_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return v4.is_loopback()
+                    || v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_unspecified()
+                    || v4.is_multicast();
             }
-            IpAddr::V6(v6) => {
-                // IPv6-mapped IPv4 (::ffff:x.x.x.x) — apply the same IPv4 rules so that
-                // e.g. ::ffff:127.0.0.1 and ::ffff:169.254.169.254 are blocked.
-                if let Some(v4) = v6.to_ipv4_mapped() {
-                    return v4.is_loopback()
-                        || v4.is_link_local()
-                        || v4.is_broadcast()
-                        || v4.is_unspecified()
-                        || v4.is_multicast();
-                }
-                v6.is_loopback()              // ::1
-                || v6.is_unspecified()        // ::
-                || v6.is_unicast_link_local()  // fe80::/10 — cloud metadata / link-local
-                || v6.is_multicast() // ff00::/8
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_unicast_link_local()
+                || v6.is_multicast()
+        }
+    }
+}
+
+/// Result of host validation with DNS resolution.
+#[allow(dead_code)]
+pub(crate) struct HostValidation {
+    pub(crate) allowed: bool,
+    pub(crate) reason: Option<String>,
+    pub(crate) resolved_ips: Vec<IpAddr>,
+    pub(crate) was_literal_ip: bool,
+}
+
+/// Validate a host string, resolving hostnames via DNS with caching.
+/// This prevents DNS rebinding attacks by caching resolved IPs.
+pub(crate) async fn validate_host_with_dns(
+    host: &str,
+    dns_cache_ttl: Duration,
+) -> HostValidation {
+    // Fast path: literal IP address (no DNS lookup needed)
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        let blocked = is_blocked_ip(ip);
+        return HostValidation {
+            allowed: !blocked,
+            reason: if blocked {
+                Some(format!(
+                    "IP address {} is in a blocked range (loopback/link-local/multicast)",
+                    host
+                ))
+            } else {
+                None
+            },
+            resolved_ips: vec![ip],
+            was_literal_ip: true,
+        };
+    }
+
+    // Hostname: normalize to lowercase for cache key
+    let hostname = host.to_lowercase();
+    if hostname.is_empty() {
+        return HostValidation {
+            allowed: false,
+            reason: Some("Host cannot be empty".to_string()),
+            resolved_ips: vec![],
+            was_literal_ip: false,
+        };
+    }
+
+    // Check cache
+    {
+        let cache_arc = get_dns_cache();
+        let cache = cache_arc.lock().await;
+        if let Some(entry) = cache.get(&hostname) {
+            if entry.cached_at.elapsed() < dns_cache_ttl {
+                tracing::debug!(
+                    hostname = %hostname,
+                    ips = ?entry.ips,
+                    blocked = entry.blocked,
+                    "DNS cache hit for hostname validation"
+                );
+                return HostValidation {
+                    allowed: !entry.blocked,
+                    reason: entry.reason.clone(),
+                    resolved_ips: entry.ips.clone(),
+                    was_literal_ip: false,
+                };
             }
         }
+    }
+
+    // Cache miss or expired — perform DNS lookup
+    tracing::debug!(hostname = %hostname, "DNS cache miss, performing lookup");
+    let (ips, resolution_error) = match tokio::net::lookup_host(&hostname).await {
+        Ok(addr_iter) => {
+            let resolved_ips: Vec<IpAddr> = addr_iter.map(|addr| addr.ip()).collect();
+            (resolved_ips, None)
+        }
+        Err(e) => (vec![], Some(e.to_string())),
+    };
+
+    // Check if any resolved IP is blocked
+    let mut blocked = false;
+    let mut reason = None;
+    if ips.is_empty() {
+        if let Some(err) = resolution_error {
+            blocked = true;
+            reason = Some(format!("DNS resolution failed for '{}': {}", hostname, err));
+        } else {
+            blocked = true;
+            reason = Some(format!("DNS resolution returned no addresses for '{}'", hostname));
+        }
     } else {
-        false // hostname — allow (operator controls DNS)
+        for ip in &ips {
+            if is_blocked_ip(*ip) {
+                blocked = true;
+                reason = Some(format!(
+                    "Hostname '{}' resolves to blocked IP address {} (loopback/link-local/multicast)",
+                    hostname, ip
+                ));
+                break;
+            }
+        }
+    }
+
+    // Cache the result
+    {
+        let cache_arc = get_dns_cache();
+        let mut cache = cache_arc.lock().await;
+        cache.insert(
+            hostname,
+            DnsCacheEntry {
+                ips: ips.clone(),
+                cached_at: Instant::now(),
+                blocked,
+                reason: reason.clone(),
+            },
+        );
+    }
+
+    HostValidation {
+        allowed: !blocked,
+        reason,
+        resolved_ips: ips,
+        was_literal_ip: false,
+    }
+}
+
+/// Check whether a host string is a blocked IP address.
+/// This is a helper for testing `is_blocked_ip` logic.
+/// For async operations with DNS caching, use `validate_host_with_dns`.
+#[cfg(test)]
+fn is_private_host(host: &str) -> bool {
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        is_blocked_ip(ip)
+    } else {
+        false // hostname — allowed (DNS validation happens in async path)
     }
 }
 
@@ -85,10 +245,15 @@ impl McpServer {
         let sessions: Arc<Mutex<HashMap<String, sessions::Session>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
+        // Total connections counter shared between session store and reaper
+        let total_connections: Arc<AtomicU32> = Arc::new(AtomicU32::new(config.pool.size));
+
         // Background task: drop sessions idle for > 10 minutes (600 s).
         // "default" is never dropped. SSH tunnels are explicitly closed so the
         // subprocess is reaped rather than relying on Drop's non-blocking start_kill().
+        // Sessions with in-flight requests are skipped to prevent query failures.
         let sessions_reaper = sessions.clone();
+        let reaper_total_connections = total_connections.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
@@ -106,10 +271,23 @@ impl McpServer {
                     // Re-check: session may have been used since we collected the stale
                     // list (TOCTOU). If last_used has advanced past the cutoff, skip it.
                     let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(600);
-                    if map.get(&name).is_some_and(|s| s.last_used > cutoff) {
-                        continue;
+                    if let Some(session) = map.get(&name) {
+                        if session.last_used > cutoff {
+                            continue;
+                        }
+                        // Skip sessions with in-flight requests to prevent query failures
+                        if session.in_flight_requests.load(Ordering::Relaxed) > 0 {
+                            tracing::debug!(
+                                session = %name,
+                                in_flight = session.in_flight_requests.load(Ordering::Relaxed),
+                                "Skipping idle session reap: in-flight requests"
+                            );
+                            continue;
+                        }
                     }
                     if let Some(session) = map.remove(&name) {
+                        // Decrement total connections counter for reaped session
+                        reaper_total_connections.fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
                         drop(map); // release lock before awaiting async operations
                         if let Some(tunnel) = session.tunnel {
                             if let Err(e) = tunnel.close().await {
@@ -127,6 +305,7 @@ impl McpServer {
             config: config.clone(),
             db: db.clone(),
             introspector: introspector.clone(),
+            total_connections,
         };
 
         Self {
@@ -295,6 +474,11 @@ impl ServerHandler for McpServer {
                     "Get the execution plan for a SELECT query without running it. Returns index_used, rows_examined_estimate, optimization tier, full_table_scan (bool), extra_flags (array of optimizer notes), and note. Use this before executing a potentially expensive query to check efficiency.",
                     mysql_explain_plan_schema(),
                 ),
+                Tool::new(
+                    "mysql_list_tables",
+                    "List all tables in the current or specified database. More discoverable than querying information_schema directly.",
+                    mysql_list_tables_schema(),
+                ),
             ];
 
             Ok(ListToolsResult {
@@ -319,6 +503,7 @@ impl ServerHandler for McpServer {
                 "mysql_schema_info" => self.store.handle_schema_info(args).await,
                 "mysql_server_info" => self.store.handle_server_info(args).await,
                 "mysql_explain_plan" => self.store.handle_explain_plan(args).await,
+                "mysql_list_tables" => self.store.handle_list_tables(args).await,
                 "mysql_query" => self.store.handle_query(args).await,
                 name => Err(McpError::new(
                     ErrorCode::METHOD_NOT_FOUND,

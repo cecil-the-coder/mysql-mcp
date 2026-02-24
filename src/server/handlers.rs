@@ -1,6 +1,7 @@
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 use serde_json::json;
 
+use crate::tool_error;
 use super::sessions::{validate_identifier, SessionStore};
 use super::tool_schemas::serialize_response;
 
@@ -13,16 +14,14 @@ const SQL_ERROR_PREVIEW_LEN: usize = 120;
 /// Returns `Err(CallToolResult)` with an error message when the limit is exceeded.
 fn check_sql_length(sql: &str) -> Result<(), CallToolResult> {
     if sql.is_empty() {
-        return Err(CallToolResult::error(vec![Content::text(
-            "SQL cannot be empty",
-        )]));
+        return Err(crate::server::error::error_response("SQL cannot be empty"));
     }
     if sql.len() > MAX_SQL_LEN {
-        Err(CallToolResult::error(vec![Content::text(format!(
+        Err(crate::server::error::error_response(format!(
             "SQL too large: {} bytes (max {} bytes / 1 MB)",
             sql.len(),
             MAX_SQL_LEN
-        ))]))
+        )))
     } else {
         Ok(())
     }
@@ -42,14 +41,10 @@ impl SessionStore {
         {
             Some(t) if !t.is_empty() => t.to_string(),
             Some(_) => {
-                return Ok(CallToolResult::error(vec![Content::text(
-                    "Table name cannot be empty",
-                )]))
+                return tool_error!("Table name cannot be empty")
             }
             None => {
-                return Ok(CallToolResult::error(vec![Content::text(
-                    "Missing required argument: table",
-                )]))
+                return tool_error!("Missing required argument: table")
             }
         };
         if let Err(e) = validate_identifier(&table, "Table name") {
@@ -72,16 +67,16 @@ impl SessionStore {
                 match elem.as_str() {
                     Some(s) if VALID.contains(&s) => {}
                     Some(s) => {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                        return tool_error!(
                             "include[{}]: unrecognized value '{}'. Valid values: indexes, foreign_keys, size",
                             i, s
-                        ))]));
+                        );
                     }
                     None => {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                        return tool_error!(
                             "include[{}]: expected a string, got {}",
                             i, elem
-                        ))]));
+                        );
                     }
                 }
             }
@@ -110,10 +105,7 @@ impl SessionStore {
             .await
         {
             Ok(info) => Ok(serialize_response(&info)),
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-                "Schema info error for '{}': {}",
-                table, e
-            ))])),
+            Err(e) => tool_error!("Schema info error for '{}': {}", table, e),
         }
     }
 
@@ -180,15 +172,72 @@ impl SessionStore {
                     "read_only": read_only,
                     "accessible_features": accessible_features,
                 });
-                Ok(serialize_response(&info))
+
+                // Add security warnings if any
+                let mut response = info;
+                let warnings = self.config.security.security_warnings();
+                if !warnings.is_empty() {
+                    response["security_warnings"] = json!(warnings);
+                }
+                Ok(serialize_response(&response))
             }
-            Ok(_) => Ok(CallToolResult::error(vec![Content::text(
-                "No response from server",
-            )])),
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-                "Server info error: {}",
-                e
-            ))])),
+            Ok(_) => tool_error!("No response from server"),
+            Err(e) => tool_error!("Server info error: {}", e),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Tool handler: mysql_list_tables
+    // ------------------------------------------------------------------
+    pub(crate) async fn handle_list_tables(
+        &self,
+        args: serde_json::Map<String, serde_json::Value>,
+    ) -> anyhow::Result<CallToolResult, rmcp::ErrorData> {
+        let database = args
+            .get("database")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        if let Some(ref db) = database {
+            if let Err(e) = validate_identifier(db, "Database name") {
+                return Ok(e);
+            }
+        }
+
+        let ctx = match self.resolve_session(&args).await {
+            Ok(c) => c,
+            Err(e) => return Ok(e),
+        };
+
+        // Determine which database to query
+        let target_db = database.as_deref().or(ctx.database.as_deref());
+        if target_db.is_none() {
+            return tool_error!(
+                "No database specified and no default database for this session"
+            );
+        }
+
+        let rows = sqlx::query(
+            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME",
+        )
+        .bind(target_db.unwrap())
+        .fetch_all(&ctx.pool)
+        .await;
+
+        match rows {
+            Ok(rows) => {
+                use sqlx::Row;
+                let tables: Vec<String> = rows
+                    .iter()
+                    .filter_map(|row| row.try_get("TABLE_NAME").ok())
+                    .collect();
+                let output = json!({
+                    "tables": tables,
+                    "database": target_db.unwrap(),
+                });
+                Ok(serialize_response(&output))
+            }
+            Err(e) => tool_error!("Failed to list tables: {}", e),
         }
     }
 
@@ -202,9 +251,7 @@ impl SessionStore {
         let sql = match args.get("sql").and_then(|v| v.as_str()) {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => {
-                return Ok(CallToolResult::error(vec![Content::text(
-                    "Missing required argument: sql",
-                )]))
+                return tool_error!("Missing required argument: sql")
             }
         };
         if let Err(e) = check_sql_length(&sql) {
@@ -213,17 +260,14 @@ impl SessionStore {
         let parsed = match crate::sql_parser::parse_sql(&sql) {
             Ok(p) => p,
             Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "SQL parse error: {}",
-                    e
-                ))]));
+                return tool_error!("SQL parse error: {}", e);
             }
         };
         if parsed.statement_type != crate::sql_parser::StatementType::Select {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return tool_error!(
                 "mysql_explain_plan only supports SELECT statements, got: {}",
                 parsed.statement_type.name()
-            ))]));
+            );
         }
 
         let ctx = match self.resolve_session(&args).await {
@@ -246,10 +290,7 @@ impl SessionStore {
                 });
                 Ok(serialize_response(&output))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-                "EXPLAIN failed: {}",
-                e
-            ))])),
+            Err(e) => tool_error!("EXPLAIN failed: {}", e),
         }
     }
 
@@ -263,15 +304,13 @@ impl SessionStore {
         let sql = match args.get("sql").and_then(|v| v.as_str()) {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => {
-                return Ok(CallToolResult::error(vec![Content::text(
-                    "Missing required argument: sql",
-                )]))
+                return tool_error!("Missing required argument: sql")
             }
         };
         if sql.contains('\0') {
-            return Ok(CallToolResult::error(vec![Content::text(
-                "SQL contains NUL bytes, which are not valid in SQL statements",
-            )]));
+            return tool_error!(
+                "SQL contains NUL bytes, which are not valid in SQL statements"
+            );
         }
         if let Err(e) = check_sql_length(&sql) {
             return Ok(e);
@@ -292,9 +331,9 @@ impl SessionStore {
             Ok(c) => c,
             Err(e) => return Ok(e),
         };
-        let query_pool = ctx.pool;
-        let query_introspector = ctx.schema;
-        let session_db = ctx.database;
+        let query_pool = ctx.pool.clone();
+        let query_introspector = ctx.schema.clone();
+        let session_db = ctx.database.clone();
 
         // Parse and check permissions
         let parsed = match crate::sql_parser::parse_sql(&sql) {
@@ -307,12 +346,12 @@ impl SessionStore {
                 while preview_end > 0 && !sql.is_char_boundary(preview_end) {
                     preview_end -= 1;
                 }
-                return Ok(CallToolResult::error(vec![Content::text(format!(
+                return tool_error!(
                     "SQL parse error: {}. Query: {}{}",
                     e,
                     &sql[..preview_end],
                     if cut { "..." } else { "" }
-                ))]));
+                );
             }
         };
 
@@ -326,16 +365,16 @@ impl SessionStore {
             // short category name, so bypass the generic wrapper which would produce
             // "this operation operation denied ... Set MYSQL_ALLOW_this operation ...".
             if perm_type == "this operation" {
-                return Ok(CallToolResult::error(vec![Content::text(e.to_string())]));
+                return tool_error!("{}", e);
             }
             let schema_hint = parsed
                 .target_schema
                 .as_deref()
                 .unwrap_or("(default database)");
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return tool_error!(
                 "{} operation denied on '{}': {}. Set MYSQL_ALLOW_{} env var to enable.",
                 perm_type, schema_hint, e, perm_type
-            ))]));
+            );
         }
 
         if parsed.statement_type.is_read_only() {
@@ -348,6 +387,8 @@ impl SessionStore {
                 &effective_hints,
                 self.config.pool.slow_query_threshold_ms,
                 self.config.pool.query_timeout_ms,
+                self.config.pool.retry_attempts,
+                self.config.pool.max_result_memory_mb,
             )
             .await
             {
@@ -407,18 +448,21 @@ impl SessionStore {
                     if !suggestions.is_empty() {
                         output["suggestions"] = json!(suggestions);
                     }
+                    // Add security warnings if any
+                    let warnings = self.config.security.security_warnings();
+                    if !warnings.is_empty() {
+                        output["security_warnings"] = json!(warnings);
+                    }
                     Ok(serialize_response(&output))
                 }
-                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Query error: {}",
-                    e
-                ))])),
+                Err(e) => tool_error!("Query error: {}", e),
             }
         } else if parsed.statement_type.is_ddl() {
             match crate::query::write::execute_ddl_query(
                 &query_pool,
                 &sql,
                 self.config.pool.query_timeout_ms,
+                self.config.pool.retry_attempts,
             )
             .await
             {
@@ -439,10 +483,7 @@ impl SessionStore {
                     result.parse_warnings = crate::sql_parser::parse_write_warnings(&parsed);
                     Ok(serialize_response(&write_result_content(&result)))
                 }
-                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Query error: {}",
-                    e
-                ))])),
+                Err(e) => tool_error!("Query error: {}", e),
             }
         } else {
             match crate::query::write::execute_write_query(
@@ -450,14 +491,12 @@ impl SessionStore {
                 &sql,
                 &parsed,
                 self.config.pool.query_timeout_ms,
+                self.config.pool.retry_attempts,
             )
             .await
             {
                 Ok(result) => Ok(serialize_response(&write_result_content(&result))),
-                Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-                    "Query error: {}",
-                    e
-                ))])),
+                Err(e) => tool_error!("Query error: {}", e),
             }
         }
     }

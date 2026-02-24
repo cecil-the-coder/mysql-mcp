@@ -25,15 +25,25 @@ pub(crate) struct SchemaCache {
     pub(crate) columns_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<ColumnInfo>>>>>,
     pub(crate) indexed_columns_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<String>>>>>,
     pub(crate) composite_indexes_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<IndexDef>>>>>,
+    /// Tracks in-flight fetches per cache key to coalesce concurrent requests.
+    /// When a fetch is in progress, the Mutex<()> is held locked. Waiters can
+    /// await on it; when the fetch completes, the mutex is unlocked and the
+    /// entry is removed.
+    pub(crate) in_flight_fetch: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
 /// Generic TTL cache helper. Returns a cached entry if still fresh; otherwise
 /// fetches synchronously, stores the result, and returns it.
 /// When `cache_ttl == Duration::ZERO`, always re-fetches (cache disabled).
+///
+/// Implements request coalescing: if multiple concurrent requests arrive for the
+/// same expired/missing cache key, only one will perform the fetch while others
+/// wait and then read the freshly populated cache.
 pub(crate) async fn get_cached_or_refresh<T, F, Fut>(
     cache: Arc<Mutex<HashMap<String, CacheEntry<T>>>>,
     cache_key: String,
     cache_ttl: Duration,
+    in_flight: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     fetch_fn: F,
 ) -> Result<T>
 where
@@ -41,6 +51,7 @@ where
     F: Fn() -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<T>> + Send + 'static,
 {
+    // Fast path: check cache under lock
     {
         let cache_guard = cache.lock().await;
         if let Some(entry) = cache_guard.get(&cache_key) {
@@ -50,19 +61,94 @@ where
         }
     }
 
-    let data = fetch_fn().await?;
-    if cache_ttl > Duration::ZERO {
-        let fetched_at = Instant::now();
-        let mut cache_guard = cache.lock().await;
-        cache_guard.insert(
-            cache_key,
-            CacheEntry {
-                data: data.clone(),
-                fetched_at,
-            },
-        );
+    // Slow path: need to fetch. Check if another request is already fetching.
+    let fetch_permit = {
+        let mut in_flight_guard = in_flight.lock().await;
+        if let Some(existing) = in_flight_guard.get(&cache_key) {
+            // Another request is already fetching this key. Clone the permit
+            // so we can wait on it after releasing the in_flight lock.
+            Arc::clone(existing)
+        } else {
+            // We are the first to fetch. Create a new permit (locked state).
+            let permit = Arc::new(Mutex::new(()));
+            in_flight_guard.insert(cache_key.clone(), Arc::clone(&permit));
+            permit
+        }
+    };
+
+    // Lock the permit. If we created it, we get it immediately and proceed to fetch.
+    // If another request created it, we wait until they release it (after their fetch completes).
+    let _permit_guard = fetch_permit.lock().await;
+
+    // After acquiring the permit, re-check the cache in case the previous fetcher
+    // already populated it while we were waiting.
+    {
+        let cache_guard = cache.lock().await;
+        if let Some(entry) = cache_guard.get(&cache_key) {
+            if entry.fetched_at.elapsed() < cache_ttl {
+                // Another request populated the cache. Clean up in_flight and return.
+                let mut in_flight_guard = in_flight.lock().await;
+                in_flight_guard.remove(&cache_key);
+                return Ok(entry.data.clone());
+            }
+        }
     }
-    Ok(data)
+
+    // We need to fetch. Check again if we're the one who should do it
+    // (in case multiple waiters all got released simultaneously).
+    let should_fetch = {
+        let in_flight_guard = in_flight.lock().await;
+        in_flight_guard.get(&cache_key).map(|p| Arc::ptr_eq(p, &fetch_permit)).unwrap_or(false)
+    };
+
+    if should_fetch {
+        let result = fetch_fn().await;
+        // Clean up in_flight entry first (before storing to cache, to avoid
+        // a race where a new request sees stale in_flight data).
+        {
+            let mut in_flight_guard = in_flight.lock().await;
+            in_flight_guard.remove(&cache_key);
+        }
+        // Store result in cache if successful and caching is enabled.
+        if let Ok(ref data) = result {
+            if cache_ttl > Duration::ZERO {
+                let fetched_at = Instant::now();
+                let mut cache_guard = cache.lock().await;
+                cache_guard.insert(
+                    cache_key,
+                    CacheEntry {
+                        data: data.clone(),
+                        fetched_at,
+                    },
+                );
+            }
+        }
+        result
+    } else {
+        // Another waiter became the fetcher. Re-check the cache.
+        let cache_guard = cache.lock().await;
+        if let Some(entry) = cache_guard.get(&cache_key) {
+            if entry.fetched_at.elapsed() < cache_ttl {
+                return Ok(entry.data.clone());
+            }
+        }
+        // Cache still stale or missing - this shouldn't happen in normal operation,
+        // but fall back to fetching ourselves to avoid deadlock.
+        drop(cache_guard);
+        let data = fetch_fn().await?;
+        if cache_ttl > Duration::ZERO {
+            let fetched_at = Instant::now();
+            let mut cache_guard = cache.lock().await;
+            cache_guard.insert(
+                cache_key,
+                CacheEntry {
+                    data: data.clone(),
+                    fetched_at,
+                },
+            );
+        }
+        Ok(data)
+    }
 }
 
 pub struct SchemaIntrospector {
@@ -87,6 +173,7 @@ impl SchemaIntrospector {
                 columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 indexed_columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 composite_indexes_cache: Arc::new(Mutex::new(HashMap::new())),
+                in_flight_fetch: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
     }
@@ -100,6 +187,7 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.tables_cache),
             cache_key,
             self.inner.cache_ttl,
+            Arc::clone(&self.inner.in_flight_fetch),
             move || {
                 let pool = Arc::clone(&pool);
                 let db = owned_database.clone();
@@ -126,6 +214,7 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.indexed_columns_cache),
             cache_key,
             self.inner.cache_ttl,
+            Arc::clone(&self.inner.in_flight_fetch),
             move || {
                 let pool = Arc::clone(&pool);
                 let t = owned_table.clone();
@@ -155,6 +244,7 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.composite_indexes_cache),
             cache_key,
             self.inner.cache_ttl,
+            Arc::clone(&self.inner.in_flight_fetch),
             move || {
                 let pool = Arc::clone(&pool);
                 let t = owned_table.clone();
@@ -179,6 +269,7 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.columns_cache),
             cache_key,
             self.inner.cache_ttl,
+            Arc::clone(&self.inner.in_flight_fetch),
             move || {
                 let pool = Arc::clone(&pool);
                 let t = owned_table.clone();
