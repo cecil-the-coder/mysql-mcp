@@ -227,7 +227,7 @@ fn column_to_json(
                         // Signed BIGINT values whose absolute value exceeds 2^53 cannot be
                         // represented exactly as a JSON number by some consumers (e.g. JS).
                         // Serialize as a JSON string, consistent with BIGINT UNSIGNED handling.
-                        if n > 9_007_199_254_740_992i64 || n < -9_007_199_254_740_992i64 {
+                        if !(-9_007_199_254_740_992i64..=9_007_199_254_740_992i64).contains(&n) {
                             Value::String(n.to_string())
                         } else {
                             Value::Number(n.into())
