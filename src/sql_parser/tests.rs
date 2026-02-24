@@ -389,7 +389,7 @@ fn test_parse_warnings_no_reparse() {
         parsed.warnings
     );
     assert!(
-        parsed.warnings.iter().any(|w| w.contains("No LIMIT")),
+        parsed.warnings.iter().any(|w| w.contains("no LIMIT")),
         "Expected no-LIMIT warning, got: {:?}",
         parsed.warnings
     );
