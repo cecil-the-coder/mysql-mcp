@@ -273,14 +273,16 @@ impl SessionStore {
             Ok(p) => p,
             Err(e) => {
                 let cut = sql.len() > SQL_ERROR_PREVIEW_LEN;
+                // Walk back from the byte limit to a valid UTF-8 char boundary so
+                // that slicing doesn't panic on multi-byte characters.
+                let mut preview_end = SQL_ERROR_PREVIEW_LEN.min(sql.len());
+                while preview_end > 0 && !sql.is_char_boundary(preview_end) {
+                    preview_end -= 1;
+                }
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "SQL parse error: {}. Query: {}{}",
                     e,
-                    if cut {
-                        &sql[..SQL_ERROR_PREVIEW_LEN]
-                    } else {
-                        &sql
-                    },
+                    &sql[..preview_end],
                     if cut { "..." } else { "" }
                 ))]));
             }

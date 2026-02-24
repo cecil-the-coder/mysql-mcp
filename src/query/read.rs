@@ -153,7 +153,12 @@ pub async fn execute_read_query(
             }
             Err(e) => {
                 let msg = e.to_string();
-                tracing::warn!(sql = %&sql[..sql.len().min(200)], error = %msg, "EXPLAIN failed; continuing without plan");
+                // Walk back to a valid UTF-8 char boundary before slicing.
+                let mut preview_end = sql.len().min(200);
+                while preview_end > 0 && !sql.is_char_boundary(preview_end) {
+                    preview_end -= 1;
+                }
+                tracing::warn!(sql = %&sql[..preview_end], error = %msg, "EXPLAIN failed; continuing without plan");
                 (None, Some(msg))
             }
         }
@@ -217,7 +222,18 @@ fn column_to_json(
         }
         "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "BIGINT" => {
             if let Ok(v) = row.try_get::<Option<i64>, _>(idx) {
-                return v.map(|n| Value::Number(n.into())).unwrap_or(Value::Null);
+                return v
+                    .map(|n| {
+                        // Signed BIGINT values whose absolute value exceeds 2^53 cannot be
+                        // represented exactly as a JSON number by some consumers (e.g. JS).
+                        // Serialize as a JSON string, consistent with BIGINT UNSIGNED handling.
+                        if n > 9_007_199_254_740_992i64 || n < -9_007_199_254_740_992i64 {
+                            Value::String(n.to_string())
+                        } else {
+                            Value::Number(n.into())
+                        }
+                    })
+                    .unwrap_or(Value::Null);
             }
         }
         "TINYINT UNSIGNED" | "SMALLINT UNSIGNED" | "MEDIUMINT UNSIGNED" | "INT UNSIGNED" => {

@@ -90,19 +90,20 @@ pub fn check_permission(
             Ok(())
         }
         StatementType::Other(name) => {
-            let hint = if name.contains("Call") {
+            // Use exact equality (or starts_with for families) so that future sqlparser
+            // variants whose names happen to contain these substrings don't produce
+            // misleading error messages. "Load" uses starts_with to cover both
+            // Statement::Load and Statement::LoadData.
+            let hint = if name == "Call" {
                 "CALL (stored procedures) is not supported by this server.".to_string()
-            } else if name.contains("Load") {
+            } else if name.starts_with("Load") {
                 "LOAD DATA is not supported. Use INSERT statements to load data.".to_string()
-            } else if name.contains("LockTables") || name.contains("UnlockTables") {
+            } else if name == "LockTables" || name == "UnlockTables" {
                 "LOCK/UNLOCK TABLES is not supported.".to_string()
-            } else if name.contains("Prepare")
-                || name.contains("Execute")
-                || name.contains("Deallocate")
-            {
+            } else if name == "Prepare" || name == "Execute" || name == "Deallocate" {
                 "The prepared-statement protocol (PREPARE/EXECUTE/DEALLOCATE) is not supported. Send the final SQL directly."
                     .to_string()
-            } else if name.contains("Do") {
+            } else if name == "Do" {
                 "DO is not supported. Use SELECT instead (e.g. SELECT SLEEP(1)).".to_string()
             } else {
                 format!("Unsupported statement type: {name}. Supported types: SELECT, SHOW, EXPLAIN, INSERT, UPDATE, DELETE, CREATE (TABLE/DATABASE), ALTER, DROP, TRUNCATE, USE. Note: CREATE INDEX, CREATE VIEW, and similar variants are not supported.")
