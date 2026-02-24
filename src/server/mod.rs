@@ -38,6 +38,10 @@ struct DnsCacheEntry {
     reason: Option<String>,
 }
 
+/// Maximum number of entries in the DNS cache.
+/// This prevents unbounded memory growth from unique hostname lookups.
+const DNS_CACHE_MAX_ENTRIES: usize = 1000;
+
 /// Global DNS cache protected by a mutex.
 /// Key: lowercase hostname. Value: resolution result with TTL.
 static DNS_CACHE: std::sync::OnceLock<Arc<Mutex<HashMap<String, DnsCacheEntry>>>> =
@@ -221,6 +225,12 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
     {
         let cache_arc = get_dns_cache();
         let mut cache = cache_arc.lock().await;
+        // Evict oldest entries if cache is full (HashMap has no order, so remove arbitrary entry)
+        while cache.len() >= DNS_CACHE_MAX_ENTRIES {
+            if let Some(key) = cache.keys().next().cloned() {
+                cache.remove(&key);
+            }
+        }
         cache.insert(
             hostname,
             DnsCacheEntry {

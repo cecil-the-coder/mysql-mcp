@@ -1,4 +1,4 @@
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::CallToolResult;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -525,10 +525,10 @@ impl SessionStore {
             // Explicitly close the pool so server-side connections are released
             // immediately rather than waiting for sqlx's Drop impl to handle them.
             session.pool.close().await;
-            Ok(CallToolResult::success(vec![Content::text(format!(
-                "Session '{}' closed",
-                name
-            ))]))
+            Ok(serialize_response(&json!({
+                "success": true,
+                "message": format!("Session '{}' closed", name)
+            })))
         } else {
             tool_error!("Session '{}' not found", name)
         }

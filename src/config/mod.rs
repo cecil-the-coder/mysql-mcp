@@ -252,8 +252,11 @@ impl Config {
         }
 
         // Port must be in valid range
-        if self.connection.port == 0 {
-            anyhow::bail!("connection.port must be between 1 and 65535 (got: 0)");
+        if !(1..=65535).contains(&self.connection.port) {
+            anyhow::bail!(
+                "connection.port must be between 1 and 65535 (got: {})",
+                self.connection.port
+            );
         }
 
         // connect_timeout_ms=0 means immediate timeout — connections always fail

@@ -95,18 +95,18 @@ pub fn check_permission(
             // misleading error messages. "Load" uses starts_with to cover both
             // Statement::Load and Statement::LoadData.
             let hint = if name == "Call" {
-                "CALL (stored procedures) is not supported by this server.".to_string()
+                "CALL (stored procedures) is not supported by this server".to_string()
             } else if name.starts_with("Load") {
-                "LOAD DATA is not supported. Use INSERT statements to load data.".to_string()
+                "LOAD DATA is not supported. Use INSERT statements to load data".to_string()
             } else if name == "LockTables" || name == "UnlockTables" {
-                "LOCK/UNLOCK TABLES is not supported.".to_string()
+                "LOCK/UNLOCK TABLES is not supported".to_string()
             } else if name == "Prepare" || name == "Execute" || name == "Deallocate" {
-                "The prepared-statement protocol (PREPARE/EXECUTE/DEALLOCATE) is not supported. Send the final SQL directly."
+                "The prepared-statement protocol (PREPARE/EXECUTE/DEALLOCATE) is not supported. Send the final SQL directly"
                     .to_string()
             } else if name == "Do" {
-                "DO is not supported. Use SELECT instead (e.g. SELECT SLEEP(1)).".to_string()
+                "DO is not supported. Use SELECT instead (e.g. SELECT SLEEP(1))".to_string()
             } else {
-                format!("Unsupported statement type: {name}. Supported types: SELECT, SHOW, EXPLAIN, INSERT, UPDATE, DELETE, CREATE (TABLE/DATABASE), ALTER, DROP, TRUNCATE, USE, SET. Note: CREATE INDEX, CREATE VIEW, and similar variants are not supported.")
+                format!("Unsupported statement type: {name}. Supported types: SELECT, SHOW, EXPLAIN, INSERT, UPDATE, DELETE, CREATE (TABLE/DATABASE), ALTER, DROP, TRUNCATE, USE, SET. Note: CREATE INDEX, CREATE VIEW, and similar variants are not supported")
             };
             bail!("{}", hint);
         }
@@ -122,7 +122,7 @@ fn check_multi_db_write(config: &Config, target_schema: Option<&str>) -> Result<
     // Multi-DB mode: check MYSQL_MULTI_DB_WRITE_MODE
     if !config.security.multi_db_write_mode {
         bail!(
-            "Write operations on schema '{}' are not allowed in multi-database mode. Set MYSQL_MULTI_DB_WRITE_MODE=true to enable writes.",
+            "Write operations on schema '{}' are not allowed in multi-database mode. Set MYSQL_MULTI_DB_WRITE_MODE=true to enable writes",
             target_schema.unwrap_or("<unknown>")
         );
     }
@@ -139,7 +139,7 @@ fn check_write_op(
 ) -> Result<()> {
     if !allowed {
         bail!(
-            "{} operations are not allowed. Set {}=true to enable.",
+            "{} operations are not allowed. Set {}=true to enable",
             op,
             env_var
         );

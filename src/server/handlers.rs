@@ -243,6 +243,9 @@ impl SessionStore {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => return tool_error!("Missing required argument: sql"),
         };
+        if sql.contains('\0') {
+            return tool_error!("SQL contains NUL bytes, which are not valid in SQL statements");
+        }
         if let Err(e) = check_sql_length(&sql) {
             return Ok(e);
         }

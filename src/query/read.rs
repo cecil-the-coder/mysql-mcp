@@ -314,8 +314,7 @@ fn column_to_json(
                     .map(Value::Number)
                     .unwrap_or_else(|| {
                         warnings.push(format!(
-                            "Column '{}' contains a non-finite float value (NaN or Infinity); \
-                                 serialized as null",
+                            "Column '{}' contains NaN/Infinity value converted to NULL",
                             col.name()
                         ));
                         Value::Null
@@ -443,6 +442,10 @@ fn column_to_json(
             }),
         };
     }
+    warnings.push(format!(
+        "Column '{}' could not be decoded as text or binary, returning NULL",
+        col.name()
+    ));
     Value::Null
 }
 
