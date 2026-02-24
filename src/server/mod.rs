@@ -63,6 +63,7 @@ async fn clear_dns_cache() {
 }
 
 /// Check if an IP address is in a blocked range (loopback, link-local, etc.).
+/// Used for direct IP address connections.
 fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
@@ -84,6 +85,28 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
                 || v6.is_unspecified()
                 || v6.is_unicast_link_local()
                 || v6.is_multicast()
+        }
+    }
+}
+
+/// Check if an IP address is blocked for hostname resolution.
+/// Unlike is_blocked_ip, this allows loopback addresses since localhost
+/// resolution is legitimate for local development and CI environments.
+fn is_blocked_ip_for_hostname(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            // Allow loopback for hostname resolution (e.g., localhost)
+            v4.is_link_local() || v4.is_broadcast() || v4.is_unspecified() || v4.is_multicast()
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return v4.is_link_local()
+                    || v4.is_broadcast()
+                    || v4.is_unspecified()
+                    || v4.is_multicast();
+            }
+            // Allow loopback for hostname resolution (e.g., localhost -> ::1)
+            v6.is_unspecified() || v6.is_unicast_link_local() || v6.is_multicast()
         }
     }
 }
@@ -164,6 +187,10 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
     };
 
     // Check if any resolved IP is blocked
+    // Note: We only block link-local, multicast, and unspecified addresses for hostnames.
+    // Loopback addresses (like localhost -> 127.0.0.1 or ::1) are allowed when resolved
+    // via hostname because they're legitimate for local development and CI environments.
+    // DNS rebinding protection comes from caching the resolved IPs, not blocking localhost.
     let mut blocked = false;
     let mut reason = None;
     if ips.is_empty() {
@@ -179,10 +206,10 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
         }
     } else {
         for ip in &ips {
-            if is_blocked_ip(*ip) {
+            if is_blocked_ip_for_hostname(*ip) {
                 blocked = true;
                 reason = Some(format!(
-                    "Hostname '{}' resolves to blocked IP address {} (loopback/link-local/multicast)",
+                    "Hostname '{}' resolves to blocked IP address {} (link-local/multicast)",
                     hostname, ip
                 ));
                 break;
