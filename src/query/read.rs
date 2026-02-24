@@ -11,9 +11,6 @@ use super::with_timeout;
 /// of raw bytes (→ ~1 MB hex string) to prevent OOM on unexpectedly large BLOBs.
 const MAX_BINARY_DISPLAY_BYTES: usize = 512 * 1024;
 
-/// Default maximum result memory in MB (0 = unlimited).
-const DEFAULT_MAX_RESULT_MEMORY_MB: u32 = 256;
-
 /// Estimate the memory size of a JSON value in bytes.
 fn estimate_value_size(v: &Value) -> usize {
     match v {

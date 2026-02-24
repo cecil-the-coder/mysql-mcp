@@ -212,6 +212,7 @@ mod perf_write_tests {
                         0,
                         0,
                         0,
+                        0,
                     )
                     .await
                     .unwrap();
@@ -270,6 +271,7 @@ mod perf_write_tests {
                     0,
                     0,
                     0,
+                    0,
                 )
                 .await
                 .unwrap();
@@ -288,6 +290,7 @@ mod perf_write_tests {
                 true,
                 0,
                 "none",
+                0,
                 0,
                 0,
                 0,
@@ -310,6 +313,7 @@ mod perf_write_tests {
                 false,
                 0,
                 "none",
+                0,
                 0,
                 0,
                 0,
@@ -414,6 +418,7 @@ mod perf_write_tests {
             0,
             0,
             0,
+            0,
         )
         .await
         .unwrap();
@@ -426,6 +431,7 @@ mod perf_write_tests {
             false,
             0,
             "none",
+            0,
             0,
             0,
             0,
