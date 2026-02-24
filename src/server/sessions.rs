@@ -406,33 +406,39 @@ impl SessionStore {
             "database": &database,
             "ssh_host": &ssh_host,
         });
-        let mut sessions = self.sessions.lock().await;
-        if sessions.len() >= self.config.security.max_sessions as usize {
-            if let Some(t) = tunnel {
-                if let Err(e) = t.close().await {
-                    tracing::warn!("SSH tunnel close error on session limit rejection: {}", e);
+        {
+            let sessions = self.sessions.lock().await;
+            if sessions.len() >= self.config.security.max_sessions as usize {
+                // Drop the lock before closing resources — tunnel.close() or pool.close()
+                // could be slow, and holding the lock would block all session operations.
+                drop(sessions);
+                if let Some(t) = tunnel {
+                    if let Err(e) = t.close().await {
+                        tracing::warn!("SSH tunnel close error on session limit rejection: {}", e);
+                    }
                 }
+                pool.close().await;
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Maximum session limit ({}) reached. Disconnect an existing session first.",
+                    self.config.security.max_sessions
+                ))]));
             }
-            pool.close().await;
-            return Ok(CallToolResult::error(vec![Content::text(format!(
-                "Maximum session limit ({}) reached. Disconnect an existing session first.",
-                self.config.security.max_sessions
-            ))]));
-        }
-        if sessions.contains_key(&name) {
-            if let Some(t) = tunnel {
-                if let Err(e) = t.close().await {
-                    tracing::warn!(
-                        "SSH tunnel close error on duplicate session rejection: {}",
-                        e
-                    );
+            if sessions.contains_key(&name) {
+                drop(sessions);
+                if let Some(t) = tunnel {
+                    if let Err(e) = t.close().await {
+                        tracing::warn!(
+                            "SSH tunnel close error on duplicate session rejection: {}",
+                            e
+                        );
+                    }
                 }
+                pool.close().await;
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
+                    name
+                ))]));
             }
-            pool.close().await;
-            return Ok(CallToolResult::error(vec![Content::text(format!(
-                "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
-                name
-            ))]));
         }
         let session = Session {
             pool,
@@ -443,6 +449,24 @@ impl SessionStore {
             tunnel,
             ssh_host,
         };
+        // Re-acquire the lock to insert. A concurrent connect() could have raced
+        // us since we released the lock above; re-check before inserting.
+        let mut sessions = self.sessions.lock().await;
+        if sessions.len() >= self.config.security.max_sessions as usize
+            || sessions.contains_key(&name)
+        {
+            // Lost the race — clean up and report.
+            drop(sessions);
+            if let Some(t) = session.tunnel {
+                if let Err(e) = t.close().await {
+                    tracing::warn!("SSH tunnel close error on post-race cleanup: {}", e);
+                }
+            }
+            session.pool.close().await;
+            return Ok(CallToolResult::error(vec![Content::text(
+                "Session creation raced with another request. Please retry.",
+            )]));
+        }
         sessions.insert(name, session);
         Ok(serialize_response(&info))
     }
@@ -464,9 +488,12 @@ impl SessionStore {
                 "The default session cannot be closed",
             )]));
         }
-        let mut sessions = self.sessions.lock().await;
-        if let Some(session) = sessions.remove(name) {
-            // Clean up SSH tunnel if present
+        let removed = {
+            let mut sessions = self.sessions.lock().await;
+            sessions.remove(name)
+        };
+        if let Some(session) = removed {
+            // Clean up SSH tunnel if present (outside the lock — close() may be slow).
             if let Some(tunnel) = session.tunnel {
                 if let Err(e) = tunnel.close().await {
                     tracing::warn!("SSH tunnel close error on disconnect: {}", e);

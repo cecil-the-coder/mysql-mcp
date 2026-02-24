@@ -30,7 +30,8 @@ pub struct QueryResult {
 /// by the parser) when `force_readonly_transaction` is false.
 ///
 /// If `max_rows > 0` and the SQL does not already contain a LIMIT clause, a
-/// `LIMIT {max_rows}` is appended automatically and `QueryResult::capped` is set to `true`.
+/// `LIMIT {max_rows + 1}` is appended (one extra row to detect truncation) and
+/// `QueryResult::capped` is set to `true` when the result exceeds `max_rows`.
 #[allow(clippy::too_many_arguments)]
 pub async fn execute_read_query(
     pool: &MySqlPool,

@@ -231,14 +231,17 @@ impl SessionStore {
             Err(e) => return Ok(e),
         };
 
+        let explain_start = std::time::Instant::now();
         match crate::query::explain::run_explain(&ctx.pool, &sql).await {
             Ok(plan) => {
+                let elapsed = explain_start.elapsed().as_millis() as u64;
                 let output = json!({
                     "full_table_scan": plan.full_table_scan,
                     "index_used": plan.index_used,
                     "rows_examined_estimate": plan.rows_examined_estimate,
                     "extra_flags": plan.extra_flags,
                     "tier": plan.tier,
+                    "execution_time_ms": elapsed,
                     "note": "Execution plan only — query was not executed"
                 });
                 Ok(serialize_response(&output))

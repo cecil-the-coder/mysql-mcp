@@ -382,10 +382,20 @@ fn test_parse_warnings_no_reparse() {
     // Warnings are pre-computed by parse_sql() and stored in parsed.warnings —
     // verify that parse_sql populates the field correctly for a simple SELECT.
     let parsed = parse_sql("SELECT * FROM users").unwrap();
-    // SELECT * with no LIMIT and no WHERE triggers multiple warnings.
+    // SELECT * with no LIMIT and no WHERE triggers specific warnings.
     assert!(
-        !parsed.warnings.is_empty(),
-        "SELECT * FROM users with no LIMIT should produce warnings, got: {:?}",
+        parsed.warnings.iter().any(|w| w.contains("SELECT *")),
+        "Expected SELECT * warning, got: {:?}",
+        parsed.warnings
+    );
+    assert!(
+        parsed.warnings.iter().any(|w| w.contains("No LIMIT")),
+        "Expected no-LIMIT warning, got: {:?}",
+        parsed.warnings
+    );
+    assert!(
+        parsed.warnings.iter().any(|w| w.contains("No WHERE")),
+        "Expected no-WHERE warning, got: {:?}",
         parsed.warnings
     );
 }
