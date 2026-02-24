@@ -465,10 +465,7 @@ fn test_into_outfile_is_rejected() {
     // Core security check: SELECT INTO OUTFILE writes to the server filesystem and
     // must be blocked, regardless of the file path.
     let result = parse_sql("SELECT * FROM users INTO OUTFILE '/tmp/out.csv'");
-    assert!(
-        result.is_err(),
-        "SELECT INTO OUTFILE must be rejected"
-    );
+    assert!(result.is_err(), "SELECT INTO OUTFILE must be rejected");
     let msg = result.unwrap_err().to_string();
     assert!(
         msg.contains("OUTFILE") || msg.contains("not supported"),
@@ -479,10 +476,7 @@ fn test_into_outfile_is_rejected() {
 #[test]
 fn test_into_dumpfile_is_rejected() {
     let result = parse_sql("SELECT id FROM t INTO DUMPFILE '/tmp/dump.bin'");
-    assert!(
-        result.is_err(),
-        "SELECT INTO DUMPFILE must be rejected"
-    );
+    assert!(result.is_err(), "SELECT INTO DUMPFILE must be rejected");
 }
 
 #[test]

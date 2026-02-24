@@ -106,10 +106,7 @@ impl McpServer {
                     // Re-check: session may have been used since we collected the stale
                     // list (TOCTOU). If last_used has advanced past the cutoff, skip it.
                     let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(600);
-                    if map
-                        .get(&name)
-                        .is_some_and(|s| s.last_used > cutoff)
-                    {
+                    if map.get(&name).is_some_and(|s| s.last_used > cutoff) {
                         continue;
                     }
                     if let Some(session) = map.remove(&name) {

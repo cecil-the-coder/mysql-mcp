@@ -92,7 +92,11 @@ impl SessionStore {
                 let schema = session.introspector.clone();
                 let database = session.database.clone();
                 drop(map);
-                Ok(SessionContext { pool, schema, database })
+                Ok(SessionContext {
+                    pool,
+                    schema,
+                    database,
+                })
             }
             None => {
                 let msg = format!(
