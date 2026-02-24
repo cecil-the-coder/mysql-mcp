@@ -407,6 +407,7 @@ impl SessionStore {
             if let Some(t) = tunnel {
                 let _ = t.close().await;
             }
+            pool.close().await;
             return Ok(CallToolResult::error(vec![Content::text(format!(
                 "Maximum session limit ({}) reached. Disconnect an existing session first.",
                 self.config.security.max_sessions
@@ -416,6 +417,7 @@ impl SessionStore {
             if let Some(t) = tunnel {
                 let _ = t.close().await;
             }
+            pool.close().await;
             return Ok(CallToolResult::error(vec![Content::text(format!(
                 "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
                 name
