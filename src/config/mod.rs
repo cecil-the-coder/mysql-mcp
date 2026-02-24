@@ -201,6 +201,16 @@ impl Config {
             );
         }
 
+        // cache_ttl_secs=0 disables the schema cache (always re-fetches from information_schema).
+        // This is intentionally allowed but can cause heavy load on the DB.
+        if self.pool.cache_ttl_secs == 0 {
+            eprintln!(
+                "Warning: pool.cache_ttl_secs is 0 — schema cache is disabled and every \
+                 query will re-fetch column metadata from information_schema. \
+                 Set to a positive value (e.g. 60) to enable caching and reduce database load."
+            );
+        }
+
         // Port must be in valid range
         if self.connection.port == 0 {
             anyhow::bail!("connection.port must be between 1 and 65535 (got: 0)");
@@ -211,9 +221,16 @@ impl Config {
             anyhow::bail!("pool.connect_timeout_ms must be > 0 (got: 0 — connections would always time out immediately)");
         }
 
-        // pool.size must be at least 1
+        // pool.size must be between 1 and 1000
         if self.pool.size == 0 {
             anyhow::bail!("pool.size must be >= 1");
+        }
+        if self.pool.size > 1000 {
+            anyhow::bail!(
+                "pool.size is set to {} — this is unreasonably large. \
+                 Use a value between 1 and 1000 (typical deployments use 5–50).",
+                self.pool.size
+            );
         }
 
         // max_rows must be at least 1
@@ -275,8 +292,27 @@ impl Config {
                 }
             }
             if let Some(ref khf) = ssh.known_hosts_file {
-                if !std::path::Path::new(khf).exists() {
-                    anyhow::bail!("ssh.known_hosts_file path does not exist: {}", khf);
+                let khf_path = std::path::Path::new(khf);
+                if ssh.known_hosts_check == "strict" {
+                    // Strict mode requires the file to exist — SSH will not connect
+                    // to a host that isn't already listed there.
+                    if !khf_path.exists() {
+                        anyhow::bail!(
+                            "ssh.known_hosts_file path does not exist: {} \
+                            (required when known_hosts_check=\"strict\")",
+                            khf
+                        );
+                    }
+                } else {
+                    // accept-new / insecure: SSH creates the file on first connect.
+                    // Only require the parent directory to exist.
+                    let parent = khf_path.parent().unwrap_or(std::path::Path::new("."));
+                    if !parent.exists() {
+                        anyhow::bail!(
+                            "ssh.known_hosts_file parent directory does not exist: {}",
+                            parent.display()
+                        );
+                    }
                 }
             }
         }
