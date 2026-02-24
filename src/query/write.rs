@@ -77,7 +77,8 @@ pub async fn execute_write_query(
 /// Execute a DDL statement (CREATE, ALTER, DROP, TRUNCATE).
 /// DDL auto-commits in MySQL, so we don't wrap in explicit transaction.
 ///
-/// DDL statements produce no parse warnings, so no `ParsedStatement` is needed.
+/// Note: TRUNCATE produces a safety warning; callers should call `parse_write_warnings`
+/// on the parsed statement and include the result in the response.
 pub async fn execute_ddl_query(
     pool: &MySqlPool,
     sql: &str,

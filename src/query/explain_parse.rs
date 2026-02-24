@@ -13,6 +13,7 @@ struct PlanStats {
     index_name: Option<String>,
     total_estimated_rows: f64,
     has_sort: bool,
+    has_temporary: bool,
 }
 
 /// Recursively walk a query_plan node (MySQL 8.0 EXPLAIN FORMAT=JSON schema v2).
@@ -40,12 +41,25 @@ fn walk_plan_node(node: &Value, stats: &mut PlanStats) {
             stats.has_sort = true;
             // Rows for sort come from children; don't double-count here.
         }
+        "aggregate" | "hash" => {
+            // Aggregate / hash join nodes create a temporary table internally.
+            stats.has_temporary = true;
+            // Rows come from children; don't double-count here.
+        }
         "filter" => {
             // Filter node wraps child scan; rows come from the child.
         }
         "rows_fetched_before_execution" => {
             // Constant / const-optimized query — rows resolved at parse time.
             stats.total_estimated_rows += node["estimated_rows"].as_f64().unwrap_or(1.0);
+        }
+        // Index range/lookup access types — accumulate row counts for tier classification.
+        "range" | "ref" | "eq_ref" | "ref_or_null" | "index_merge" | "unique_subquery"
+        | "index_subquery" => {
+            if stats.index_name.is_none() {
+                stats.index_name = node["index_name"].as_str().map(str::to_string);
+            }
+            stats.total_estimated_rows += node["estimated_rows"].as_f64().unwrap_or(0.0);
         }
         _ => {}
     }
@@ -71,11 +85,13 @@ fn make_result(stats: PlanStats) -> Result<ExplainResult> {
         );
         0
     };
-    let extra_flags = if stats.has_sort {
-        vec!["Using filesort"]
-    } else {
-        vec![]
-    };
+    let mut extra_flags = vec![];
+    if stats.has_sort {
+        extra_flags.push("Using filesort");
+    }
+    if stats.has_temporary {
+        extra_flags.push("Using temporary");
+    }
 
     // Tier is determined by estimated row count alone. The full_table_scan flag is
     // surfaced separately in the output; even a full scan of a 5-row table is fast.
@@ -152,6 +168,9 @@ fn walk_v1_table(table: &Value, stats: &mut PlanStats) {
     if table["using_filesort"].as_bool().unwrap_or(false) {
         stats.has_sort = true;
     }
+    if table["using_temporary"].as_bool().unwrap_or(false) {
+        stats.has_temporary = true;
+    }
     // Derived / materialized subquery inside a table node.
     // The outer table's `rows` is the size of the already-materialized result,
     // not real scan work.  Only count rows from inside the subquery to avoid
@@ -183,8 +202,11 @@ fn walk_v1_block(node: &Value, stats: &mut PlanStats) {
         }
         walk_v1_block(ordering, stats);
     }
-    // GROUP BY
+    // GROUP BY — using_temporary means a temp table was created for aggregation
     if let Some(grouping) = node.get("grouping_operation") {
+        if grouping["using_temporary"].as_bool().unwrap_or(false) {
+            stats.has_temporary = true;
+        }
         walk_v1_block(grouping, stats);
     }
     // UNION
@@ -494,6 +516,52 @@ mod tests {
             "filesort flagged"
         );
         assert_eq!(result.rows_examined_estimate, 3);
+    }
+
+    #[test]
+    fn test_v1_groupby_with_temporary() {
+        // GROUP BY that creates a temporary table should surface "Using temporary"
+        let v = make_v1(json!({
+            "select_id": 1,
+            "grouping_operation": {
+                "using_temporary": true,
+                "using_filesort": false,
+                "table": {
+                    "table_name": "t",
+                    "access_type": "ALL",
+                    "rows_examined_per_scan": 200
+                }
+            }
+        }));
+        let result = parse(&v).unwrap();
+        assert!(
+            result.extra_flags.iter().any(|&s| s == "Using temporary"),
+            "grouping_operation using_temporary should be flagged, got: {:?}",
+            result.extra_flags
+        );
+        assert!(
+            !result.extra_flags.iter().any(|&s| s == "Using filesort"),
+            "using_filesort is false so should not appear"
+        );
+    }
+
+    #[test]
+    fn test_v1_table_using_temporary() {
+        // Table-level using_temporary (less common but valid)
+        let v = make_v1(json!({
+            "select_id": 1,
+            "table": {
+                "table_name": "t",
+                "access_type": "ALL",
+                "rows_examined_per_scan": 50,
+                "using_temporary": true
+            }
+        }));
+        let result = parse(&v).unwrap();
+        assert!(
+            result.extra_flags.iter().any(|&s| s == "Using temporary"),
+            "table-level using_temporary should be flagged"
+        );
     }
 
     #[test]

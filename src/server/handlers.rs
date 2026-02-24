@@ -414,7 +414,7 @@ impl SessionStore {
             )
             .await
             {
-                Ok(result) => {
+                Ok(mut result) => {
                     // Invalidate the schema cache so subsequent mysql_schema_info /
                     // list_resources calls reflect the DDL change immediately.
                     if let Some(tname) = &parsed.target_table {
@@ -425,6 +425,10 @@ impl SessionStore {
                         query_introspector.invalidate_all().await;
                     }
 
+                    // TRUNCATE generates a "deletes ALL rows" safety warning.
+                    // execute_ddl_query doesn't accept a ParsedStatement, so we
+                    // propagate warnings here at the handler level.
+                    result.parse_warnings = crate::sql_parser::parse_write_warnings(&parsed);
                     Ok(serialize_response(&write_result_content(&result)))
                 }
                 Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
