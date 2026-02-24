@@ -25,7 +25,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
     let (statement_type, target_schema, target_table) = match stmt {
         Statement::Query(query) if query.with.is_some() => (
             StatementType::Other(
-                "WITH (CTE) queries are not supported. Rewrite using a subquery instead."
+                "WITH (CTE) queries are not supported. Non-recursive CTEs can be rewritten as derived tables (subqueries in FROM). Recursive CTEs have no equivalent rewrite."
                     .to_string(),
             ),
             None,

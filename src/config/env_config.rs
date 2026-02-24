@@ -48,7 +48,7 @@ pub fn load_env_config() -> EnvConfig {
         socket: std::env::var("MYSQL_SOCKET_PATH").ok(),
         user: std::env::var("MYSQL_USER").ok(),
         password: std::env::var("MYSQL_PASS").ok(),
-        database: std::env::var("MYSQL_DB").ok(),
+        database: std::env::var("MYSQL_DB").ok().filter(|s| !s.is_empty()),
         connection_string: std::env::var("MYSQL_CONNECTION_STRING").ok(),
         pool_size: parse_env_num::<u32>("MYSQL_POOL_SIZE"),
         query_timeout_ms: parse_env_num::<u64>("MYSQL_QUERY_TIMEOUT"),

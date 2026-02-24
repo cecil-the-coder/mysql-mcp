@@ -285,7 +285,7 @@ impl ServerHandler for McpServer {
                 ),
                 Tool::new(
                     "mysql_list_sessions",
-                    "List all active named database sessions with host, database, and idle time. The default session is omitted when it is the only active session.",
+                    "List all active named database sessions with host, database, and idle time. The default session is always shown first.",
                     mysql_list_sessions_schema(),
                 ),
                 Tool::new(

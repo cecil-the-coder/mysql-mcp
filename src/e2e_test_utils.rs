@@ -104,6 +104,7 @@ pub(crate) fn spawn_server(
         "MYSQL_POOL_SIZE",
         "MYSQL_SLOW_QUERY_THRESHOLD_MS",
         "MYSQL_POOL_WARMUP",
+        "MYSQL_PERFORMANCE_HINTS",
     ] {
         cmd.env_remove(var);
     }
