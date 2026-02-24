@@ -207,10 +207,13 @@ impl SessionStore {
         if target_db.is_none() {
             return tool_error!("No database specified and no default database for this session");
         }
-        let target_db = target_db.unwrap();
+        let target_db = target_db.expect("target_db checked for None above");
 
+        // Note: TABLE_NAME in information_schema is VARBINARY, so we cast to CHAR
+        // to get a proper string. Without this cast, sqlx would fail with
+        // "mismatched types; Rust type `String` is not compatible with SQL type `VARBINARY`"
         let rows = sqlx::query(
-            "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME",
+            "SELECT CAST(TABLE_NAME AS CHAR) AS TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME",
         )
         .bind(target_db)
         .fetch_all(&ctx.pool)
@@ -396,7 +399,10 @@ impl SessionStore {
                     }) && parsed.target_table.is_some()
                         && !parsed.where_columns.is_empty();
                     if needs_suggestions {
-                        let tname = parsed.target_table.as_deref().unwrap();
+                        let tname = parsed
+                            .target_table
+                            .as_deref()
+                            .expect("target_table checked for Some above");
                         suggestions = query_introspector
                             .generate_index_suggestions(
                                 tname,

@@ -103,11 +103,9 @@ fn is_blocked_ip_for_hostname(ip: IpAddr) -> bool {
 }
 
 /// Result of host validation with DNS resolution.
-#[allow(dead_code)]
 pub(crate) struct HostValidation {
     pub(crate) allowed: bool,
     pub(crate) reason: Option<String>,
-    pub(crate) resolved_ips: Vec<IpAddr>,
 }
 
 /// Validate a host string, resolving hostnames via DNS with caching.
@@ -126,7 +124,6 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
             } else {
                 None
             },
-            resolved_ips: vec![ip],
         };
     }
 
@@ -136,7 +133,6 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
         return HostValidation {
             allowed: false,
             reason: Some("Host cannot be empty".to_string()),
-            resolved_ips: vec![],
         };
     }
 
@@ -155,7 +151,6 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
                 return HostValidation {
                     allowed: !entry.blocked,
                     reason: entry.reason.clone(),
-                    resolved_ips: entry.ips.clone(),
                 };
             }
         }
@@ -228,7 +223,6 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
     HostValidation {
         allowed: !blocked,
         reason,
-        resolved_ips: ips,
     }
 }
 

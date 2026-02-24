@@ -725,7 +725,65 @@ mod e2e_tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 12: UPDATE and DELETE succeed when the respective permissions are set
+    // Test 12 (permission): UPDATE is denied when MYSQL_ALLOW_UPDATE is not set
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_mcp_update_denied_without_permission() {
+        let Some(binary) = binary_path() else {
+            eprintln!("Skipping E2E: binary not found. Run `cargo build` first.");
+            return;
+        };
+
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+        // Spawn with default permissions (MYSQL_ALLOW_UPDATE not set -> denied).
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
+            return;
+        };
+
+        let (mut stdin, mut reader) = setup_io(&mut child);
+
+        do_handshake(&mut stdin, &mut reader).await;
+
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": "UPDATE _e2e_perm_test SET id = 2 WHERE id = 1"
+                    }
+                }
+            }),
+        )
+        .await;
+
+        let response = read_response(&mut reader).await;
+        child.kill().await.ok();
+
+        let resp = response.expect("No response from server within timeout");
+        let result = resp.get("result").expect("Expected a result object");
+        assert_eq!(
+            result["isError"], true,
+            "UPDATE should be denied when MYSQL_ALLOW_UPDATE is not set, got: {}",
+            resp
+        );
+        let text = result["content"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.to_lowercase().contains("denied")
+                || text.contains("UPDATE")
+                || text.contains("ALLOW"),
+            "Error message should mention permission denial, got: {}",
+            text
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 13: UPDATE and DELETE succeed when the respective permissions are set
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn test_mcp_update_delete_allowed() {
@@ -969,5 +1027,231 @@ mod e2e_tests {
         .await;
         let _ = read_response(&mut reader).await;
         child.kill().await.ok();
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 13 (permission): DELETE is denied when MYSQL_ALLOW_DELETE is not set
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_mcp_delete_denied_without_permission() {
+        let Some(binary) = binary_path() else {
+            eprintln!("Skipping E2E: binary not found. Run `cargo build` first.");
+            return;
+        };
+
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+        // Spawn with default permissions (MYSQL_ALLOW_DELETE not set → denied).
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
+            return;
+        };
+
+        let (mut stdin, mut reader) = setup_io(&mut child);
+
+        do_handshake(&mut stdin, &mut reader).await;
+
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": "DELETE FROM _e2e_perm_test WHERE id = 1"
+                    }
+                }
+            }),
+        )
+        .await;
+
+        let response = read_response(&mut reader).await;
+        child.kill().await.ok();
+
+        let resp = response.expect("No response from server within timeout");
+        let result = resp.get("result").expect("Expected a result object");
+        assert_eq!(
+            result["isError"], true,
+            "DELETE should be denied when MYSQL_ALLOW_DELETE is not set, got: {}",
+            resp
+        );
+        let text = result["content"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.to_lowercase().contains("denied")
+                || text.contains("DELETE")
+                || text.contains("ALLOW"),
+            "Error message should mention permission denial, got: {}",
+            text
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 14: mysql_list_tables returns a tables array for the database
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_mcp_list_tables_call() {
+        let Some(binary) = binary_path() else {
+            eprintln!("Skipping E2E: binary not found. Run `cargo build` first.");
+            return;
+        };
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+        let table = format!("_e2e_lt{}", std::process::id());
+        let Some(mut child) = spawn_server(&binary, &test_db, &[("MYSQL_ALLOW_DDL", "true")])
+        else {
+            return;
+        };
+        let (mut stdin, mut reader) = setup_io(&mut child);
+        do_handshake(&mut stdin, &mut reader).await;
+
+        // Get the database name for fully-qualified table names
+        let db_name = test_db
+            .config
+            .connection
+            .database
+            .as_deref()
+            .unwrap_or("testdb");
+
+        // Create a table to ensure at least one table exists
+        // Use fully-qualified name to ensure it's created in the right database
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 70, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": format!(
+                            "CREATE TABLE `{}`.`{}` (id INT PRIMARY KEY)",
+                            db_name, table
+                        )
+                    }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no CREATE response");
+        assert_ne!(r["result"]["isError"], true, "CREATE TABLE failed: {}", r);
+
+        // Call mysql_list_tables with explicit database
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 71, "method": "tools/call",
+                "params": {
+                    "name": "mysql_list_tables",
+                    "arguments": {
+                        "database": db_name
+                    }
+                }
+            }),
+        )
+        .await;
+        let r = read_response(&mut reader)
+            .await
+            .expect("no list_tables response");
+        assert_ne!(
+            r["result"]["isError"], true,
+            "mysql_list_tables failed: {}",
+            r
+        );
+        let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
+        // Parse the JSON response and verify structure
+        let parsed: serde_json::Value =
+            serde_json::from_str(text).expect("Response should be valid JSON");
+        let tables = parsed["tables"]
+            .as_array()
+            .expect("'tables' should be an array");
+        assert!(
+            !tables.is_empty(),
+            "tables array should contain at least one table, got: {}",
+            text
+        );
+        // Verify the created table is in the list
+        let table_names: Vec<&str> = tables.iter().filter_map(|t| t.as_str()).collect();
+        assert!(
+            table_names.contains(&table.as_str()),
+            "tables array should contain the created table '{}', got: {:?}",
+            table,
+            table_names
+        );
+
+        // Cleanup
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0", "id": 72, "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": { "sql": format!("DROP TABLE `{}`.`{}`", db_name, table) }
+                }
+            }),
+        )
+        .await;
+        let _ = read_response(&mut reader).await;
+        child.kill().await.ok();
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 15 (permission): DDL is denied when MYSQL_ALLOW_DDL is not set
+    // -------------------------------------------------------------------------
+    #[tokio::test]
+    async fn test_mcp_ddl_denied_without_permission() {
+        let Some(binary) = binary_path() else {
+            eprintln!("Skipping E2E: binary not found. Run `cargo build` first.");
+            return;
+        };
+
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+        // Spawn with default permissions (MYSQL_ALLOW_DDL not set → denied).
+        let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
+            return;
+        };
+
+        let (mut stdin, mut reader) = setup_io(&mut child);
+
+        do_handshake(&mut stdin, &mut reader).await;
+
+        send_message(
+            &mut stdin,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 60,
+                "method": "tools/call",
+                "params": {
+                    "name": "mysql_query",
+                    "arguments": {
+                        "sql": "CREATE TABLE _e2e_ddl_denied_test (id INT PRIMARY KEY)"
+                    }
+                }
+            }),
+        )
+        .await;
+
+        let response = read_response(&mut reader).await;
+        child.kill().await.ok();
+
+        let resp = response.expect("No response from server within timeout");
+        let result = resp.get("result").expect("Expected a result object");
+        assert_eq!(
+            result["isError"], true,
+            "DDL should be denied when MYSQL_ALLOW_DDL is not set, got: {}",
+            resp
+        );
+        let text = result["content"][0]["text"].as_str().unwrap_or("");
+        assert!(
+            text.to_lowercase().contains("ddl")
+                || text.to_lowercase().contains("permission")
+                || text.contains("ALLOW"),
+            "Error message should mention DDL permission, got: {}",
+            text
+        );
     }
 }

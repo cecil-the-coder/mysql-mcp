@@ -1,3 +1,15 @@
+//! Query execution module.
+//!
+//! This module handles all aspects of executing SQL queries against MySQL databases:
+//!
+//! - `read`  — SELECT query execution, including automatic EXPLAIN analysis
+//! - `write` — INSERT, UPDATE, DELETE, and DDL statement execution
+//! - `explain` — EXPLAIN plan parsing and analysis (v1 and v2 formats)
+//! - `retry` — Retry logic for transient connection failures
+//!
+//! The module also provides a generic [`with_timeout`] helper for applying
+//! optional query timeouts to async operations.
+
 pub mod explain;
 pub(crate) mod explain_parse;
 pub mod read;
