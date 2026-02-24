@@ -28,11 +28,17 @@ pub(crate) fn sanitize_error(error: &str) -> String {
     let mut sanitized = error.to_string();
 
     // Remove file paths first (they might contain IP-like sequences)
-    sanitized = UNIX_PATH_REGEX.replace_all(&sanitized, "[REDACTED]").to_string();
-    sanitized = WINDOWS_PATH_REGEX.replace_all(&sanitized, "[REDACTED]").to_string();
+    sanitized = UNIX_PATH_REGEX
+        .replace_all(&sanitized, "[REDACTED]")
+        .to_string();
+    sanitized = WINDOWS_PATH_REGEX
+        .replace_all(&sanitized, "[REDACTED]")
+        .to_string();
 
     // Remove IP:port combinations
-    sanitized = IP_PORT_REGEX.replace_all(&sanitized, "[REDACTED]").to_string();
+    sanitized = IP_PORT_REGEX
+        .replace_all(&sanitized, "[REDACTED]")
+        .to_string();
 
     // Remove standalone IP addresses
     sanitized = IP_REGEX.replace_all(&sanitized, "[REDACTED]").to_string();
@@ -41,7 +47,9 @@ pub(crate) fn sanitize_error(error: &str) -> String {
     sanitized = OS_ERROR_REGEX.replace_all(&sanitized, "").to_string();
 
     // Clean up multiple spaces and trim
-    sanitized = MULTIPLE_SPACES_REGEX.replace_all(&sanitized, " ").to_string();
+    sanitized = MULTIPLE_SPACES_REGEX
+        .replace_all(&sanitized, " ")
+        .to_string();
     sanitized = sanitized.trim().to_string();
 
     // Remove trailing punctuation that looks odd after sanitization

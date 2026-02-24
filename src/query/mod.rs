@@ -13,24 +13,20 @@ use std::future::Future;
 /// and suggests adjusting `MYSQL_QUERY_TIMEOUT`.
 ///
 /// If `timeout_ms == 0`, runs the future without a timeout.
-pub async fn with_timeout<T, F>(
-    timeout_ms: u64,
-    operation_name: &str,
-    fut: F,
-) -> anyhow::Result<T>
+pub async fn with_timeout<T, F>(timeout_ms: u64, operation_name: &str, fut: F) -> anyhow::Result<T>
 where
     F: Future<Output = anyhow::Result<T>>,
 {
     if timeout_ms > 0 {
-        tokio::time::timeout(
-            std::time::Duration::from_millis(timeout_ms),
-            fut,
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!(
-            "{} timed out after {}ms. Set MYSQL_QUERY_TIMEOUT to adjust.",
-            operation_name, timeout_ms
-        ))?
+        tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), fut)
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "{} timed out after {}ms. Set MYSQL_QUERY_TIMEOUT to adjust.",
+                    operation_name,
+                    timeout_ms
+                )
+            })?
     } else {
         fut.await
     }

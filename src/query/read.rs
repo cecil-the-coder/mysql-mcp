@@ -19,11 +19,10 @@ fn estimate_value_size(v: &Value) -> usize {
         Value::Number(n) => n.to_string().len() + 16, // number struct overhead
         Value::String(s) => s.len() + 24,             // string struct overhead
         Value::Array(arr) => arr.iter().map(estimate_value_size).sum::<usize>() + arr.len() * 16,
-        Value::Object(obj) => {
-            obj.iter()
-                .map(|(k, v)| k.len() + estimate_value_size(v) + 32)
-                .sum()
-        }
+        Value::Object(obj) => obj
+            .iter()
+            .map(|(k, v)| k.len() + estimate_value_size(v) + 32)
+            .sum(),
     }
 }
 
@@ -138,12 +137,13 @@ pub async fn execute_read_query(
     let mut total_memory_bytes: usize = 0;
     let mut memory_capped = false;
 
-    let mut json_rows: Vec<Map<String, Value>> = Vec::with_capacity(rows.len().min(max_rows as usize + 1));
+    let mut json_rows: Vec<Map<String, Value>> =
+        Vec::with_capacity(rows.len().min(max_rows as usize + 1));
     for row in &rows {
         let json_row = row_to_json(row, &mut warnings);
 
         // Estimate memory usage of this row (rough approximation)
-        let row_size: usize = json_row.values().map(|v| estimate_value_size(v)).sum();
+        let row_size: usize = json_row.values().map(estimate_value_size).sum();
         let row_overhead = json_row.len() * 32; // HashMap overhead per key
         let row_total = row_size + row_overhead;
 
@@ -462,7 +462,10 @@ mod integration_tests {
         slow_ms: u64,
     ) -> anyhow::Result<QueryResult> {
         let parsed = parse_sql(sql).map_err(|e| anyhow::anyhow!(e))?;
-        execute_read_query(pool, sql, &parsed, force_ro, max_rows, hints, slow_ms, 0, 0, 256).await
+        execute_read_query(
+            pool, sql, &parsed, force_ro, max_rows, hints, slow_ms, 0, 0, 256,
+        )
+        .await
     }
 
     #[tokio::test]
@@ -574,8 +577,8 @@ mod integration_tests {
             0,     // no max_rows cap
             "none",
             0,
-            1, // query_timeout_ms = 1
-            0, // retry_attempts = 0
+            1,   // query_timeout_ms = 1
+            0,   // retry_attempts = 0
             256, // max_result_memory_mb
         )
         .await;

@@ -98,7 +98,10 @@ where
     // (in case multiple waiters all got released simultaneously).
     let should_fetch = {
         let in_flight_guard = in_flight.lock().await;
-        in_flight_guard.get(&cache_key).map(|p| Arc::ptr_eq(p, &fetch_permit)).unwrap_or(false)
+        in_flight_guard
+            .get(&cache_key)
+            .map(|p| Arc::ptr_eq(p, &fetch_permit))
+            .unwrap_or(false)
     };
 
     if should_fetch {

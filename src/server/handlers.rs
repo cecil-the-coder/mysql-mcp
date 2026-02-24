@@ -1,9 +1,9 @@
 use rmcp::model::CallToolResult;
 use serde_json::json;
 
-use crate::tool_error;
 use super::sessions::{validate_identifier, SessionStore};
 use super::tool_schemas::serialize_response;
+use crate::tool_error;
 
 /// Maximum SQL statement length (1 MB). Enforced in both mysql_query and mysql_explain_plan.
 const MAX_SQL_LEN: usize = 1_000_000;
@@ -40,12 +40,8 @@ impl SessionStore {
             .and_then(|v: &serde_json::Value| v.as_str())
         {
             Some(t) if !t.is_empty() => t.to_string(),
-            Some(_) => {
-                return tool_error!("Table name cannot be empty")
-            }
-            None => {
-                return tool_error!("Missing required argument: table")
-            }
+            Some(_) => return tool_error!("Table name cannot be empty"),
+            None => return tool_error!("Missing required argument: table"),
         };
         if let Err(e) = validate_identifier(&table, "Table name") {
             return Ok(e);
@@ -73,10 +69,7 @@ impl SessionStore {
                         );
                     }
                     None => {
-                        return tool_error!(
-                            "include[{}]: expected a string, got {}",
-                            i, elem
-                        );
+                        return tool_error!("include[{}]: expected a string, got {}", i, elem);
                     }
                 }
             }
@@ -212,9 +205,7 @@ impl SessionStore {
         // Determine which database to query
         let target_db = database.as_deref().or(ctx.database.as_deref());
         if target_db.is_none() {
-            return tool_error!(
-                "No database specified and no default database for this session"
-            );
+            return tool_error!("No database specified and no default database for this session");
         }
 
         let rows = sqlx::query(
@@ -250,9 +241,7 @@ impl SessionStore {
     ) -> anyhow::Result<CallToolResult, rmcp::ErrorData> {
         let sql = match args.get("sql").and_then(|v| v.as_str()) {
             Some(s) if !s.is_empty() => s.to_string(),
-            _ => {
-                return tool_error!("Missing required argument: sql")
-            }
+            _ => return tool_error!("Missing required argument: sql"),
         };
         if let Err(e) = check_sql_length(&sql) {
             return Ok(e);
@@ -303,14 +292,10 @@ impl SessionStore {
     ) -> anyhow::Result<CallToolResult, rmcp::ErrorData> {
         let sql = match args.get("sql").and_then(|v| v.as_str()) {
             Some(s) if !s.is_empty() => s.to_string(),
-            _ => {
-                return tool_error!("Missing required argument: sql")
-            }
+            _ => return tool_error!("Missing required argument: sql"),
         };
         if sql.contains('\0') {
-            return tool_error!(
-                "SQL contains NUL bytes, which are not valid in SQL statements"
-            );
+            return tool_error!("SQL contains NUL bytes, which are not valid in SQL statements");
         }
         if let Err(e) = check_sql_length(&sql) {
             return Ok(e);
@@ -373,7 +358,10 @@ impl SessionStore {
                 .unwrap_or("(default database)");
             return tool_error!(
                 "{} operation denied on '{}': {}. Set MYSQL_ALLOW_{} env var to enable.",
-                perm_type, schema_hint, e, perm_type
+                perm_type,
+                schema_hint,
+                e,
+                perm_type
             );
         }
 

@@ -5,11 +5,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::tool_error;
 use super::tool_schemas::serialize_response;
 use super::validate_host_with_dns;
 use crate::config::Config;
 use crate::schema::SchemaIntrospector;
+use crate::tool_error;
 
 /// Pool size for named sessions (hardcoded for resource predictability)
 pub(crate) const NAMED_SESSION_POOL_SIZE: u32 = 5;
@@ -95,7 +95,10 @@ pub(crate) struct SessionStore {
 /// alphanumeric/underscore/hyphen only. Returns `Err(CallToolResult)` on failure.
 pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToolResult> {
     if value.is_empty() {
-        return Err(crate::server::error::error_response(format!("{} cannot be empty", kind)));
+        return Err(crate::server::error::error_response(format!(
+            "{} cannot be empty",
+            kind
+        )));
     }
     if value.len() > 64 {
         return Err(crate::server::error::error_response(format!(
@@ -205,7 +208,9 @@ impl SessionStore {
         if !host_validation.allowed {
             return tool_error!(
                 "Host validation failed: {}",
-                host_validation.reason.unwrap_or_else(|| "unknown reason".to_string())
+                host_validation
+                    .reason
+                    .unwrap_or_else(|| "unknown reason".to_string())
             );
         }
         let port = match args.get("port").and_then(|v| v.as_u64()) {
@@ -215,9 +220,7 @@ impl SessionStore {
         };
         let user = match args.get("user").and_then(|v| v.as_str()) {
             Some("") | None => return tool_error!("Missing required argument: user"),
-            Some(u) if u.len() > 255 => {
-                return tool_error!("User too long (max 255 characters)")
-            }
+            Some(u) if u.len() > 255 => return tool_error!("User too long (max 255 characters)"),
             Some(u) => u.to_string(),
         };
         let password = match args.get("password").and_then(|v| v.as_str()) {
@@ -263,7 +266,9 @@ impl SessionStore {
             if !ssh_host_validation.allowed {
                 return tool_error!(
                     "SSH bastion host validation failed: {}",
-                    ssh_host_validation.reason.unwrap_or_else(|| "unknown reason".to_string())
+                    ssh_host_validation
+                        .reason
+                        .unwrap_or_else(|| "unknown reason".to_string())
                 );
             }
         }
@@ -383,9 +388,7 @@ impl SessionStore {
             .await
             {
                 Ok((p, t)) => (p, Some(t)),
-                Err(e) => {
-                    return tool_error!("SSH tunnel or connection failed: {}", e)
-                }
+                Err(e) => return tool_error!("SSH tunnel or connection failed: {}", e),
             }
         } else {
             match crate::db::build_session_pool(
@@ -480,7 +483,8 @@ impl SessionStore {
         }
         sessions.insert(name, session);
         // Increment total connections counter after successful insertion
-        self.total_connections.fetch_add(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+        self.total_connections
+            .fetch_add(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
 
         // Add security warnings if any
         let mut response = info;
@@ -510,7 +514,8 @@ impl SessionStore {
         };
         if let Some(session) = removed {
             // Decrement total connections counter
-            self.total_connections.fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+            self.total_connections
+                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
             // Clean up SSH tunnel if present (outside the lock — close() may be slow).
             if let Some(tunnel) = session.tunnel {
                 if let Err(e) = tunnel.close().await {

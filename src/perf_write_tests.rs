@@ -49,9 +49,10 @@ mod perf_write_tests {
             let insert_sql = format!("INSERT INTO perf_write_test (v) VALUES ('{val}')");
             let insert_parsed = crate::sql_parser::parse_sql(&insert_sql).unwrap();
             let t = Instant::now();
-            let r = crate::query::write::execute_write_query(pool, &insert_sql, &insert_parsed, 0, 0)
-                .await
-                .unwrap();
+            let r =
+                crate::query::write::execute_write_query(pool, &insert_sql, &insert_parsed, 0, 0)
+                    .await
+                    .unwrap();
             insert_ms.push(t.elapsed().as_secs_f64() * 1000.0);
             let id = r.last_insert_id.unwrap();
 

@@ -179,9 +179,20 @@ pub mod perf_tests {
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(pool, sql, &parsed_join, false, 0, "none", 0, 0, 0, 0)
-                .await
-                .unwrap();
+            crate::query::read::execute_read_query(
+                pool,
+                sql,
+                &parsed_join,
+                false,
+                0,
+                "none",
+                0,
+                0,
+                0,
+                0,
+            )
+            .await
+            .unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);

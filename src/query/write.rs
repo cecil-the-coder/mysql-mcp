@@ -1,6 +1,6 @@
-use crate::sql_parser::ParsedStatement;
 use super::retry::retry_on_transient_error;
 use super::with_timeout;
+use crate::sql_parser::ParsedStatement;
 use anyhow::Result;
 use sqlx::MySqlPool;
 use std::time::Instant;

@@ -98,10 +98,7 @@ pub(crate) struct HostValidation {
 
 /// Validate a host string, resolving hostnames via DNS with caching.
 /// This prevents DNS rebinding attacks by caching resolved IPs.
-pub(crate) async fn validate_host_with_dns(
-    host: &str,
-    dns_cache_ttl: Duration,
-) -> HostValidation {
+pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) -> HostValidation {
     // Fast path: literal IP address (no DNS lookup needed)
     if let Ok(ip) = host.parse::<IpAddr>() {
         let blocked = is_blocked_ip(ip);
@@ -172,7 +169,10 @@ pub(crate) async fn validate_host_with_dns(
             reason = Some(format!("DNS resolution failed for '{}': {}", hostname, err));
         } else {
             blocked = true;
-            reason = Some(format!("DNS resolution returned no addresses for '{}'", hostname));
+            reason = Some(format!(
+                "DNS resolution returned no addresses for '{}'",
+                hostname
+            ));
         }
     } else {
         for ip in &ips {
@@ -287,7 +287,8 @@ impl McpServer {
                     }
                     if let Some(session) = map.remove(&name) {
                         // Decrement total connections counter for reaped session
-                        reaper_total_connections.fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+                        reaper_total_connections
+                            .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
                         drop(map); // release lock before awaiting async operations
                         if let Some(tunnel) = session.tunnel {
                             if let Err(e) = tunnel.close().await {

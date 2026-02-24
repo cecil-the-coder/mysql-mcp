@@ -17,9 +17,9 @@ const TRANSIENT_ERROR_PATTERNS: &[&str] = &[
 /// Check if an error message indicates a transient network failure.
 fn is_transient_error(error: &anyhow::Error) -> bool {
     let error_string = error.to_string().to_lowercase();
-    TRANSIENT_ERROR_PATTERNS.iter().any(|pattern| {
-        error_string.contains(&pattern.to_lowercase())
-    })
+    TRANSIENT_ERROR_PATTERNS
+        .iter()
+        .any(|pattern| error_string.contains(&pattern.to_lowercase()))
 }
 
 /// Execute an async operation with retry logic for transient network failures.
