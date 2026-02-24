@@ -479,6 +479,41 @@ private_key = "/tmp/key.pem"
         assert_eq!(ssh.known_hosts_check, "accept-new");
     }
 
+    // Test: pool.size = 1000 is the valid upper boundary
+    #[test]
+    fn test_pool_size_1000_is_valid() {
+        let mut config = Config::default();
+        config.pool.size = 1000;
+        assert!(
+            config.validate().is_ok(),
+            "pool.size=1000 should be the valid upper bound"
+        );
+    }
+
+    // Test: pool.size = 1001 exceeds the cap and fails validation
+    #[test]
+    fn test_pool_size_1001_fails_validation() {
+        let mut config = Config::default();
+        config.pool.size = 1001;
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("pool.size"),
+            "error should mention pool.size, got: {}",
+            err
+        );
+    }
+
+    // Test: cache_ttl_secs=0 passes validation (it warns but is intentionally allowed)
+    #[test]
+    fn test_cache_ttl_secs_zero_is_valid() {
+        let mut config = Config::default();
+        config.pool.cache_ttl_secs = 0;
+        assert!(
+            config.validate().is_ok(),
+            "cache_ttl_secs=0 should be allowed (disables cache with a warning)"
+        );
+    }
+
     #[test]
     fn test_no_ssh_env_vars_means_none() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());

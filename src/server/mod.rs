@@ -234,10 +234,11 @@ impl ServerHandler for McpServer {
                     "mysql_query",
                     concat!(
                         "Execute a SQL query against MySQL. ",
-                        "Always returned: rows, row_count, execution_time_ms, serialization_time_ms, parse_warnings. ",
+                        "Always returned: rows, row_count, execution_time_ms, serialization_time_ms. ",
                         "Optional: plan (only when explain:true or server auto-triggers for slow queries), ",
                         "capped+next_offset+capped_hint (only when result was truncated to max_rows limit), ",
                         "suggestions (only when a full table scan is detected). ",
+                        "parse_warnings (only when non-empty — hints about missing LIMIT, leading wildcards, etc.). ",
                         "Supports SELECT, SHOW, EXPLAIN, and (if configured) INSERT, UPDATE, DELETE, DDL.",
                     ),
                     mysql_query_schema(),
@@ -256,7 +257,7 @@ impl ServerHandler for McpServer {
                 ),
                 Tool::new(
                     "mysql_server_info",
-                    "Get MySQL server metadata: version, current_database, current_user, sql_mode, character_set, collation, time_zone, read_only flag, and which write operations are enabled by server config. Use to understand the environment before writing queries or when diagnosing connection issues.",
+                    "Get MySQL server metadata: version, current_database, current_user, sql_mode, character_set, collation, time_zone, read_only flag, accessible_features (list of enabled operation types), and which write operations are enabled by server config. Use to understand the environment before writing queries or when diagnosing connection issues.",
                     mysql_server_info_schema(),
                 ),
                 Tool::new(
@@ -283,7 +284,7 @@ impl ServerHandler for McpServer {
                 ),
                 Tool::new(
                     "mysql_explain_plan",
-                    "Get the execution plan for a SELECT query without running it. Returns index usage, rows examined estimate, and optimization tier. Use this before executing a potentially expensive query to check efficiency.",
+                    "Get the execution plan for a SELECT query without running it. Returns index_used, rows_examined_estimate, optimization tier, full_table_scan (bool), extra_flags (array of optimizer notes), and note. Use this before executing a potentially expensive query to check efficiency.",
                     mysql_explain_plan_schema(),
                 ),
             ];

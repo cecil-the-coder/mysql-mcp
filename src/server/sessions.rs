@@ -88,16 +88,20 @@ impl SessionStore {
         match map.get_mut(name) {
             Some(session) => {
                 session.last_used = std::time::Instant::now();
-                Ok(SessionContext {
-                    pool: session.pool.clone(),
-                    schema: session.introspector.clone(),
-                    database: session.database.clone(),
-                })
+                let pool = session.pool.clone();
+                let schema = session.introspector.clone();
+                let database = session.database.clone();
+                drop(map);
+                Ok(SessionContext { pool, schema, database })
             }
-            None => Err(CallToolResult::error(vec![Content::text(format!(
-                "Session '{}' not found. Use mysql_connect to create it, or omit 'session' to use the default connection.",
-                name
-            ))])),
+            None => {
+                let msg = format!(
+                    "Session '{}' not found. Use mysql_connect to create it, or omit 'session' to use the default connection.",
+                    name
+                );
+                drop(map);
+                Err(CallToolResult::error(vec![Content::text(msg)]))
+            }
         }
     }
 
