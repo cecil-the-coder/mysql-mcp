@@ -72,7 +72,19 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
                 // false-positive warnings. Set the flag so we can add an informational note.
                 is_compound_query = true;
             }
-            (StatementType::Select, None, tname)
+            // SELECT ... FOR UPDATE / FOR SHARE: row-level locking reads.
+            // sqlparser populates query.locks for all locking read variants
+            // (FOR UPDATE, FOR SHARE, FOR NO KEY UPDATE, FOR KEY SHARE).
+            // Detecting via the AST avoids false positives from raw string scans
+            // (e.g. string literals or column names containing "FOR UPDATE").
+            let stmt_type = if !query.locks.is_empty() {
+                StatementType::Other(
+                    "SELECT with locking clauses (FOR UPDATE/SHARE) is not supported".to_string(),
+                )
+            } else {
+                StatementType::Select
+            };
+            (stmt_type, None, tname)
         }
 
         Statement::Insert(insert) => {

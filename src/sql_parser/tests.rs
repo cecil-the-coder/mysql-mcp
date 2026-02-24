@@ -404,3 +404,58 @@ fn test_union_query_gets_compound_warning() {
         parsed.warnings
     );
 }
+
+#[test]
+fn test_select_for_update_rejected() {
+    // FOR UPDATE is a locking read — classified via query.locks AST field, not raw string.
+    let parsed = parse_sql("SELECT id FROM users WHERE id = 1 FOR UPDATE").unwrap();
+    assert!(
+        matches!(parsed.statement_type, StatementType::Other(_)),
+        "SELECT FOR UPDATE should be classified as Other, got: {:?}",
+        parsed.statement_type
+    );
+}
+
+#[test]
+fn test_select_for_share_rejected() {
+    let parsed = parse_sql("SELECT id FROM users WHERE id = 1 FOR SHARE").unwrap();
+    assert!(
+        matches!(parsed.statement_type, StatementType::Other(_)),
+        "SELECT FOR SHARE should be classified as Other"
+    );
+}
+
+#[test]
+fn test_select_plain_not_falsely_rejected_for_update() {
+    // A column alias containing "update" must NOT be rejected as a locking read.
+    let parsed = parse_sql("SELECT count(*) AS total_for_update_review FROM t").unwrap();
+    assert_eq!(
+        parsed.statement_type,
+        StatementType::Select,
+        "Plain SELECT with 'update' in alias should not be classified as locking read"
+    );
+}
+
+#[test]
+fn test_create_index_classified_as_create() {
+    // CREATE INDEX must go through the explicit arm, not the debug-string catchall.
+    let parsed = parse_sql("CREATE INDEX idx_name ON users (email)").unwrap();
+    assert_eq!(
+        parsed.statement_type,
+        StatementType::Create,
+        "CREATE INDEX should be classified as Create"
+    );
+    assert!(parsed.statement_type.is_ddl());
+}
+
+#[test]
+fn test_select_comment_not_false_positive_for_outfile() {
+    // A SQL comment containing "INTO OUTFILE" must not cause a false rejection.
+    // The normalized check uses AST Display which strips comments.
+    let parsed = parse_sql("SELECT id FROM t -- INTO OUTFILE '/tmp/out'").unwrap();
+    assert_eq!(
+        parsed.statement_type,
+        StatementType::Select,
+        "Comment containing INTO OUTFILE should not be rejected"
+    );
+}

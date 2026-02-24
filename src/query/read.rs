@@ -60,7 +60,11 @@ pub async fn execute_read_query(
         max_rows > 0 && matches!(stmt_type, StatementType::Select) && !parsed.has_limit;
     let effective_sql;
     let effective_sql_ref = if added_limit {
-        effective_sql = format!("{} LIMIT {}", sql, max_rows);
+        // Inject LIMIT max_rows+1 (one extra row) so we can detect whether the result
+        // was actually truncated. If MySQL returns more than max_rows rows, there are
+        // additional rows beyond the cap and we discard the probe row before returning.
+        // Without the +1, a table with exactly max_rows rows would falsely show capped=true.
+        effective_sql = format!("{} LIMIT {}", sql, max_rows as u64 + 1);
         effective_sql.as_str()
     } else {
         sql
@@ -110,6 +114,13 @@ pub async fn execute_read_query(
         .collect();
     let ser_elapsed = ser_start.elapsed().as_millis() as u64;
 
+    // If we injected LIMIT max_rows+1 and got more than max_rows rows back, the result
+    // was truncated. Discard the extra probe row before returning.
+    let over_limit = added_limit && json_rows.len() > max_rows as usize;
+    if over_limit {
+        json_rows.truncate(max_rows as usize);
+    }
+
     // For SHOW statements (which don't support LIMIT), cap post-fetch if needed.
     let show_capped = matches!(stmt_type, StatementType::Show)
         && max_rows > 0
@@ -119,9 +130,9 @@ pub async fn execute_read_query(
     }
 
     let row_count = json_rows.len();
-    // was_capped is true when we injected a LIMIT and hit it, or when we truncated
-    // a SHOW result post-fetch — either way, there may be more rows beyond the cap.
-    let was_capped = (added_limit && row_count == max_rows as usize) || show_capped;
+    // was_capped is true when we hit the injected LIMIT (over_limit), or when we
+    // truncated a SHOW result post-fetch — either way, there may be more rows.
+    let was_capped = over_limit || show_capped;
 
     // EXPLAIN phase: decide whether to run based on performance_hints and elapsed time.
     // Only run EXPLAIN for SELECT statements (EXPLAIN doesn't support SHOW/EXPLAIN/etc.)

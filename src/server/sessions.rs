@@ -455,6 +455,9 @@ impl SessionStore {
                     tracing::warn!("SSH tunnel close error on disconnect: {}", e);
                 }
             }
+            // Explicitly close the pool so server-side connections are released
+            // immediately rather than waiting for sqlx's Drop impl to handle them.
+            session.pool.close().await;
             Ok(CallToolResult::success(vec![Content::text(format!(
                 "Session '{}' closed",
                 name

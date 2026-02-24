@@ -62,7 +62,7 @@ pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::
     Arc::new(rmcp::model::object(json!({
         "type": "object",
         "properties": {
-            "name": { "type": "string", "description": "Session identifier (alphanumeric, underscore, hyphen; max 64 chars). 'default' is reserved." },
+            "name": { "type": "string", "description": "Session identifier (alphanumeric, underscore, hyphen; max 64 chars). 'default' is reserved. Named sessions use a dedicated pool of up to 5 connections (vs. the default session's configured pool size)." },
             "host": { "type": "string", "description": "MySQL host (required unless using preset)" },
             "port": { "type": "integer", "description": "MySQL port (default: 3306).", "minimum": 1, "maximum": 65535 },
             "user": { "type": "string", "description": "MySQL username" },
