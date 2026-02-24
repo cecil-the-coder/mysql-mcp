@@ -303,7 +303,7 @@ impl SchemaIntrospector {
                 ));
             } else {
                 suggestions.push(format!(
-                    "WHERE columns on {} are covered by an existing composite index. Ensure the query uses the index by putting the leading column first in the WHERE clause.",
+                    "WHERE columns on {} are covered by an existing composite index. No new index needed.",
                     esc(table)
                 ));
             }

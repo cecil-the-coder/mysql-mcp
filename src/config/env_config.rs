@@ -122,6 +122,14 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .collect();
+            if ops.is_empty() {
+                eprintln!(
+                    "Warning: {key} has an empty permissions list; skipping \
+                     (use e.g. MYSQL_SCHEMA_{}_PERMISSIONS=insert,update to allow writes)",
+                    schema_name.to_uppercase()
+                );
+                continue;
+            }
             for op in &ops {
                 if !op.is_empty() && !matches!(*op, "insert" | "update" | "delete" | "ddl") {
                     eprintln!(

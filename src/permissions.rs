@@ -106,7 +106,7 @@ pub fn check_permission(
             } else if name == "Do" {
                 "DO is not supported. Use SELECT instead (e.g. SELECT SLEEP(1)).".to_string()
             } else {
-                format!("Unsupported statement type: {name}. Supported types: SELECT, SHOW, EXPLAIN, INSERT, UPDATE, DELETE, CREATE (TABLE/DATABASE), ALTER, DROP, TRUNCATE, USE. Note: CREATE INDEX, CREATE VIEW, and similar variants are not supported.")
+                format!("Unsupported statement type: {name}. Supported types: SELECT, SHOW, EXPLAIN, INSERT, UPDATE, DELETE, CREATE (TABLE/DATABASE), ALTER, DROP, TRUNCATE, USE, SET. Note: CREATE INDEX, CREATE VIEW, and similar variants are not supported.")
             };
             bail!("{}", hint);
         }
