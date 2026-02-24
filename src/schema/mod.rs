@@ -238,7 +238,7 @@ impl SchemaIntrospector {
             .iter()
             .map(|c| {
                 serde_json::json!({
-                    "name": c.name, "type": c.data_type, "nullable": c.is_nullable,
+                    "name": c.name, "type": c.column_type, "nullable": c.is_nullable,
                     "default": c.column_default, "key": c.column_key, "extra": c.extra,
                 })
             })

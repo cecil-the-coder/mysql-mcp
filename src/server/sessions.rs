@@ -347,7 +347,7 @@ impl SessionStore {
                 &password,
                 database.as_deref(),
                 ssl,
-                false,
+                self.config.security.ssl_accept_invalid_certs,
                 ssl_ca.as_deref(),
                 self.config.pool.connect_timeout_ms,
                 &ssh_config,
@@ -370,7 +370,7 @@ impl SessionStore {
                 &password,
                 database.as_deref(),
                 ssl,
-                false,
+                self.config.security.ssl_accept_invalid_certs,
                 ssl_ca.as_deref(),
                 self.config.pool.connect_timeout_ms,
             )

@@ -449,6 +449,18 @@ fn test_create_index_classified_as_create() {
 }
 
 #[test]
+fn test_union_with_limit_has_limit_set() {
+    // query.limit is a top-level field on Query, so it applies to UNION bodies too.
+    // Verify has_limit=true so max_rows injection is not incorrectly applied.
+    let parsed = parse_sql("SELECT 1 UNION SELECT 2 LIMIT 5").unwrap();
+    assert_eq!(parsed.statement_type, StatementType::Select);
+    assert!(
+        parsed.has_limit,
+        "UNION with LIMIT should have has_limit=true"
+    );
+}
+
+#[test]
 fn test_select_comment_not_false_positive_for_outfile() {
     // A SQL comment containing "INTO OUTFILE" must not cause a false rejection.
     // The normalized check uses AST Display which strips comments.

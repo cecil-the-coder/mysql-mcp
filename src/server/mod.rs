@@ -104,10 +104,11 @@ impl McpServer {
                 for name in stale {
                     let mut map = sessions_reaper.lock().await;
                     if let Some(session) = map.remove(&name) {
-                        drop(map); // release lock before awaiting tunnel close
+                        drop(map); // release lock before awaiting async operations
                         if let Some(tunnel) = session.tunnel {
                             let _ = tunnel.close().await;
                         }
+                        session.pool.close().await;
                     }
                 }
             }

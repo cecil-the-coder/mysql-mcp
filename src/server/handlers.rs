@@ -292,6 +292,12 @@ impl SessionStore {
             parsed.target_schema.as_deref(),
         ) {
             let perm_type = parsed.statement_type.permission_category();
+            // StatementType::Other carries a full human-readable message rather than a
+            // short category name, so bypass the generic wrapper which would produce
+            // "this operation operation denied ... Set MYSQL_ALLOW_this operation ...".
+            if perm_type == "this operation" {
+                return Ok(CallToolResult::error(vec![Content::text(e.to_string())]));
+            }
             let schema_hint = parsed
                 .target_schema
                 .as_deref()
