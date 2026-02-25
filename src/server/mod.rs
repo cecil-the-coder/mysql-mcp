@@ -341,6 +341,133 @@ impl McpServer {
     }
 }
 
+impl ServerHandler for McpServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo {
+            protocol_version: ProtocolVersion::default(),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            server_info: Implementation {
+                name: "mysql-mcp".to_string(),
+                title: Some("MySQL MCP Server".to_string()),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                description: Some(
+                    "Expose MySQL databases via the Model Context Protocol".to_string(),
+                ),
+                icons: None,
+                website_url: None,
+            },
+            instructions: Some(
+                "Use mysql_query to execute SQL queries against the connected MySQL database."
+                    .to_string(),
+            ),
+        }
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        {
+            let tools = vec![
+                Tool::new(
+                    "mysql_query",
+                    concat!(
+                        "Execute a SQL query against MySQL. ",
+                        "Always returned: rows, row_count, execution_time_ms, serialization_time_ms. ",
+                        "Optional: plan (only when explain:true or server auto-triggers for slow queries), ",
+                        "capped+next_offset+capped_hint (only when result was truncated to max_rows limit), ",
+                        "suggestions (only when a full table scan is detected). ",
+                        "parse_warnings (only when non-empty — hints about missing LIMIT, leading wildcards, etc.). ",
+                        "Supports SELECT, SHOW, EXPLAIN, and (if configured) INSERT, UPDATE, DELETE, DDL.",
+                    ),
+                    mysql_query_schema(),
+                ),
+                Tool::new(
+                    "mysql_schema_info",
+                    concat!(
+                        "Get schema metadata for a table. ",
+                        "Default (no include): column names, types, nullability only. ",
+                        "include:[indexes]: also returns all indexes with their columns. ",
+                        "include:[foreign_keys]: also returns FK constraints. ",
+                        "include:[size]: also returns estimated row count and byte sizes. ",
+                        "Combine any subset, e.g. include:[indexes,foreign_keys,size] for full detail.",
+                    ),
+                    mysql_schema_info_schema(),
+                ),
+                Tool::new(
+                    "mysql_server_info",
+                    "Get MySQL server metadata: version, current_database, current_user, sql_mode, character_set, collation, time_zone, read_only flag, accessible_features (list of enabled operation types), and which write operations are enabled by server config. Use to understand the environment before writing queries or when diagnosing connection issues.",
+                    mysql_server_info_schema(),
+                ),
+                Tool::new(
+                    "mysql_connect",
+                    concat!(
+                        "Create a named session to a different MySQL server or database. ",
+                        "Use this to: (1) access a different MySQL host, (2) connect with different credentials, ",
+                        "(3) route queries to a read replica, (4) work with a different database on the same server. ",
+                        "Requires MYSQL_ALLOW_RUNTIME_CONNECTIONS=true. ",
+                        "Sessions idle for >10 minutes are automatically closed. ",
+                        "Pass the session name to other tools via the 'session' parameter.",
+                    ),
+                    mysql_connect_schema(),
+                ),
+                Tool::new(
+                    "mysql_disconnect",
+                    "Explicitly close a named database session. The default session cannot be closed.",
+                    mysql_disconnect_schema(),
+                ),
+                Tool::new(
+                    "mysql_list_sessions",
+                    "List all active named database sessions with host, database, and idle time. The default session is always shown first.",
+                    mysql_list_sessions_schema(),
+                ),
+                Tool::new(
+                    "mysql_explain_plan",
+                    "Get the execution plan for a SELECT query without running it. Returns index_used, rows_examined_estimate, optimization tier, full_table_scan (bool), extra_flags (array of optimizer notes), and note. Use this before executing a potentially expensive query to check efficiency.",
+                    mysql_explain_plan_schema(),
+                ),
+                Tool::new(
+                    "mysql_list_tables",
+                    "List all tables in the current or specified database. More discoverable than querying information_schema directly.",
+                    mysql_list_tables_schema(),
+                ),
+            ];
+
+            Ok(ListToolsResult {
+                meta: None,
+                tools,
+                next_cursor: None,
+            })
+        }
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        {
+            let args = request.arguments.unwrap_or_default();
+            match request.name.as_ref() {
+                "mysql_connect" => self.store.handle_connect(args).await,
+                "mysql_disconnect" => self.store.handle_disconnect(args).await,
+                "mysql_list_sessions" => self.store.handle_list_sessions(args).await,
+                "mysql_schema_info" => self.store.handle_schema_info(args).await,
+                "mysql_server_info" => self.store.handle_server_info(args).await,
+                "mysql_explain_plan" => self.store.handle_explain_plan(args).await,
+                "mysql_list_tables" => self.store.handle_list_tables(args).await,
+                "mysql_query" => self.store.handle_query(args).await,
+                name => Err(McpError::new(
+                    ErrorCode::METHOD_NOT_FOUND,
+                    format!("Unknown tool: {}", name),
+                    None,
+                )),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{is_blocked_ip, is_blocked_ip_for_hostname, is_private_host};
@@ -491,132 +618,5 @@ mod tests {
         assert!(!is_blocked_ip_for_hostname(
             "2001:4860:4860::8888".parse().unwrap()
         ));
-    }
-}
-
-impl ServerHandler for McpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation {
-                name: "mysql-mcp".to_string(),
-                title: Some("MySQL MCP Server".to_string()),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                description: Some(
-                    "Expose MySQL databases via the Model Context Protocol".to_string(),
-                ),
-                icons: None,
-                website_url: None,
-            },
-            instructions: Some(
-                "Use mysql_query to execute SQL queries against the connected MySQL database."
-                    .to_string(),
-            ),
-        }
-    }
-
-    async fn list_tools(
-        &self,
-        _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<ListToolsResult, McpError> {
-        {
-            let tools = vec![
-                Tool::new(
-                    "mysql_query",
-                    concat!(
-                        "Execute a SQL query against MySQL. ",
-                        "Always returned: rows, row_count, execution_time_ms, serialization_time_ms. ",
-                        "Optional: plan (only when explain:true or server auto-triggers for slow queries), ",
-                        "capped+next_offset+capped_hint (only when result was truncated to max_rows limit), ",
-                        "suggestions (only when a full table scan is detected). ",
-                        "parse_warnings (only when non-empty — hints about missing LIMIT, leading wildcards, etc.). ",
-                        "Supports SELECT, SHOW, EXPLAIN, and (if configured) INSERT, UPDATE, DELETE, DDL.",
-                    ),
-                    mysql_query_schema(),
-                ),
-                Tool::new(
-                    "mysql_schema_info",
-                    concat!(
-                        "Get schema metadata for a table. ",
-                        "Default (no include): column names, types, nullability only. ",
-                        "include:[indexes]: also returns all indexes with their columns. ",
-                        "include:[foreign_keys]: also returns FK constraints. ",
-                        "include:[size]: also returns estimated row count and byte sizes. ",
-                        "Combine any subset, e.g. include:[indexes,foreign_keys,size] for full detail.",
-                    ),
-                    mysql_schema_info_schema(),
-                ),
-                Tool::new(
-                    "mysql_server_info",
-                    "Get MySQL server metadata: version, current_database, current_user, sql_mode, character_set, collation, time_zone, read_only flag, accessible_features (list of enabled operation types), and which write operations are enabled by server config. Use to understand the environment before writing queries or when diagnosing connection issues.",
-                    mysql_server_info_schema(),
-                ),
-                Tool::new(
-                    "mysql_connect",
-                    concat!(
-                        "Create a named session to a different MySQL server or database. ",
-                        "Use this to: (1) access a different MySQL host, (2) connect with different credentials, ",
-                        "(3) route queries to a read replica, (4) work with a different database on the same server. ",
-                        "Requires MYSQL_ALLOW_RUNTIME_CONNECTIONS=true. ",
-                        "Sessions idle for >10 minutes are automatically closed. ",
-                        "Pass the session name to other tools via the 'session' parameter.",
-                    ),
-                    mysql_connect_schema(),
-                ),
-                Tool::new(
-                    "mysql_disconnect",
-                    "Explicitly close a named database session. The default session cannot be closed.",
-                    mysql_disconnect_schema(),
-                ),
-                Tool::new(
-                    "mysql_list_sessions",
-                    "List all active named database sessions with host, database, and idle time. The default session is always shown first.",
-                    mysql_list_sessions_schema(),
-                ),
-                Tool::new(
-                    "mysql_explain_plan",
-                    "Get the execution plan for a SELECT query without running it. Returns index_used, rows_examined_estimate, optimization tier, full_table_scan (bool), extra_flags (array of optimizer notes), and note. Use this before executing a potentially expensive query to check efficiency.",
-                    mysql_explain_plan_schema(),
-                ),
-                Tool::new(
-                    "mysql_list_tables",
-                    "List all tables in the current or specified database. More discoverable than querying information_schema directly.",
-                    mysql_list_tables_schema(),
-                ),
-            ];
-
-            Ok(ListToolsResult {
-                meta: None,
-                tools,
-                next_cursor: None,
-            })
-        }
-    }
-
-    async fn call_tool(
-        &self,
-        request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        {
-            let args = request.arguments.unwrap_or_default();
-            match request.name.as_ref() {
-                "mysql_connect" => self.store.handle_connect(args).await,
-                "mysql_disconnect" => self.store.handle_disconnect(args).await,
-                "mysql_list_sessions" => self.store.handle_list_sessions(args).await,
-                "mysql_schema_info" => self.store.handle_schema_info(args).await,
-                "mysql_server_info" => self.store.handle_server_info(args).await,
-                "mysql_explain_plan" => self.store.handle_explain_plan(args).await,
-                "mysql_list_tables" => self.store.handle_list_tables(args).await,
-                "mysql_query" => self.store.handle_query(args).await,
-                name => Err(McpError::new(
-                    ErrorCode::METHOD_NOT_FOUND,
-                    format!("Unknown tool: {}", name),
-                    None,
-                )),
-            }
-        }
     }
 }
