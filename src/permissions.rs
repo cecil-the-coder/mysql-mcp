@@ -175,8 +175,10 @@ mod tests {
 
     #[test]
     fn test_insert_allowed_when_enabled() {
-        let mut sec = SecurityConfig::default();
-        sec.allow_insert = true;
+        let sec = SecurityConfig {
+            allow_insert: true,
+            ..Default::default()
+        };
         // single-DB mode: database is set
         let mut config = config_with_security(sec);
         config.connection.database = Some("mydb".to_string());
@@ -194,8 +196,10 @@ mod tests {
 
     #[test]
     fn test_multi_db_write_blocked() {
-        let mut sec = SecurityConfig::default();
-        sec.allow_insert = true;
+        let sec = SecurityConfig {
+            allow_insert: true,
+            ..Default::default()
+        };
         // No database set = multi-DB mode, multi_db_write_mode = false
         let config = config_with_security(sec);
         let err = check_permission(&config, &StatementType::Insert, Some("mydb")).unwrap_err();
@@ -204,9 +208,11 @@ mod tests {
 
     #[test]
     fn test_multi_db_write_allowed_when_flag_set() {
-        let mut sec = SecurityConfig::default();
-        sec.allow_insert = true;
-        sec.multi_db_write_mode = true;
+        let sec = SecurityConfig {
+            allow_insert: true,
+            multi_db_write_mode: true,
+            ..Default::default()
+        };
         let config = config_with_security(sec);
         assert!(check_permission(&config, &StatementType::Insert, Some("mydb")).is_ok());
     }
@@ -297,8 +303,10 @@ mod tests {
 
     #[test]
     fn test_update_allowed_when_enabled() {
-        let mut sec = SecurityConfig::default();
-        sec.allow_update = true;
+        let sec = SecurityConfig {
+            allow_update: true,
+            ..Default::default()
+        };
         let mut config = config_with_security(sec);
         config.connection.database = Some("testdb".to_string());
         assert!(check_permission(&config, &StatementType::Update, None).is_ok());
@@ -306,8 +314,10 @@ mod tests {
 
     #[test]
     fn test_delete_allowed_when_enabled() {
-        let mut sec = SecurityConfig::default();
-        sec.allow_delete = true;
+        let sec = SecurityConfig {
+            allow_delete: true,
+            ..Default::default()
+        };
         let mut config = config_with_security(sec);
         config.connection.database = Some("testdb".to_string());
         assert!(check_permission(&config, &StatementType::Delete, None).is_ok());
@@ -315,8 +325,10 @@ mod tests {
 
     #[test]
     fn test_ddl_allowed_when_enabled() {
-        let mut sec = SecurityConfig::default();
-        sec.allow_ddl = true;
+        let sec = SecurityConfig {
+            allow_ddl: true,
+            ..Default::default()
+        };
         let mut config = config_with_security(sec);
         config.connection.database = Some("testdb".to_string());
         assert!(check_permission(&config, &StatementType::Create, None).is_ok());

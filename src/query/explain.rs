@@ -1,6 +1,9 @@
 use anyhow::Result;
 use sqlx::MySqlPool;
 
+// Re-export parse_v2 for benchmarking
+pub use super::explain_parse::parse_v2;
+
 /// Query performance tier derived from EXPLAIN output.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]

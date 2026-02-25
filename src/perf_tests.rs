@@ -6,7 +6,7 @@
 /// These tests always produce output; use --nocapture to see it.
 /// Assertions catch gross regressions (not tight latency SLOs).
 #[cfg(test)]
-pub mod perf_tests {
+pub mod tests {
     use crate::test_helpers::setup_test_db;
     use std::time::Instant;
     use tokio::task::JoinSet;
