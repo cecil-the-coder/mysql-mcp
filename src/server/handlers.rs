@@ -131,14 +131,35 @@ impl SessionStore {
             Ok(rows) if !rows.is_empty() => {
                 use sqlx::Row;
                 let row = &rows[0];
-                let version: String = row.try_get("mysql_version").unwrap_or_default();
-                let user: String = row.try_get("current_user").unwrap_or_default();
+                let version: String = row.try_get("mysql_version").unwrap_or_else(|e| {
+                    tracing::debug!("Failed to get mysql_version: {}", e);
+                    String::new()
+                });
+                let user: String = row.try_get("current_user").unwrap_or_else(|e| {
+                    tracing::debug!("Failed to get current_user: {}", e);
+                    String::new()
+                });
                 let db: Option<String> = row.try_get("current_database").ok().flatten();
-                let sql_mode: String = row.try_get("sql_mode").unwrap_or_default();
-                let character_set: String = row.try_get("character_set").unwrap_or_default();
-                let collation: String = row.try_get("collation").unwrap_or_default();
-                let time_zone: String = row.try_get("time_zone").unwrap_or_default();
-                let read_only_raw: i64 = row.try_get("read_only").unwrap_or(0);
+                let sql_mode: String = row.try_get("sql_mode").unwrap_or_else(|e| {
+                    tracing::debug!("Failed to get sql_mode: {}", e);
+                    String::new()
+                });
+                let character_set: String = row.try_get("character_set").unwrap_or_else(|e| {
+                    tracing::debug!("Failed to get character_set: {}", e);
+                    String::new()
+                });
+                let collation: String = row.try_get("collation").unwrap_or_else(|e| {
+                    tracing::debug!("Failed to get collation: {}", e);
+                    String::new()
+                });
+                let time_zone: String = row.try_get("time_zone").unwrap_or_else(|e| {
+                    tracing::debug!("Failed to get time_zone: {}", e);
+                    String::new()
+                });
+                let read_only_raw: i64 = row.try_get("read_only").unwrap_or_else(|e| {
+                    tracing::debug!("Failed to get read_only: {}", e);
+                    0
+                });
                 let read_only = read_only_raw != 0;
 
                 let mut accessible_features = vec!["SELECT", "SHOW", "EXPLAIN"];

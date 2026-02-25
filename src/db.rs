@@ -173,6 +173,68 @@ pub async fn build_session_pool_with_tunnel(
     Ok((pool, tunnel))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to check SSL mode since MySqlSslMode doesn't implement PartialEq
+    fn ssl_mode_is(mode: MySqlSslMode, expected: &str) -> bool {
+        format!("{:?}", mode) == expected
+    }
+
+    #[test]
+    fn test_determine_ssl_mode_disabled() {
+        // When ssl=false, SSL should be disabled regardless of other flags
+        assert!(
+            ssl_mode_is(determine_ssl_mode(false, false, false), "Disabled"),
+            "ssl=false, accept_invalid=false, has_ca=false should be Disabled"
+        );
+        assert!(
+            ssl_mode_is(determine_ssl_mode(false, true, false), "Disabled"),
+            "ssl=false, accept_invalid=true, has_ca=false should be Disabled"
+        );
+        assert!(
+            ssl_mode_is(determine_ssl_mode(false, false, true), "Disabled"),
+            "ssl=false, accept_invalid=false, has_ca=true should be Disabled"
+        );
+        assert!(
+            ssl_mode_is(determine_ssl_mode(false, true, true), "Disabled"),
+            "ssl=false, accept_invalid=true, has_ca=true should be Disabled"
+        );
+    }
+
+    #[test]
+    fn test_determine_ssl_mode_required() {
+        // When ssl=true and accept_invalid=true, use Required (no cert validation)
+        assert!(
+            ssl_mode_is(determine_ssl_mode(true, true, false), "Required"),
+            "ssl=true, accept_invalid=true, has_ca=false should be Required"
+        );
+        assert!(
+            ssl_mode_is(determine_ssl_mode(true, true, true), "Required"),
+            "ssl=true, accept_invalid=true, has_ca=true should be Required"
+        );
+    }
+
+    #[test]
+    fn test_determine_ssl_mode_verify_ca() {
+        // When ssl=true, accept_invalid=false, and has_ca=true, use VerifyCa
+        assert!(
+            ssl_mode_is(determine_ssl_mode(true, false, true), "VerifyCa"),
+            "ssl=true, accept_invalid=false, has_ca=true should be VerifyCa"
+        );
+    }
+
+    #[test]
+    fn test_determine_ssl_mode_verify_identity() {
+        // When ssl=true, accept_invalid=false, and has_ca=false, use VerifyIdentity
+        assert!(
+            ssl_mode_is(determine_ssl_mode(true, false, false), "VerifyIdentity"),
+            "ssl=true, accept_invalid=false, has_ca=false should be VerifyIdentity"
+        );
+    }
+}
+
 pub fn build_connect_options(config: &Config) -> Result<MySqlConnectOptions> {
     let conn = &config.connection;
 
