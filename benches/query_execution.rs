@@ -120,7 +120,7 @@ fn bench_query_execution(c: &mut Criterion) {
         group.bench_function("const_select_1row", |b| {
             b.iter(|| {
                 db.rt.block_on(async {
-                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0)
+                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0, 256)
                         .await
                         .unwrap()
                 })
@@ -136,7 +136,7 @@ fn bench_query_execution(c: &mut Criterion) {
         group.bench_function("mixed_types_1row", |b| {
             b.iter(|| {
                 db.rt.block_on(async {
-                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0)
+                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0, 256)
                         .await
                         .unwrap()
                 })
@@ -155,7 +155,7 @@ fn bench_query_execution(c: &mut Criterion) {
         group.bench_function("info_schema_10rows", |b| {
             b.iter(|| {
                 db.rt.block_on(async {
-                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0)
+                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0, 256)
                         .await
                         .unwrap()
                 })
@@ -174,7 +174,7 @@ fn bench_query_execution(c: &mut Criterion) {
         group.bench_function("info_schema_100rows", |b| {
             b.iter(|| {
                 db.rt.block_on(async {
-                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0)
+                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0, 256)
                         .await
                         .unwrap()
                 })
@@ -198,7 +198,7 @@ fn bench_query_execution(c: &mut Criterion) {
         group.bench_function("wide_20col_10rows", |b| {
             b.iter(|| {
                 db.rt.block_on(async {
-                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0)
+                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0, 256)
                         .await
                         .unwrap()
                 })

@@ -11,7 +11,7 @@
 //! optional query timeouts to async operations.
 
 pub mod explain;
-pub(crate) mod explain_parse;
+pub mod explain_parse;
 pub mod read;
 pub mod retry;
 pub mod write;

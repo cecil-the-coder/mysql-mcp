@@ -173,6 +173,62 @@ pub async fn build_session_pool_with_tunnel(
     Ok((pool, tunnel))
 }
 
+pub fn build_connect_options(config: &Config) -> Result<MySqlConnectOptions> {
+    let conn = &config.connection;
+
+    // If a full mysql:// URL is given, parse it directly.
+    // Reject unrecognized schemes rather than silently falling through to TCP.
+    if let Some(cs) = &conn.connection_string {
+        if cs.starts_with("mysql://") || cs.starts_with("mysql+ssl://") {
+            let opts = MySqlConnectOptions::from_str(cs)?;
+            return Ok(opts);
+        } else {
+            anyhow::bail!(
+                "connection_string must start with 'mysql://' or 'mysql+ssl://', got: '{}'",
+                cs.split_at(cs.find("://").map(|i| i + 3).unwrap_or(cs.len().min(32)))
+                    .0
+            );
+        }
+    }
+
+    // Unix socket path
+    if let Some(socket) = &conn.socket {
+        let mut opts = MySqlConnectOptions::new()
+            .socket(socket)
+            .username(&conn.user)
+            .password(&conn.password);
+        if let Some(db) = &conn.database {
+            opts = opts.database(db);
+        }
+        return Ok(opts);
+    }
+
+    // TCP connection
+    // When ssl_ca is set without ssl_accept_invalid_certs, use VerifyCa:
+    //   - validates the cert chain against the specified CA
+    //   - does NOT check hostname/IP (servers often use CN=hostname without a SAN)
+    // VerifyIdentity would also check hostname, which fails for IP-addressed servers
+    // with a CN-only cert.
+    let ssl_mode = determine_ssl_mode(
+        config.security.ssl,
+        config.security.ssl_accept_invalid_certs,
+        config.security.ssl_ca.is_some(),
+    );
+    let mut opts = MySqlConnectOptions::new()
+        .host(&conn.host)
+        .port(conn.port)
+        .username(&conn.user)
+        .password(&conn.password)
+        .ssl_mode(ssl_mode);
+    if let Some(db) = &conn.database {
+        opts = opts.database(db);
+    }
+    if let Some(ca_path) = &config.security.ssl_ca {
+        opts = opts.ssl_ca(ca_path);
+    }
+    Ok(opts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,60 +289,4 @@ mod tests {
             "ssl=true, accept_invalid=false, has_ca=false should be VerifyIdentity"
         );
     }
-}
-
-pub fn build_connect_options(config: &Config) -> Result<MySqlConnectOptions> {
-    let conn = &config.connection;
-
-    // If a full mysql:// URL is given, parse it directly.
-    // Reject unrecognized schemes rather than silently falling through to TCP.
-    if let Some(cs) = &conn.connection_string {
-        if cs.starts_with("mysql://") || cs.starts_with("mysql+ssl://") {
-            let opts = MySqlConnectOptions::from_str(cs)?;
-            return Ok(opts);
-        } else {
-            anyhow::bail!(
-                "connection_string must start with 'mysql://' or 'mysql+ssl://', got: '{}'",
-                cs.split_at(cs.find("://").map(|i| i + 3).unwrap_or(cs.len().min(32)))
-                    .0
-            );
-        }
-    }
-
-    // Unix socket path
-    if let Some(socket) = &conn.socket {
-        let mut opts = MySqlConnectOptions::new()
-            .socket(socket)
-            .username(&conn.user)
-            .password(&conn.password);
-        if let Some(db) = &conn.database {
-            opts = opts.database(db);
-        }
-        return Ok(opts);
-    }
-
-    // TCP connection
-    // When ssl_ca is set without ssl_accept_invalid_certs, use VerifyCa:
-    //   - validates the cert chain against the specified CA
-    //   - does NOT check hostname/IP (servers often use CN=hostname without a SAN)
-    // VerifyIdentity would also check hostname, which fails for IP-addressed servers
-    // with a CN-only cert.
-    let ssl_mode = determine_ssl_mode(
-        config.security.ssl,
-        config.security.ssl_accept_invalid_certs,
-        config.security.ssl_ca.is_some(),
-    );
-    let mut opts = MySqlConnectOptions::new()
-        .host(&conn.host)
-        .port(conn.port)
-        .username(&conn.user)
-        .password(&conn.password)
-        .ssl_mode(ssl_mode);
-    if let Some(db) = &conn.database {
-        opts = opts.database(db);
-    }
-    if let Some(ca_path) = &config.security.ssl_ca {
-        opts = opts.ssl_ca(ca_path);
-    }
-    Ok(opts)
 }
