@@ -3,8 +3,8 @@
 /// Run with: cargo test perf_ -- --nocapture
 /// (or against real DB): MYSQL_HOST=... cargo test perf_ -- --nocapture
 #[cfg(test)]
-mod perf_write_tests {
-    use crate::perf_tests::perf_tests::{compute, print};
+mod tests {
+    use crate::perf_tests::tests::{compute, print};
     use crate::test_helpers::setup_test_db;
     use std::sync::Arc;
     use std::time::Instant;

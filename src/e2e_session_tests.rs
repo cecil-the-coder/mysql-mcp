@@ -3,7 +3,7 @@
 //! mysql_connect cannot accept self-signed certificates used by testcontainers.
 
 #[cfg(test)]
-mod e2e_session_tests {
+mod tests {
     use crate::e2e_test_utils::{
         binary_path, do_handshake, read_response, send_message, setup_io, spawn_server,
     };

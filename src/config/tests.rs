@@ -1,6 +1,6 @@
 /// Edge case and validation tests for config types.
-
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use crate::config::env_config::EnvConfig;
     use crate::config::merge::load_toml_config;
@@ -32,8 +32,13 @@ mod tests {
     // Test: ALLOW_DDL config is settable
     #[test]
     fn test_allow_ddl_config() {
-        let mut config = Config::default();
-        config.security.allow_ddl = true;
+        let config = Config {
+            security: crate::config::SecurityConfig {
+                allow_ddl: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         // Config itself is valid - the warning would happen at runtime
         assert!(config.security.allow_ddl);
     }
@@ -177,8 +182,13 @@ host = "myhost"
     // Test: max_rows=0 fails validation and error mentions max_rows
     #[test]
     fn test_max_rows_zero_fails_validation() {
-        let mut config = Config::default();
-        config.pool.max_rows = 0;
+        let config = Config {
+            pool: crate::config::PoolConfig {
+                max_rows: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         assert!(
             config.validate().is_err(),
             "max_rows=0 should fail validation"
@@ -193,16 +203,26 @@ host = "myhost"
     // Test: warmup_connections > pool size fails validation
     #[test]
     fn test_warmup_connections_exceeds_pool_size_fails() {
-        let mut config = Config::default();
-        config.pool.warmup_connections = config.pool.size + 1;
+        let config = Config {
+            pool: crate::config::PoolConfig {
+                warmup_connections: 21, // default size is 20
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
     // Test: max_sessions=0 fails validation
     #[test]
     fn test_max_sessions_zero_fails_validation() {
-        let mut config = Config::default();
-        config.security.max_sessions = 0;
+        let config = Config {
+            security: crate::config::SecurityConfig {
+                max_sessions: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         assert!(config.validate().is_err());
     }
 
@@ -323,9 +343,14 @@ allow_update = false
     // Test: URL connection string is preserved as-is and does not look like a CLI flag
     #[test]
     fn test_url_connection_string_not_parsed_as_cli() {
-        let mut config = Config::default();
         let url = "mysql://user:pass@host/db".to_string();
-        config.connection.connection_string = Some(url.clone());
+        let config = Config {
+            connection: ConnectionConfig {
+                connection_string: Some(url.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
 
         // URL strings don't start with '-' so they should be left as-is
         let cs = config.connection.connection_string.clone().unwrap();
@@ -388,12 +413,14 @@ private_key = "/tmp/key.pem"
 
     #[test]
     fn test_ssh_config_validate_empty_host() {
-        let mut config = Config::default();
-        config.ssh = Some(SshConfig {
-            host: String::new(),
-            user: "user".to_string(),
+        let config = Config {
+            ssh: Some(SshConfig {
+                host: String::new(),
+                user: "user".to_string(),
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         assert!(config.validate().is_err());
         assert!(config
             .validate()
@@ -404,12 +431,14 @@ private_key = "/tmp/key.pem"
 
     #[test]
     fn test_ssh_config_validate_empty_user() {
-        let mut config = Config::default();
-        config.ssh = Some(SshConfig {
-            host: "bastion".to_string(),
-            user: String::new(),
+        let config = Config {
+            ssh: Some(SshConfig {
+                host: "bastion".to_string(),
+                user: String::new(),
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         assert!(config.validate().is_err());
         assert!(config
             .validate()
@@ -420,13 +449,15 @@ private_key = "/tmp/key.pem"
 
     #[test]
     fn test_ssh_config_validate_invalid_known_hosts_check() {
-        let mut config = Config::default();
-        config.ssh = Some(SshConfig {
-            host: "bastion".to_string(),
-            user: "ubuntu".to_string(),
-            known_hosts_check: "banana".to_string(),
+        let config = Config {
+            ssh: Some(SshConfig {
+                host: "bastion".to_string(),
+                user: "ubuntu".to_string(),
+                known_hosts_check: "banana".to_string(),
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         assert!(config.validate().is_err());
         assert!(config
             .validate()
@@ -438,13 +469,15 @@ private_key = "/tmp/key.pem"
     #[test]
     fn test_ssh_config_validate_valid_known_hosts_values() {
         for val in &["strict", "accept-new", "insecure"] {
-            let mut config = Config::default();
-            config.ssh = Some(SshConfig {
-                host: "bastion".to_string(),
-                user: "ubuntu".to_string(),
-                known_hosts_check: val.to_string(),
+            let config = Config {
+                ssh: Some(SshConfig {
+                    host: "bastion".to_string(),
+                    user: "ubuntu".to_string(),
+                    known_hosts_check: val.to_string(),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            });
+            };
             // Should not fail on known_hosts_check (private_key not set, path check skipped)
             let result = config.validate();
             // It passes validation for known_hosts_check itself
@@ -485,8 +518,13 @@ private_key = "/tmp/key.pem"
     // Test: pool.size = 1000 is the valid upper boundary
     #[test]
     fn test_pool_size_1000_is_valid() {
-        let mut config = Config::default();
-        config.pool.size = 1000;
+        let config = Config {
+            pool: crate::config::PoolConfig {
+                size: 1000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         assert!(
             config.validate().is_ok(),
             "pool.size=1000 should be the valid upper bound"
@@ -496,8 +534,13 @@ private_key = "/tmp/key.pem"
     // Test: pool.size = 1001 exceeds the cap and fails validation
     #[test]
     fn test_pool_size_1001_fails_validation() {
-        let mut config = Config::default();
-        config.pool.size = 1001;
+        let config = Config {
+            pool: crate::config::PoolConfig {
+                size: 1001,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let err = config.validate().unwrap_err();
         assert!(
             err.to_string().contains("pool.size"),
@@ -509,8 +552,13 @@ private_key = "/tmp/key.pem"
     // Test: cache_ttl_secs=0 passes validation (it warns but is intentionally allowed)
     #[test]
     fn test_cache_ttl_secs_zero_is_valid() {
-        let mut config = Config::default();
-        config.pool.cache_ttl_secs = 0;
+        let config = Config {
+            pool: crate::config::PoolConfig {
+                cache_ttl_secs: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         assert!(
             config.validate().is_ok(),
             "cache_ttl_secs=0 should be allowed (disables cache with a warning)"

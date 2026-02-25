@@ -13,7 +13,7 @@
 //!   MYSQL_SSH_E2E_DB_SSL_CA   — Path to SSL CA cert (optional)
 
 #[cfg(test)]
-mod e2e_ssh_tests {
+mod tests {
     use crate::e2e_test_utils::{binary_path, do_handshake, read_response, send_message};
     use serde_json::json;
     use std::process::Stdio;
