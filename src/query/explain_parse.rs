@@ -344,7 +344,7 @@ mod tests {
         let result = parse_v2(&v).unwrap();
         assert!(result.full_table_scan, "child table scan detected");
         assert!(
-            result.extra_flags.iter().any(|&s| s == "Using filesort"),
+            result.extra_flags.contains(&"Using filesort"),
             "should flag filesort"
         );
     }
@@ -512,7 +512,7 @@ mod tests {
         let result = parse(&v).unwrap();
         assert!(result.full_table_scan);
         assert!(
-            result.extra_flags.iter().any(|&s| s == "Using filesort"),
+            result.extra_flags.contains(&"Using filesort"),
             "filesort flagged"
         );
         assert_eq!(result.rows_examined_estimate, 3);
@@ -535,12 +535,12 @@ mod tests {
         }));
         let result = parse(&v).unwrap();
         assert!(
-            result.extra_flags.iter().any(|&s| s == "Using temporary"),
+            result.extra_flags.contains(&"Using temporary"),
             "grouping_operation using_temporary should be flagged, got: {:?}",
             result.extra_flags
         );
         assert!(
-            !result.extra_flags.iter().any(|&s| s == "Using filesort"),
+            !result.extra_flags.contains(&"Using filesort"),
             "using_filesort is false so should not appear"
         );
     }
@@ -559,7 +559,7 @@ mod tests {
         }));
         let result = parse(&v).unwrap();
         assert!(
-            result.extra_flags.iter().any(|&s| s == "Using temporary"),
+            result.extra_flags.contains(&"Using temporary"),
             "table-level using_temporary should be flagged"
         );
     }

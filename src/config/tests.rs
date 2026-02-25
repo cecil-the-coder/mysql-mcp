@@ -1,5 +1,4 @@
 /// Edge case and validation tests for config types.
-
 #[cfg(test)]
 mod tests {
     use crate::config::env_config::EnvConfig;
