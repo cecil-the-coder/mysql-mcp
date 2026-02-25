@@ -13,7 +13,10 @@ pub(crate) fn is_col_str(row: &sqlx::mysql::MySqlRow, col: &str) -> String {
             row.try_get::<Vec<u8>, _>(col)
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
         })
-        .unwrap_or_default()
+        .unwrap_or_else(|e| {
+            tracing::debug!("Failed to extract column '{}' from row: {}", col, e);
+            String::new()
+        })
 }
 
 pub(crate) fn is_col_str_opt(row: &sqlx::mysql::MySqlRow, col: &str) -> Option<String> {

@@ -348,9 +348,12 @@ impl SchemaIntrospector {
         let mut suggestions: Vec<String> = Vec::new();
 
         // Build a set of WHERE columns that are not yet individually indexed.
+        // Use HashSet for O(1) lookups instead of O(n) linear search.
+        let indexed_set: std::collections::HashSet<String> =
+            indexed_cols.iter().map(|s| s.to_lowercase()).collect();
         let unindexed_cols: Vec<&String> = where_cols
             .iter()
-            .filter(|col| !indexed_cols.iter().any(|ic| ic.eq_ignore_ascii_case(col)))
+            .filter(|col| !indexed_set.contains(&col.to_lowercase()))
             .collect();
 
         // --- Case 1: Composite index detection ---

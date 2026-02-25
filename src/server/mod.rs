@@ -343,7 +343,7 @@ impl McpServer {
 
 #[cfg(test)]
 mod tests {
-    use super::is_private_host;
+    use super::{is_blocked_ip, is_blocked_ip_for_hostname, is_private_host};
 
     #[test]
     fn ipv6_link_local_is_blocked() {
@@ -402,6 +402,95 @@ mod tests {
             !is_private_host("192.168.1.1"),
             "192.168.1.1 must be allowed"
         );
+    }
+
+    // Tests for is_blocked_ip function (used for direct IP connections)
+    #[test]
+    fn test_is_blocked_ip_ipv4_loopback() {
+        assert!(is_blocked_ip("127.0.0.1".parse().unwrap()));
+        assert!(is_blocked_ip("127.255.255.255".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_blocked_ip_ipv4_link_local() {
+        assert!(is_blocked_ip("169.254.0.1".parse().unwrap()));
+        assert!(is_blocked_ip("169.254.169.254".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_blocked_ip_ipv4_broadcast() {
+        assert!(is_blocked_ip("255.255.255.255".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_blocked_ip_ipv4_unspecified() {
+        assert!(is_blocked_ip("0.0.0.0".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_blocked_ip_ipv4_multicast() {
+        assert!(is_blocked_ip("224.0.0.1".parse().unwrap()));
+        assert!(is_blocked_ip("239.255.255.255".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_blocked_ip_ipv4_public_allowed() {
+        assert!(!is_blocked_ip("8.8.8.8".parse().unwrap()));
+        assert!(!is_blocked_ip("1.1.1.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_blocked_ip_ipv6_loopback() {
+        assert!(is_blocked_ip("::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_blocked_ip_ipv6_unspecified() {
+        assert!(is_blocked_ip("::".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_blocked_ip_ipv6_link_local() {
+        assert!(is_blocked_ip("fe80::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_blocked_ip_ipv6_multicast() {
+        assert!(is_blocked_ip("ff02::1".parse().unwrap()));
+    }
+
+    // Tests for is_blocked_ip_for_hostname function (allows loopback for localhost)
+    #[test]
+    fn test_is_blocked_ip_for_hostname_allows_loopback() {
+        // Loopback should be allowed for hostname resolution (e.g., localhost)
+        assert!(!is_blocked_ip_for_hostname("127.0.0.1".parse().unwrap()));
+        assert!(!is_blocked_ip_for_hostname("::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_blocked_ip_for_hostname_blocks_link_local() {
+        assert!(is_blocked_ip_for_hostname("169.254.0.1".parse().unwrap()));
+        assert!(is_blocked_ip_for_hostname("fe80::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_blocked_ip_for_hostname_blocks_multicast() {
+        assert!(is_blocked_ip_for_hostname("224.0.0.1".parse().unwrap()));
+        assert!(is_blocked_ip_for_hostname("ff02::1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_blocked_ip_for_hostname_blocks_unspecified() {
+        assert!(is_blocked_ip_for_hostname("0.0.0.0".parse().unwrap()));
+        assert!(is_blocked_ip_for_hostname("::".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_is_blocked_ip_for_hostname_allows_public() {
+        assert!(!is_blocked_ip_for_hostname("8.8.8.8".parse().unwrap()));
+        assert!(!is_blocked_ip_for_hostname(
+            "2001:4860:4860::8888".parse().unwrap()
+        ));
     }
 }
 
