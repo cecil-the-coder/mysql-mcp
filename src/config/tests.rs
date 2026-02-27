@@ -1,7 +1,7 @@
-/// Edge case and validation tests for config types.
+//! Edge case and validation tests for config types.
 
 #[cfg(test)]
-mod tests {
+mod config_tests {
     use crate::config::env_config::EnvConfig;
     use crate::config::merge::load_toml_config;
     use crate::config::{Config, ConnectionConfig, SchemaPermissions, SshConfig};
@@ -388,12 +388,14 @@ private_key = "/tmp/key.pem"
 
     #[test]
     fn test_ssh_config_validate_empty_host() {
-        let mut config = Config::default();
-        config.ssh = Some(SshConfig {
-            host: String::new(),
-            user: "user".to_string(),
+        let config = Config {
+            ssh: Some(SshConfig {
+                host: String::new(),
+                user: "user".to_string(),
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         assert!(config.validate().is_err());
         assert!(config
             .validate()
@@ -404,12 +406,14 @@ private_key = "/tmp/key.pem"
 
     #[test]
     fn test_ssh_config_validate_empty_user() {
-        let mut config = Config::default();
-        config.ssh = Some(SshConfig {
-            host: "bastion".to_string(),
-            user: String::new(),
+        let config = Config {
+            ssh: Some(SshConfig {
+                host: "bastion".to_string(),
+                user: String::new(),
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         assert!(config.validate().is_err());
         assert!(config
             .validate()
@@ -420,13 +424,15 @@ private_key = "/tmp/key.pem"
 
     #[test]
     fn test_ssh_config_validate_invalid_known_hosts_check() {
-        let mut config = Config::default();
-        config.ssh = Some(SshConfig {
-            host: "bastion".to_string(),
-            user: "ubuntu".to_string(),
-            known_hosts_check: "banana".to_string(),
+        let config = Config {
+            ssh: Some(SshConfig {
+                host: "bastion".to_string(),
+                user: "ubuntu".to_string(),
+                known_hosts_check: "banana".to_string(),
+                ..Default::default()
+            }),
             ..Default::default()
-        });
+        };
         assert!(config.validate().is_err());
         assert!(config
             .validate()
@@ -438,13 +444,15 @@ private_key = "/tmp/key.pem"
     #[test]
     fn test_ssh_config_validate_valid_known_hosts_values() {
         for val in &["strict", "accept-new", "insecure"] {
-            let mut config = Config::default();
-            config.ssh = Some(SshConfig {
-                host: "bastion".to_string(),
-                user: "ubuntu".to_string(),
-                known_hosts_check: val.to_string(),
+            let config = Config {
+                ssh: Some(SshConfig {
+                    host: "bastion".to_string(),
+                    user: "ubuntu".to_string(),
+                    known_hosts_check: val.to_string(),
+                    ..Default::default()
+                }),
                 ..Default::default()
-            });
+            };
             // Should not fail on known_hosts_check (private_key not set, path check skipped)
             let result = config.validate();
             // It passes validation for known_hosts_check itself
