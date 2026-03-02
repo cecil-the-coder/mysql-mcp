@@ -30,20 +30,19 @@ use tool_schemas::*;
 // DNS cache for hostname validation (prevents DNS rebinding attacks)
 // ---------------------------------------------------------------------------
 
-/// Cached DNS resolution result with timestamp.
+/// Cached DNS validation result with timestamp.
 struct DnsCacheEntry {
-    ips: Vec<IpAddr>,
-    cached_at: Instant,
     blocked: bool,
     reason: Option<String>,
+    cached_at: Instant,
 }
 
 /// Maximum number of entries in the DNS cache.
-/// This prevents unbounded memory growth from unique hostname lookups.
-const DNS_CACHE_MAX_ENTRIES: usize = 1000;
+/// MCP servers typically connect to a small number of known database hosts.
+const DNS_CACHE_MAX_ENTRIES: usize = 64;
 
 /// Global DNS cache protected by a mutex.
-/// Key: lowercase hostname. Value: resolution result with TTL.
+/// Key: lowercase hostname. Value: validation result with TTL.
 static DNS_CACHE: std::sync::OnceLock<Arc<Mutex<HashMap<String, DnsCacheEntry>>>> =
     std::sync::OnceLock::new();
 
@@ -53,51 +52,35 @@ fn get_dns_cache() -> Arc<Mutex<HashMap<String, DnsCacheEntry>>> {
         .clone()
 }
 
-/// Check if an IP address is in a blocked range (loopback, link-local, etc.).
-/// Used for direct IP address connections.
-fn is_blocked_ip(ip: IpAddr) -> bool {
+/// Check if an IP address is in a blocked range.
+/// When `allow_loopback` is true, loopback addresses are permitted (for hostname
+/// resolution where localhost is legitimate). When false, loopback is blocked
+/// (for direct IP connections).
+fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
     match ip {
         IpAddr::V4(v4) => {
-            v4.is_loopback()
+            let loopback_blocked = !allow_loopback && v4.is_loopback();
+            loopback_blocked
                 || v4.is_link_local()
                 || v4.is_broadcast()
                 || v4.is_unspecified()
                 || v4.is_multicast()
         }
         IpAddr::V6(v6) => {
+            // Check IPv4-mapped addresses
             if let Some(v4) = v6.to_ipv4_mapped() {
-                return v4.is_loopback()
+                let loopback_blocked = !allow_loopback && v4.is_loopback();
+                return loopback_blocked
                     || v4.is_link_local()
                     || v4.is_broadcast()
                     || v4.is_unspecified()
                     || v4.is_multicast();
             }
-            v6.is_loopback()
+            let loopback_blocked = !allow_loopback && v6.is_loopback();
+            loopback_blocked
                 || v6.is_unspecified()
                 || v6.is_unicast_link_local()
                 || v6.is_multicast()
-        }
-    }
-}
-
-/// Check if an IP address is blocked for hostname resolution.
-/// Unlike is_blocked_ip, this allows loopback addresses since localhost
-/// resolution is legitimate for local development and CI environments.
-fn is_blocked_ip_for_hostname(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            // Allow loopback for hostname resolution (e.g., localhost)
-            v4.is_link_local() || v4.is_broadcast() || v4.is_unspecified() || v4.is_multicast()
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return v4.is_link_local()
-                    || v4.is_broadcast()
-                    || v4.is_unspecified()
-                    || v4.is_multicast();
-            }
-            // Allow loopback for hostname resolution (e.g., localhost -> ::1)
-            v6.is_unspecified() || v6.is_unicast_link_local() || v6.is_multicast()
         }
     }
 }
@@ -109,11 +92,11 @@ pub(crate) struct HostValidation {
 }
 
 /// Validate a host string, resolving hostnames via DNS with caching.
-/// This prevents DNS rebinding attacks by caching resolved IPs.
+/// This prevents DNS rebinding attacks by caching validation results.
 pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) -> HostValidation {
-    // Fast path: literal IP address (no DNS lookup needed)
+    // Fast path: literal IP address (no DNS lookup needed, no caching needed)
     if let Ok(ip) = host.parse::<IpAddr>() {
-        let blocked = is_blocked_ip(ip);
+        let blocked = is_blocked_ip(ip, false); // loopback NOT allowed for direct IP
         return HostValidation {
             allowed: !blocked,
             reason: if blocked {
@@ -138,13 +121,12 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
 
     // Check cache
     {
-        let cache_arc = get_dns_cache();
-        let cache = cache_arc.lock().await;
+        let cache = get_dns_cache();
+        let cache = cache.lock().await;
         if let Some(entry) = cache.get(&hostname) {
             if entry.cached_at.elapsed() < dns_cache_ttl {
                 tracing::debug!(
                     hostname = %hostname,
-                    ips = ?entry.ips,
                     blocked = entry.blocked,
                     "DNS cache hit for hostname validation"
                 );
@@ -158,53 +140,39 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
 
     // Cache miss or expired — perform DNS lookup
     tracing::debug!(hostname = %hostname, "DNS cache miss, performing lookup");
-    // lookup_host expects "hostname:port" format; use a dummy port since we only care about IPs
     let lookup_target = format!("{}:0", hostname);
-    let (ips, resolution_error) = match tokio::net::lookup_host(&lookup_target).await {
-        Ok(addr_iter) => {
-            let resolved_ips: Vec<IpAddr> = addr_iter.map(|addr| addr.ip()).collect();
-            (resolved_ips, None)
-        }
-        Err(e) => (vec![], Some(e.to_string())),
-    };
-
-    // Check if any resolved IP is blocked
-    // Note: We only block link-local, multicast, and unspecified addresses for hostnames.
-    // Loopback addresses (like localhost -> 127.0.0.1 or ::1) are allowed when resolved
-    // via hostname because they're legitimate for local development and CI environments.
-    // DNS rebinding protection comes from caching the resolved IPs, not blocking localhost.
-    let mut blocked = false;
-    let mut reason = None;
-    if ips.is_empty() {
-        if let Some(err) = resolution_error {
-            blocked = true;
-            reason = Some(format!("DNS resolution failed for '{}': {}", hostname, err));
-        } else {
-            blocked = true;
-            reason = Some(format!(
-                "DNS resolution returned no addresses for '{}'",
-                hostname
-            ));
-        }
-    } else {
-        for ip in &ips {
-            if is_blocked_ip_for_hostname(*ip) {
-                blocked = true;
-                reason = Some(format!(
-                    "Hostname '{}' resolves to blocked IP address {} (link-local/multicast)",
-                    hostname, ip
-                ));
-                break;
+    let (blocked, reason) = match tokio::net::lookup_host(&lookup_target).await {
+        Ok(addrs) => {
+            // Check if any resolved IP is blocked
+            // Loopback is allowed for hostnames (e.g., localhost) since that's legitimate
+            // for local development. DNS rebinding protection comes from caching.
+            let mut blocked = false;
+            let mut reason = None;
+            for ip in addrs.map(|a| a.ip()) {
+                if is_blocked_ip(ip, true) {
+                    // loopback allowed for hostnames
+                    blocked = true;
+                    reason = Some(format!(
+                        "Hostname '{}' resolves to blocked IP address {} (link-local/multicast)",
+                        hostname, ip
+                    ));
+                    break;
+                }
             }
+            (blocked, reason)
         }
-    }
+        Err(e) => (
+            true,
+            Some(format!("DNS resolution failed for '{}': {}", hostname, e)),
+        ),
+    };
 
     // Cache the result
     {
-        let cache_arc = get_dns_cache();
-        let mut cache = cache_arc.lock().await;
-        // Evict oldest entries if cache is full (HashMap has no order, so remove arbitrary entry)
-        while cache.len() >= DNS_CACHE_MAX_ENTRIES {
+        let cache = get_dns_cache();
+        let mut cache = cache.lock().await;
+        // Simple eviction if at capacity (remove arbitrary entry)
+        if cache.len() >= DNS_CACHE_MAX_ENTRIES {
             if let Some(key) = cache.keys().next().cloned() {
                 cache.remove(&key);
             }
@@ -212,10 +180,9 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
         cache.insert(
             hostname,
             DnsCacheEntry {
-                ips: ips.clone(),
-                cached_at: Instant::now(),
                 blocked,
                 reason: reason.clone(),
+                cached_at: Instant::now(),
             },
         );
     }
@@ -232,7 +199,7 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
 #[cfg(test)]
 fn is_private_host(host: &str) -> bool {
     if let Ok(ip) = host.parse::<IpAddr>() {
-        is_blocked_ip(ip)
+        is_blocked_ip(ip, false)
     } else {
         false // hostname — allowed (DNS validation happens in async path)
     }
@@ -470,7 +437,7 @@ impl ServerHandler for McpServer {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_blocked_ip, is_blocked_ip_for_hostname, is_private_host};
+    use super::{is_blocked_ip, is_private_host};
 
     #[test]
     fn ipv6_link_local_is_blocked() {
@@ -531,92 +498,88 @@ mod tests {
         );
     }
 
-    // Tests for is_blocked_ip function (used for direct IP connections)
+    // Tests for is_blocked_ip function
+    // allow_loopback=false: used for direct IP connections (loopback blocked)
+    // allow_loopback=true: used for hostname resolution (loopback allowed for localhost)
+
     #[test]
     fn test_is_blocked_ip_ipv4_loopback() {
-        assert!(is_blocked_ip("127.0.0.1".parse().unwrap()));
-        assert!(is_blocked_ip("127.255.255.255".parse().unwrap()));
+        // Direct IP: loopback blocked
+        assert!(is_blocked_ip("127.0.0.1".parse().unwrap(), false));
+        assert!(is_blocked_ip("127.255.255.255".parse().unwrap(), false));
+        // Hostname resolution: loopback allowed
+        assert!(!is_blocked_ip("127.0.0.1".parse().unwrap(), true));
     }
 
     #[test]
     fn test_is_blocked_ip_ipv4_link_local() {
-        assert!(is_blocked_ip("169.254.0.1".parse().unwrap()));
-        assert!(is_blocked_ip("169.254.169.254".parse().unwrap()));
+        // Link-local always blocked
+        assert!(is_blocked_ip("169.254.0.1".parse().unwrap(), false));
+        assert!(is_blocked_ip("169.254.169.254".parse().unwrap(), false));
+        assert!(is_blocked_ip("169.254.0.1".parse().unwrap(), true));
     }
 
     #[test]
     fn test_is_blocked_ip_ipv4_broadcast() {
-        assert!(is_blocked_ip("255.255.255.255".parse().unwrap()));
+        assert!(is_blocked_ip("255.255.255.255".parse().unwrap(), false));
+        assert!(is_blocked_ip("255.255.255.255".parse().unwrap(), true));
     }
 
     #[test]
     fn test_is_blocked_ip_ipv4_unspecified() {
-        assert!(is_blocked_ip("0.0.0.0".parse().unwrap()));
+        assert!(is_blocked_ip("0.0.0.0".parse().unwrap(), false));
+        assert!(is_blocked_ip("0.0.0.0".parse().unwrap(), true));
     }
 
     #[test]
     fn test_is_blocked_ip_ipv4_multicast() {
-        assert!(is_blocked_ip("224.0.0.1".parse().unwrap()));
-        assert!(is_blocked_ip("239.255.255.255".parse().unwrap()));
+        assert!(is_blocked_ip("224.0.0.1".parse().unwrap(), false));
+        assert!(is_blocked_ip("239.255.255.255".parse().unwrap(), false));
+        assert!(is_blocked_ip("224.0.0.1".parse().unwrap(), true));
     }
 
     #[test]
     fn test_is_blocked_ip_ipv4_public_allowed() {
-        assert!(!is_blocked_ip("8.8.8.8".parse().unwrap()));
-        assert!(!is_blocked_ip("1.1.1.1".parse().unwrap()));
+        assert!(!is_blocked_ip("8.8.8.8".parse().unwrap(), false));
+        assert!(!is_blocked_ip("1.1.1.1".parse().unwrap(), false));
+        assert!(!is_blocked_ip("8.8.8.8".parse().unwrap(), true));
     }
 
     #[test]
     fn test_is_blocked_ip_ipv6_loopback() {
-        assert!(is_blocked_ip("::1".parse().unwrap()));
+        // Direct IP: loopback blocked
+        assert!(is_blocked_ip("::1".parse().unwrap(), false));
+        // Hostname resolution: loopback allowed
+        assert!(!is_blocked_ip("::1".parse().unwrap(), true));
     }
 
     #[test]
     fn test_is_blocked_ip_ipv6_unspecified() {
-        assert!(is_blocked_ip("::".parse().unwrap()));
+        assert!(is_blocked_ip("::".parse().unwrap(), false));
+        assert!(is_blocked_ip("::".parse().unwrap(), true));
     }
 
     #[test]
     fn test_is_blocked_ip_ipv6_link_local() {
-        assert!(is_blocked_ip("fe80::1".parse().unwrap()));
+        assert!(is_blocked_ip("fe80::1".parse().unwrap(), false));
+        assert!(is_blocked_ip("fe80::1".parse().unwrap(), true));
     }
 
     #[test]
     fn test_is_blocked_ip_ipv6_multicast() {
-        assert!(is_blocked_ip("ff02::1".parse().unwrap()));
-    }
-
-    // Tests for is_blocked_ip_for_hostname function (allows loopback for localhost)
-    #[test]
-    fn test_is_blocked_ip_for_hostname_allows_loopback() {
-        // Loopback should be allowed for hostname resolution (e.g., localhost)
-        assert!(!is_blocked_ip_for_hostname("127.0.0.1".parse().unwrap()));
-        assert!(!is_blocked_ip_for_hostname("::1".parse().unwrap()));
+        assert!(is_blocked_ip("ff02::1".parse().unwrap(), false));
+        assert!(is_blocked_ip("ff02::1".parse().unwrap(), true));
     }
 
     #[test]
-    fn test_is_blocked_ip_for_hostname_blocks_link_local() {
-        assert!(is_blocked_ip_for_hostname("169.254.0.1".parse().unwrap()));
-        assert!(is_blocked_ip_for_hostname("fe80::1".parse().unwrap()));
-    }
-
-    #[test]
-    fn test_is_blocked_ip_for_hostname_blocks_multicast() {
-        assert!(is_blocked_ip_for_hostname("224.0.0.1".parse().unwrap()));
-        assert!(is_blocked_ip_for_hostname("ff02::1".parse().unwrap()));
-    }
-
-    #[test]
-    fn test_is_blocked_ip_for_hostname_blocks_unspecified() {
-        assert!(is_blocked_ip_for_hostname("0.0.0.0".parse().unwrap()));
-        assert!(is_blocked_ip_for_hostname("::".parse().unwrap()));
-    }
-
-    #[test]
-    fn test_is_blocked_ip_for_hostname_allows_public() {
-        assert!(!is_blocked_ip_for_hostname("8.8.8.8".parse().unwrap()));
-        assert!(!is_blocked_ip_for_hostname(
-            "2001:4860:4860::8888".parse().unwrap()
+    fn test_is_blocked_ip_public_ipv6_allowed() {
+        assert!(!is_blocked_ip(
+            "2001:4860:4860::8888".parse().unwrap(),
+            false
+        ));
+        assert!(!is_blocked_ip(
+            "2001:4860:4860::8888".parse().unwrap(),
+            true
         ));
     }
 }

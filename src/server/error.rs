@@ -1,63 +1,25 @@
-//! Error message sanitization to prevent information disclosure.
+//! Error message formatting for tool responses.
+//!
+//! Note: This module no longer performs aggressive sanitization of IPs, paths, or hostnames.
+//! In a database MCP tool, the user explicitly provides connection details (host, port, credentials),
+//! so redacting this information from error messages would hide useful debugging context.
+//! The user already knows their own server addresses and file paths.
 
-use regex::Regex;
 use rmcp::model::{CallToolResult, Content};
-use std::sync::LazyLock;
 
-// Pre-compiled regex patterns for error sanitization
-static UNIX_PATH_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"/[\w./-]+/[\w./-]+").unwrap());
-
-static WINDOWS_PATH_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[A-Za-z]:\\/[\w./-]+").unwrap());
-
-static IP_PORT_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}\b").unwrap());
-
-static IP_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b").unwrap());
-
-static OS_ERROR_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s*\(os error \d+\)").unwrap());
-
-static MULTIPLE_SPACES_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
-
+/// Format an error message for return to the MCP client.
+///
+/// Performs minimal cleanup: trims whitespace and removes trailing punctuation
+/// that looks odd in error messages.
 pub(crate) fn sanitize_error(error: &str) -> String {
-    tracing::debug!("Original error (before sanitization): {}", error);
+    let sanitized = error.trim();
 
-    let mut sanitized = error.to_string();
-
-    // Remove file paths first (they might contain IP-like sequences)
-    sanitized = UNIX_PATH_REGEX
-        .replace_all(&sanitized, "[REDACTED]")
-        .to_string();
-    sanitized = WINDOWS_PATH_REGEX
-        .replace_all(&sanitized, "[REDACTED]")
-        .to_string();
-
-    // Remove IP:port combinations
-    sanitized = IP_PORT_REGEX
-        .replace_all(&sanitized, "[REDACTED]")
-        .to_string();
-
-    // Remove standalone IP addresses
-    sanitized = IP_REGEX.replace_all(&sanitized, "[REDACTED]").to_string();
-
-    // Remove OS error codes
-    sanitized = OS_ERROR_REGEX.replace_all(&sanitized, "").to_string();
-
-    // Clean up multiple spaces and trim
-    sanitized = MULTIPLE_SPACES_REGEX
-        .replace_all(&sanitized, " ")
-        .to_string();
-    sanitized = sanitized.trim().to_string();
-
-    // Remove trailing punctuation that looks odd after sanitization
-    if sanitized.ends_with(':') || sanitized.ends_with(',') {
-        sanitized.pop();
-    }
-
+    // Remove trailing punctuation that looks odd
     sanitized
+        .strip_suffix(':')
+        .or_else(|| sanitized.strip_suffix(','))
+        .unwrap_or(sanitized)
+        .to_string()
 }
 
 pub(crate) fn error_response(message: impl Into<String>) -> CallToolResult {
@@ -93,31 +55,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sanitize_ip_port() {
+    fn test_sanitize_trims_whitespace() {
+        let error = "  Connection failed  ";
+        let sanitized = sanitize_error(error);
+        assert_eq!(sanitized, "Connection failed");
+    }
+
+    #[test]
+    fn test_sanitize_removes_trailing_colon() {
+        let error = "Connection failed:";
+        let sanitized = sanitize_error(error);
+        assert_eq!(sanitized, "Connection failed");
+    }
+
+    #[test]
+    fn test_sanitize_removes_trailing_comma() {
+        let error = "Connection failed,";
+        let sanitized = sanitize_error(error);
+        assert_eq!(sanitized, "Connection failed");
+    }
+
+    #[test]
+    fn test_preserves_connection_details() {
+        // IPs and paths are no longer redacted - the user already knows these
         let error = "Connection to 192.168.1.1:3306 failed";
         let sanitized = sanitize_error(error);
-        assert_eq!(sanitized, "Connection to [REDACTED] failed");
+        assert_eq!(sanitized, "Connection to 192.168.1.1:3306 failed");
     }
 
     #[test]
-    fn test_sanitize_os_error() {
+    fn test_preserves_paths() {
+        let error = "Error reading /home/user/config.toml: permission denied";
+        let sanitized = sanitize_error(error);
+        // Trailing colon removed, but path preserved
+        assert_eq!(
+            sanitized,
+            "Error reading /home/user/config.toml: permission denied"
+        );
+    }
+
+    #[test]
+    fn test_preserves_os_errors() {
         let error = "Connection refused (os error 111)";
         let sanitized = sanitize_error(error);
-        assert_eq!(sanitized, "Connection refused");
-    }
-
-    #[test]
-    fn test_sanitize_unix_path() {
-        let error = "Error reading /home/user/config.toml permission denied";
-        let sanitized = sanitize_error(error);
-        assert_eq!(sanitized, "Error reading [REDACTED] permission denied");
-    }
-
-    #[test]
-    fn test_sanitize_standalone_ip() {
-        let error = "Cannot connect to 10.96.84.170";
-        let sanitized = sanitize_error(error);
-        assert_eq!(sanitized, "Cannot connect to [REDACTED]");
+        assert_eq!(sanitized, "Connection refused (os error 111)");
     }
 
     #[test]

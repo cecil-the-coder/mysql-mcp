@@ -349,10 +349,19 @@ impl SessionStore {
             }
         }
 
-        // Check total connections limit before creating a new session pool
-        let current_total = self.total_connections.load(Ordering::Relaxed);
+        // Atomically check and reserve connection slots to prevent races.
+        // We use fetch_update to atomically check the limit and increment.
         let max_total = self.config.security.max_total_connections;
-        if current_total + NAMED_SESSION_POOL_SIZE > max_total {
+        let reserve_result =
+            self.total_connections
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                    if current + NAMED_SESSION_POOL_SIZE <= max_total {
+                        Some(current + NAMED_SESSION_POOL_SIZE)
+                    } else {
+                        None
+                    }
+                });
+        if let Err(current_total) = reserve_result {
             return tool_error!(
                 "Total connection limit ({}) would be exceeded. Current: {}, new session would add {}. Disconnect a session first.",
                 max_total, current_total, NAMED_SESSION_POOL_SIZE
@@ -471,7 +480,7 @@ impl SessionStore {
         if sessions.len() >= self.config.security.max_sessions as usize
             || sessions.contains_key(&name)
         {
-            // Lost the race — clean up and report.
+            // Lost the race — clean up and report. Release the reserved connection slots.
             drop(sessions);
             if let Some(t) = session.tunnel {
                 if let Err(e) = t.close().await {
@@ -479,12 +488,12 @@ impl SessionStore {
                 }
             }
             session.pool.close().await;
+            self.total_connections
+                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
             return tool_error!("Session creation raced with another request. Please retry.");
         }
         sessions.insert(name, session);
-        // Increment total connections counter after successful insertion
-        self.total_connections
-            .fetch_add(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+        // Connection slots were already reserved atomically at the start of handle_connect
 
         // Add security warnings if any
         let mut response = info;
