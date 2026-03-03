@@ -16,7 +16,7 @@ fn estimate_value_size(v: &Value) -> usize {
     match v {
         Value::Null => 8,
         Value::Bool(_) => 1,
-        Value::Number(_) => 24,  // simplified - no need to stringify
+        Value::Number(_) => 24, // simplified - no need to stringify
         Value::String(s) => s.len() + 24,
         Value::Array(arr) => arr.iter().map(estimate_value_size).sum::<usize>() + arr.len() * 8,
         Value::Object(obj) => obj

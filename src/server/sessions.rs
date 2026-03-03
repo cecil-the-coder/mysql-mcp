@@ -498,7 +498,10 @@ impl SessionStore {
             session.pool.close().await;
             self.total_connections
                 .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
-            return tool_error!("Session name '{}' is now taken. Please try a different name.", name);
+            return tool_error!(
+                "Session name '{}' is now taken. Please try a different name.",
+                name
+            );
         }
         sessions.insert(name, session);
         // Connection slots were already reserved atomically at the start of handle_connect
@@ -550,7 +553,10 @@ impl SessionStore {
                 "message": format!("Session '{}' closed", name)
             })))
         } else {
-            tool_error!("Session '{}' not found. Use mysql_list_sessions to see available sessions.", name)
+            tool_error!(
+                "Session '{}' not found. Use mysql_list_sessions to see available sessions.",
+                name
+            )
         }
     }
 
