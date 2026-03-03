@@ -495,6 +495,7 @@ private_key = "/tmp/key.pem"
     fn test_pool_size_1000_is_valid() {
         let mut config = Config::default();
         config.pool.size = 1000;
+        config.security.max_total_connections = 1000; // Must be >= pool.size
         assert!(
             config.validate().is_ok(),
             "pool.size=1000 should be the valid upper bound"

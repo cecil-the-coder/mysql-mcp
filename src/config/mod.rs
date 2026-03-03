@@ -281,6 +281,19 @@ impl Config {
             anyhow::bail!("pool.max_rows must be >= 1 (set to a large number like 10000 for effectively unlimited rows)");
         }
 
+        // max_result_memory_mb must be at least 1
+        if self.pool.max_result_memory_mb == 0 {
+            anyhow::bail!("pool.max_result_memory_mb must be >= 1");
+        }
+
+        // retry_attempts should have a reasonable upper bound
+        if self.pool.retry_attempts > 10 {
+            anyhow::bail!(
+                "pool.retry_attempts is set to {} — this is unreasonably high. Use a value between 0 and 10.",
+                self.pool.retry_attempts
+            );
+        }
+
         // warmup_connections cannot exceed the pool size
         if self.pool.warmup_connections > self.pool.size {
             anyhow::bail!(
@@ -292,6 +305,24 @@ impl Config {
 
         if self.security.max_sessions == 0 {
             anyhow::bail!("security.max_sessions must be >= 1");
+        }
+
+        // dns_cache_ttl_secs=0 disables DNS caching — warn about the implications
+        if self.security.dns_cache_ttl_secs == 0 {
+            eprintln!(
+                "Warning: security.dns_cache_ttl_secs is 0 — DNS cache is disabled and every \
+                 connection will trigger a DNS lookup. Set to a positive value (e.g. 60) to \
+                 enable caching and prevent DNS rebinding attacks."
+            );
+        }
+
+        // max_total_connections must be at least pool.size
+        if self.security.max_total_connections < self.pool.size {
+            anyhow::bail!(
+                "security.max_total_connections ({}) must be >= pool.size ({})",
+                self.security.max_total_connections,
+                self.pool.size
+            );
         }
 
         // performance_hints must be one of the recognised modes

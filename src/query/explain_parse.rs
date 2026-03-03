@@ -27,7 +27,16 @@ struct PlanStats {
 fn walk_plan_node(node: &Value, stats: &mut PlanStats) {
     match node["access_type"].as_str().unwrap_or("") {
         "table" => {
-            stats.has_full_table_scan = true;
+            // Check if this table access uses an index
+            if node.get("index_name").is_some_and(|v| !v.is_null()) {
+                // Table access with index - not a full scan
+                if stats.index_name.is_none() {
+                    stats.index_name = node["index_name"].as_str().map(str::to_string);
+                }
+            } else {
+                // No index specified - this is a full table scan
+                stats.has_full_table_scan = true;
+            }
             stats.total_estimated_rows += node["estimated_rows"].as_f64().unwrap_or(0.0);
         }
         "index" => {

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use sqlx::MySqlPool;
+use std::time::Duration;
 
 /// Query performance tier derived from EXPLAIN output.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -21,12 +22,23 @@ pub struct ExplainResult {
 
 pub async fn run_explain(pool: &MySqlPool, sql: &str) -> Result<ExplainResult> {
     let explain_sql = format!("EXPLAIN FORMAT=JSON {}", sql);
-    let row: sqlx::mysql::MySqlRow = sqlx::query(&explain_sql).fetch_one(pool).await?;
+    let explain_fut = sqlx::query(&explain_sql).fetch_one(pool);
+    let row: sqlx::mysql::MySqlRow = tokio::time::timeout(Duration::from_secs(30), explain_fut)
+        .await
+        .map_err(|_| anyhow::anyhow!("EXPLAIN query timed out after 30 seconds"))?
+        .map_err(anyhow::Error::from)?;
 
     // EXPLAIN FORMAT=JSON returns a single row with one column: the JSON string
     use sqlx::Row;
     let json_str: String = row.try_get(0)?;
-    let v: serde_json::Value = serde_json::from_str(&json_str)?;
+    let v: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| {
+        let preview = if json_str.len() > 200 {
+            format!("{}...", &json_str[..200])
+        } else {
+            json_str.clone()
+        };
+        anyhow::anyhow!("Failed to parse EXPLAIN JSON: {}. Preview: {}", e, preview)
+    })?;
 
     super::explain_parse::parse(&v)
 }

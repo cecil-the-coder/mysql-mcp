@@ -39,7 +39,7 @@ impl SessionStore {
             .get("table")
             .and_then(|v: &serde_json::Value| v.as_str())
         {
-            Some(t) if !t.is_empty() => t.to_string(),
+            Some(t) if !t.trim().is_empty() => t.to_string(),
             Some(_) => return tool_error!("Table name cannot be empty"),
             None => return tool_error!("Missing required argument: table"),
         };
@@ -224,11 +224,9 @@ impl SessionStore {
         };
 
         // Determine which database to query
-        let target_db = database.as_deref().or(ctx.database.as_deref());
-        if target_db.is_none() {
+        let Some(target_db) = database.as_deref().or(ctx.database.as_deref()) else {
             return tool_error!("No database specified and no default database for this session");
-        }
-        let target_db = target_db.expect("target_db checked for None above");
+        };
 
         // Note: TABLE_NAME in information_schema is VARBINARY, so we cast to CHAR
         // to get a proper string. Without this cast, sqlx would fail with
@@ -265,7 +263,7 @@ impl SessionStore {
         args: serde_json::Map<String, serde_json::Value>,
     ) -> anyhow::Result<CallToolResult, rmcp::ErrorData> {
         let sql = match args.get("sql").and_then(|v| v.as_str()) {
-            Some(s) if !s.is_empty() => s.to_string(),
+            Some(s) if !s.trim().is_empty() => s.to_string(),
             _ => return tool_error!("Missing required argument: sql"),
         };
         if sql.contains('\0') {
@@ -319,7 +317,7 @@ impl SessionStore {
         args: serde_json::Map<String, serde_json::Value>,
     ) -> anyhow::Result<CallToolResult, rmcp::ErrorData> {
         let sql = match args.get("sql").and_then(|v| v.as_str()) {
-            Some(s) if !s.is_empty() => s.to_string(),
+            Some(s) if !s.trim().is_empty() => s.to_string(),
             _ => return tool_error!("Missing required argument: sql"),
         };
         if sql.contains('\0') {

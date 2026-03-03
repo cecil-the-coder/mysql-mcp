@@ -16,12 +16,12 @@ fn estimate_value_size(v: &Value) -> usize {
     match v {
         Value::Null => 8,
         Value::Bool(_) => 1,
-        Value::Number(n) => n.to_string().len() + 16, // number struct overhead
-        Value::String(s) => s.len() + 24,             // string struct overhead
-        Value::Array(arr) => arr.iter().map(estimate_value_size).sum::<usize>() + arr.len() * 16,
+        Value::Number(_) => 24,  // simplified - no need to stringify
+        Value::String(s) => s.len() + 24,
+        Value::Array(arr) => arr.iter().map(estimate_value_size).sum::<usize>() + arr.len() * 8,
         Value::Object(obj) => obj
             .iter()
-            .map(|(k, v)| k.len() + estimate_value_size(v) + 32)
+            .map(|(k, v)| k.len() + estimate_value_size(v) + 16)
             .sum(),
     }
 }
@@ -137,8 +137,12 @@ pub async fn execute_read_query(
     let mut total_memory_bytes: usize = 0;
     let mut memory_capped = false;
 
-    let mut json_rows: Vec<Map<String, Value>> =
-        Vec::with_capacity(rows.len().min(max_rows as usize + 1));
+    let initial_capacity = if max_rows > 0 {
+        rows.len().min(max_rows as usize + 1)
+    } else {
+        rows.len().min(1000) // reasonable initial allocation for unlimited mode
+    };
+    let mut json_rows: Vec<Map<String, Value>> = Vec::with_capacity(initial_capacity);
     for row in &rows {
         let json_row = row_to_json(row, &mut warnings);
 
@@ -208,7 +212,8 @@ pub async fn execute_read_query(
                 while preview_end > 0 && !sql.is_char_boundary(preview_end) {
                     preview_end -= 1;
                 }
-                tracing::warn!(sql = %&sql[..preview_end], error = %msg, "EXPLAIN failed; continuing without plan");
+                let sql_preview = sql.get(..preview_end).unwrap_or("");
+                tracing::warn!(sql = %sql_preview, error = %msg, "EXPLAIN failed; continuing without plan");
                 (None, Some(msg))
             }
         }

@@ -86,7 +86,12 @@ pub fn check_permission(
             Ok(())
         }
         StatementType::Set => {
-            // SET is informational
+            // SET is allowed without restriction.
+            // NOTE: Some SET variants can affect security/behavior:
+            // - SET SESSION sql_mode = '' could weaken validation
+            // - SET GLOBAL could affect server-wide settings
+            // These are intentionally allowed for operational flexibility,
+            // but operators should be aware of the implications.
             Ok(())
         }
         StatementType::Other(name) => {
@@ -106,7 +111,7 @@ pub fn check_permission(
             } else if name == "Do" {
                 "DO is not supported. Use SELECT instead (e.g. SELECT SLEEP(1))".to_string()
             } else {
-                format!("Unsupported statement type: {name}. Supported types: SELECT, SHOW, EXPLAIN, INSERT, UPDATE, DELETE, CREATE (TABLE/DATABASE), ALTER, DROP, TRUNCATE, USE, SET. Note: CREATE INDEX, CREATE VIEW, and similar variants are not supported")
+                format!("Unsupported statement type: {name}. Supported types: SELECT, SHOW, EXPLAIN, INSERT, UPDATE, DELETE, CREATE (TABLE/DATABASE/INDEX), ALTER, DROP, TRUNCATE, USE, SET")
             };
             bail!("{}", hint);
         }

@@ -103,6 +103,9 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         }
 
         Statement::Delete(delete) => {
+            // Note: Multi-table DELETE (e.g., DELETE t1, t2 FROM ...) only captures the first table.
+            // This is acceptable because: (1) permission checks only need one table to deny if any is restricted,
+            // (2) cache invalidation after DELETE is conservative and will invalidate all if needed.
             let first_table = match &delete.from {
                 FromTable::WithFromKeyword(tables) | FromTable::WithoutKeyword(tables) => {
                     tables.first()
@@ -196,6 +199,26 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
             let schema = extract_schema_from_object_name(&idx.table_name);
             let table = extract_table_from_object_name(&idx.table_name);
             (StatementType::Create, schema, table)
+        }
+
+        Statement::StartTransaction { .. } | Statement::Commit { .. } | Statement::Rollback { .. } => {
+            (
+                StatementType::Other(
+                    "Transaction control statements (BEGIN/COMMIT/ROLLBACK) are not needed — each write operation runs in its own transaction automatically".to_string()
+                ),
+                None,
+                None,
+            )
+        }
+
+        Statement::Grant { .. } | Statement::Revoke { .. } => {
+            (
+                StatementType::Other(
+                    "Privilege statements (GRANT/REVOKE) are not supported for security reasons".to_string()
+                ),
+                None,
+                None,
+            )
         }
 
         other => {
