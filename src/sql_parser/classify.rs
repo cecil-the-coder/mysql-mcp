@@ -259,19 +259,81 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         }
 
         other => {
-            // Extract only the variant name from the debug representation.
-            // `format!("{:?}", other)` produces strings like "Call(...)" or
-            // "LockTables { ... }"; we take everything before the first '{', '(',
-            // or space to get just "Call" or "LockTables".
-            // This is far more useful than `std::mem::discriminant` which
-            // produces an opaque "Discriminant(N)".
-            let debug = format!("{other:?}");
-            let name = debug
-                .split(['{', '(', ' '])
-                .next()
-                .unwrap_or("Unknown")
-                .to_string();
-            (StatementType::Other(name), None, None)
+            // Explicit match on known Statement variants avoids relying on the
+            // Debug format, which can change between sqlparser releases without
+            // warning.  Variants already handled by earlier arms (Query, Insert,
+            // Update, Delete, CreateTable, CreateDatabase, CreateIndex, AlterTable,
+            // Drop, Truncate, Use, Show*, Set*, Explain, StartTransaction, Commit,
+            // Rollback, Grant, Revoke) are omitted — they never reach this point.
+            let name = match &other {
+                // DML
+                Statement::Merge { .. } => "Merge",
+                // DDL
+                Statement::CreateView { .. } => "CreateView",
+                Statement::CreateSchema { .. } => "CreateSchema",
+                Statement::CreateFunction { .. } => "CreateFunction",
+                Statement::CreateProcedure { .. } => "CreateProcedure",
+                Statement::CreateTrigger { .. } => "CreateTrigger",
+                Statement::CreateSequence { .. } => "CreateSequence",
+                Statement::CreateRole { .. } => "CreateRole",
+                Statement::CreateType { .. } => "CreateType",
+                Statement::AlterView { .. } => "AlterView",
+                Statement::AlterIndex { .. } => "AlterIndex",
+                Statement::AlterRole { .. } => "AlterRole",
+                Statement::DropFunction { .. } => "DropFunction",
+                Statement::DropProcedure { .. } => "DropProcedure",
+                Statement::DropTrigger { .. } => "DropTrigger",
+                // SHOW variants not matched above
+                Statement::ShowVariable { .. } => "ShowVariable",
+                Statement::ShowVariables { .. } => "ShowVariables",
+                Statement::ShowStatus { .. } => "ShowStatus",
+                Statement::ShowCollation { .. } => "ShowCollation",
+                Statement::ShowFunctions { .. } => "ShowFunctions",
+                // Session / SET not matched above
+                Statement::SetTransaction { .. } => "SetTransaction",
+                Statement::SetRole { .. } => "SetRole",
+                // Transaction control not matched above
+                Statement::Savepoint { .. } => "Savepoint",
+                Statement::ReleaseSavepoint { .. } => "ReleaseSavepoint",
+                // Prepared statements
+                Statement::Prepare { .. } => "Prepare",
+                Statement::Execute { .. } => "Execute",
+                Statement::Deallocate { .. } => "Deallocate",
+                // MySQL utilities
+                Statement::Call(_) => "Call",
+                Statement::LockTables { .. } => "LockTables",
+                Statement::UnlockTables { .. } => "UnlockTables",
+                Statement::Kill { .. } => "Kill",
+                Statement::Flush { .. } => "Flush",
+                Statement::OptimizeTable { .. } => "OptimizeTable",
+                Statement::Analyze { .. } => "Analyze",
+                Statement::ExplainTable { .. } => "ExplainTable",
+                Statement::Load { .. } => "Load",
+                Statement::LoadData { .. } => "LoadData",
+                // Fallback for uncommon/DB-specific variants (e.g. DuckDB,
+                // Snowflake extensions): extract variant name from Debug output.
+                _ => {
+                    let debug = format!("{other:?}");
+                    let fallback = debug
+                        .split(['{', '(', ' '])
+                        .next()
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    return Ok(ParsedStatement {
+                        statement_type: StatementType::Other(fallback),
+                        target_schema: None,
+                        all_target_schemas: Vec::new(),
+                        target_table: None,
+                        has_limit: false,
+                        has_where: false,
+                        has_wildcard: false,
+                        where_columns: Vec::new(),
+                        has_leading_wildcard_like: false,
+                        warnings: Vec::new(),
+                    });
+                }
+            };
+            (StatementType::Other(name.to_string()), None, None)
         }
     };
 

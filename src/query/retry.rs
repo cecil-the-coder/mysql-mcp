@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::future::Future;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Error patterns that indicate a transient network failure.
 /// These are safe to retry because the operation was never completed.
@@ -32,7 +32,7 @@ fn is_transient_error(error: &anyhow::Error) -> bool {
 /// # Behavior
 /// - Executes the operation once initially
 /// - On transient errors (connection reset, broken pipe, timeout, etc.), retries up to max_retries times
-/// - Uses exponential backoff: 100ms, 200ms, 400ms, etc. between retries
+/// - Uses exponential backoff with ±25% jitter (min 50ms) between retries
 /// - Logs retry attempts with tracing::warn
 /// - Returns immediately on non-transient errors (syntax errors, permission errors, data errors)
 pub async fn retry_on_transient_error<F, Fut, T>(
@@ -77,7 +77,17 @@ where
                 }
 
                 // Calculate backoff: 100ms * 2^attempt (100ms, 200ms, 400ms, ...)
-                let backoff_ms = 100u64 * (1u64 << (attempt - 1).min(10)); // cap at ~100s
+                // with ±25% jitter to prevent thundering herd
+                let base_ms = 100u64 * (1u64 << (attempt - 1).min(10)); // cap at ~100s
+                let nanos = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos();
+                // jitter_pct in 0..=50, mapped to 0.75..=1.25
+                let jitter_pct = (nanos % 51) as f64; // 0..=50
+                let jitter_factor = 0.75 + (jitter_pct / 100.0); // 0.75..=1.25
+                let backoff_ms = ((base_ms as f64) * jitter_factor) as u64;
+                let backoff_ms = backoff_ms.max(50); // never below 50ms
                 let backoff = Duration::from_millis(backoff_ms);
 
                 tracing::warn!(
