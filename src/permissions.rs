@@ -82,16 +82,16 @@ pub fn check_permission(
             check_write_op(allowed, &label, "MYSQL_ALLOW_DDL", config, target_schema)
         }
         StatementType::Use => {
-            // USE is informational, allow it
-            Ok(())
+            bail!(
+                "USE is not supported with connection pooling — the database change would be lost on the next query. \
+                 Instead, specify the database in your SQL (e.g., SELECT * FROM mydb.table) or \
+                 use mysql_connect to create a session with a different default database."
+            )
         }
         StatementType::Set => {
-            // SET is allowed without restriction.
-            // NOTE: Some SET variants can affect security/behavior:
-            // - SET SESSION sql_mode = '' could weaken validation
-            // - SET GLOBAL could affect server-wide settings
-            // These are intentionally allowed for operational flexibility,
-            // but operators should be aware of the implications.
+            // SET SESSION is allowed for operational flexibility.
+            // SET GLOBAL/PERSIST are blocked at the parser level (sql_parser/mod.rs)
+            // because they affect server-wide settings and could change security-sensitive config.
             Ok(())
         }
         StatementType::Other(name) => {
@@ -118,29 +118,13 @@ pub fn check_permission(
     }
 }
 
-/// In multi-DB mode, check if writes are allowed.
-fn check_multi_db_write(config: &Config, target_schema: Option<&str>) -> Result<()> {
-    // If we're in single-DB mode (database is set), no additional check needed
-    if config.connection.database.is_some() {
-        return Ok(());
-    }
-    // Multi-DB mode: check MYSQL_MULTI_DB_WRITE_MODE
-    if !config.security.multi_db_write_mode {
-        bail!(
-            "Write operations on schema '{}' are not allowed in multi-database mode. Set MYSQL_MULTI_DB_WRITE_MODE=true to enable writes",
-            target_schema.unwrap_or("<unknown>")
-        );
-    }
-    Ok(())
-}
-
-/// Check a write operation permission and enforce multi-DB write rules.
+/// Check a write operation permission.
 fn check_write_op(
     allowed: bool,
     op: &str,
     env_var: &str,
-    config: &Config,
-    target_schema: Option<&str>,
+    _config: &Config,
+    _target_schema: Option<&str>,
 ) -> Result<()> {
     if !allowed {
         bail!(
@@ -149,7 +133,7 @@ fn check_write_op(
             env_var
         );
     }
-    check_multi_db_write(config, target_schema)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -200,33 +184,10 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_db_write_blocked() {
-        let sec = SecurityConfig {
-            allow_insert: true,
-            ..Default::default()
-        };
-        // No database set = multi-DB mode, multi_db_write_mode = false
-        let config = config_with_security(sec);
-        let err = check_permission(&config, &StatementType::Insert, Some("mydb")).unwrap_err();
-        assert!(err.to_string().contains("multi-database mode"));
-    }
-
-    #[test]
-    fn test_multi_db_write_allowed_when_flag_set() {
-        let sec = SecurityConfig {
-            allow_insert: true,
-            multi_db_write_mode: true,
-            ..Default::default()
-        };
-        let config = config_with_security(sec);
-        assert!(check_permission(&config, &StatementType::Insert, Some("mydb")).is_ok());
-    }
-
-    #[test]
-    fn test_use_and_set_always_allowed() {
+    fn test_set_allowed_and_use_denied() {
         let config = Config::default();
-        assert!(check_permission(&config, &StatementType::Use, None).is_ok());
         assert!(check_permission(&config, &StatementType::Set, None).is_ok());
+        assert!(check_permission(&config, &StatementType::Use, None).is_err());
     }
 
     #[test]
@@ -383,20 +344,10 @@ mod tests {
     }
 
     #[test]
-    fn test_multi_db_write_requires_flag() {
+    fn test_insert_allowed_without_database_set() {
         let mut config = Config::default();
-        // No database set = multi-DB mode
+        // No database set — writes should still work if allow flag is true
         config.security.allow_insert = true;
-        config.security.multi_db_write_mode = false;
-        // Write in multi-DB mode without flag should fail
-        assert!(check_permission(&config, &StatementType::Insert, Some("anydb")).is_err());
-    }
-
-    #[test]
-    fn test_multi_db_write_allowed_with_flag() {
-        let mut config = Config::default();
-        config.security.allow_insert = true;
-        config.security.multi_db_write_mode = true;
         assert!(check_permission(&config, &StatementType::Insert, Some("anydb")).is_ok());
     }
 
@@ -413,14 +364,6 @@ mod tests {
         assert!(err.to_string().contains("DELETE"));
     }
 
-    #[test]
-    fn test_multi_db_error_message() {
-        let mut config = Config::default();
-        config.security.allow_insert = true;
-        // No database = multi-DB mode, flag not set
-        let err = check_permission(&config, &StatementType::Insert, Some("mydb")).unwrap_err();
-        assert!(err.to_string().contains("multi-database mode"));
-    }
 
     // --- New tests for the schema-fallback and case-insensitivity fixes ---
 

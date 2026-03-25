@@ -208,15 +208,9 @@ fn test_is_ddl_comprehensive() {
 
 #[test]
 fn test_use_database() {
-    // USE is supported - should parse as Use or similar
-    let result = parse_sql("USE mydb");
-    if let Ok(parsed) = result {
-        assert!(matches!(
-            parsed.statement_type,
-            StatementType::Use | StatementType::Other(_)
-        ));
-    }
-    // If err, that's also acceptable - just don't panic
+    // USE parses successfully (permission check blocks it, not the parser)
+    let parsed = parse_sql("USE mydb").unwrap();
+    assert_eq!(parsed.statement_type, StatementType::Use);
 }
 
 #[test]
@@ -499,4 +493,44 @@ fn test_select_comment_not_false_positive_for_outfile() {
         StatementType::Select,
         "Comment containing INTO OUTFILE should not be rejected"
     );
+}
+
+#[test]
+fn test_set_global_blocked() {
+    let result = parse_sql("SET GLOBAL max_connections = 1000");
+    assert!(result.is_err(), "SET GLOBAL must be rejected");
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("SET GLOBAL"), "error should mention SET GLOBAL, got: {msg}");
+}
+
+#[test]
+fn test_set_persist_blocked() {
+    let result = parse_sql("SET PERSIST max_connections = 1000");
+    assert!(result.is_err(), "SET PERSIST must be rejected");
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("SET PERSIST"), "error should mention SET PERSIST, got: {msg}");
+}
+
+#[test]
+fn test_set_global_variable_syntax_blocked() {
+    let result = parse_sql("SET @@GLOBAL.max_connections = 1000");
+    assert!(result.is_err(), "SET @@GLOBAL.var must be rejected");
+}
+
+#[test]
+fn test_set_persist_variable_syntax_blocked() {
+    let result = parse_sql("SET @@PERSIST.max_connections = 1000");
+    assert!(result.is_err(), "SET @@PERSIST.var must be rejected");
+}
+
+#[test]
+fn test_set_session_allowed() {
+    let parsed = parse_sql("SET SESSION sql_mode = ''").unwrap();
+    assert_eq!(parsed.statement_type, StatementType::Set);
+}
+
+#[test]
+fn test_set_user_variable_allowed() {
+    let parsed = parse_sql("SET @my_var = 42").unwrap();
+    assert_eq!(parsed.statement_type, StatementType::Set);
 }

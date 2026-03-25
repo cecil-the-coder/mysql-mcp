@@ -153,9 +153,8 @@ impl SessionStore {
             None => return tool_error!("Missing required argument: host"),
         };
 
-        // Validate host with DNS resolution to prevent DNS rebinding attacks
-        let dns_cache_ttl = std::time::Duration::from_secs(self.config.security.dns_cache_ttl_secs);
-        let host_validation = validate_host_with_dns(&host, dns_cache_ttl).await;
+        // Validate host with DNS resolution
+        let host_validation = validate_host_with_dns(&host).await;
         if !host_validation.allowed {
             return tool_error!(
                 "Host validation failed: {}",
@@ -213,7 +212,7 @@ impl SessionStore {
                 return tool_error!("SSH host too long (max 255 characters)");
             }
             // Validate SSH bastion host with DNS resolution
-            let ssh_host_validation = validate_host_with_dns(ssh_h, dns_cache_ttl).await;
+            let ssh_host_validation = validate_host_with_dns(ssh_h).await;
             if !ssh_host_validation.allowed {
                 return tool_error!(
                     "SSH bastion host validation failed: {}",

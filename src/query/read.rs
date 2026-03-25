@@ -1,7 +1,7 @@
 use crate::sql_parser::{ParsedStatement, StatementType};
 use anyhow::Result;
 use serde_json::{Map, Value};
-use sqlx::{Acquire, Column, MySqlPool, Row, TypeInfo};
+use sqlx::{Column, MySqlPool, Row, TypeInfo};
 use std::time::Instant;
 
 use super::retry::retry_on_transient_error;
@@ -40,33 +40,29 @@ pub struct QueryResult {
 
 /// Execute a read query.
 ///
-/// Uses a 4-RTT read-only transaction if:
-///   - `force_readonly_transaction` is true (paranoia mode), OR
-///   - the statement type is not definitively read-only (i.e., not SELECT/SHOW/EXPLAIN/DESCRIBE)
+/// Sends the SQL directly via `fetch_all` (1 round-trip). The parser and
+/// permissions layer already prevent write statements from reaching this
+/// function, so a READ ONLY transaction wrapper is unnecessary overhead.
 ///
-/// Uses a 1-RTT bare fetch_all for SELECT, SHOW, EXPLAIN, and Describe (mapped to Explain
-/// by the parser) when `force_readonly_transaction` is false.
-///
-/// If `max_rows > 0` and the SQL does not already contain a LIMIT clause, a
+/// If `config.max_rows > 0` and the SQL does not already contain a LIMIT clause, a
 /// `LIMIT {max_rows + 1}` is appended (one extra row to detect truncation) and
 /// `QueryResult::capped` is set to `true` when the result exceeds `max_rows`.
 ///
 /// Retries on transient network errors (connection reset, broken pipe, timeout) up to
-/// `retry_attempts` times with exponential backoff.
-#[allow(clippy::too_many_arguments)]
+/// `config.retry_attempts` times with exponential backoff.
 pub async fn execute_read_query(
     pool: &MySqlPool,
     sql: &str,
     parsed: &ParsedStatement,
-    force_readonly_transaction: bool,
-    max_rows: u32,
-    performance_hints: &str,
-    slow_query_threshold_ms: u64,
-    query_timeout_ms: u64,
-    retry_attempts: u32,
-    max_result_memory_mb: u32,
+    config: &crate::config::PoolConfig,
 ) -> Result<QueryResult> {
     let stmt_type = &parsed.statement_type;
+    let max_rows = config.max_rows;
+    let performance_hints = config.performance_hints.as_str();
+    let slow_query_threshold_ms = config.slow_query_threshold_ms;
+    let query_timeout_ms = config.query_timeout_ms;
+    let retry_attempts = config.retry_attempts;
+    let max_result_memory_mb = config.max_result_memory_mb;
 
     // Compute parse-time warnings before the DB phase so the field is always present.
     // warnings are pre-cached in ParsedStatement — no re-parse needed
@@ -104,21 +100,7 @@ pub async fn execute_read_query(
             let pool = pool_clone.clone();
             let sql = effective_sql_owned.clone();
             async move {
-                if force_readonly_transaction {
-                    // 4-RTT path: SET TRANSACTION READ ONLY -> BEGIN -> SQL -> COMMIT
-                    // For MySQL, SET TRANSACTION READ ONLY must be called before BEGIN.
-                    let mut conn = pool.acquire().await?;
-                    sqlx::query("SET TRANSACTION READ ONLY")
-                        .execute(&mut *conn)
-                        .await?;
-                    let mut tx = conn.begin().await?;
-                    let rows = sqlx::query(&sql).fetch_all(&mut *tx).await?;
-                    tx.commit().await?;
-                    Ok::<Vec<sqlx::mysql::MySqlRow>, anyhow::Error>(rows)
-                } else {
-                    // 1-RTT path: bare fetch_all, no transaction overhead
-                    Ok(sqlx::query(&sql).fetch_all(&pool).await?)
-                }
+                Ok(sqlx::query(&sql).fetch_all(&pool).await?)
             }
         },
         retry_attempts,
@@ -453,16 +435,18 @@ mod integration_tests {
     async fn read_query(
         pool: &sqlx::MySqlPool,
         sql: &str,
-        force_ro: bool,
         max_rows: u32,
         hints: &str,
         slow_ms: u64,
     ) -> anyhow::Result<QueryResult> {
         let parsed = parse_sql(sql).map_err(|e| anyhow::anyhow!(e))?;
-        execute_read_query(
-            pool, sql, &parsed, force_ro, max_rows, hints, slow_ms, 0, 0, 256,
-        )
-        .await
+        let config = crate::config::PoolConfig {
+            max_rows,
+            performance_hints: hints.to_string(),
+            slow_query_threshold_ms: slow_ms,
+            ..Default::default()
+        };
+        execute_read_query(pool, sql, &parsed, &config).await
     }
 
     #[tokio::test]
@@ -470,7 +454,7 @@ mod integration_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let result = read_query(&test_db.pool, "SELECT 1 AS one", false, 0, "none", 0).await;
+        let result = read_query(&test_db.pool, "SELECT 1 AS one", 0, "none", 0).await;
         assert!(result.is_ok(), "SELECT should succeed: {:?}", result.err());
         assert_eq!(result.unwrap().row_count, 1);
     }
@@ -483,7 +467,6 @@ mod integration_tests {
         let result = read_query(
             &test_db.pool,
             "SELECT NULL AS null_col",
-            false,
             0,
             "none",
             0,
@@ -498,7 +481,7 @@ mod integration_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let result = read_query(&test_db.pool, "SELECT 1 WHERE 1=0", false, 0, "none", 0)
+        let result = read_query(&test_db.pool, "SELECT 1 WHERE 1=0", 0, "none", 0)
             .await
             .unwrap();
         assert_eq!(result.row_count, 0);
@@ -509,7 +492,7 @@ mod integration_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let result = read_query(&test_db.pool, "SHOW TABLES", false, 0, "none", 0).await;
+        let result = read_query(&test_db.pool, "SHOW TABLES", 0, "none", 0).await;
         assert!(result.is_ok());
     }
 
@@ -518,7 +501,7 @@ mod integration_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let result = read_query(&test_db.pool, "SELECT 1", false, 0, "none", 0)
+        let result = read_query(&test_db.pool, "SELECT 1", 0, "none", 0)
             .await
             .unwrap();
         assert!(result.execution_time_ms < 5000);
@@ -532,7 +515,6 @@ mod integration_tests {
         let result = read_query(
             &test_db.pool,
             "SELECT NOW() as now, CURDATE() as today, CURTIME() as t",
-            false,
             0,
             "none",
             0,
@@ -566,19 +548,12 @@ mod integration_tests {
         let sql = "SELECT SLEEP(5)";
         let parsed = parse_sql(sql).map_err(|e| anyhow::anyhow!(e)).unwrap();
         // 1 ms timeout — SLEEP(5) will never complete in time.
-        let result = execute_read_query(
-            &test_db.pool,
-            sql,
-            &parsed,
-            false, // no readonly transaction
-            0,     // no max_rows cap
-            "none",
-            0,
-            1,   // query_timeout_ms = 1
-            0,   // retry_attempts = 0
-            256, // max_result_memory_mb
-        )
-        .await;
+        let config = crate::config::PoolConfig {
+            query_timeout_ms: 1,
+            retry_attempts: 0,
+            ..Default::default()
+        };
+        let result = execute_read_query(&test_db.pool, sql, &parsed, &config).await;
         assert!(result.is_err(), "query should have timed out");
         let err = result.unwrap_err().to_string();
         assert!(
@@ -594,7 +569,7 @@ mod integration_tests {
             return;
         };
         // Both columns are aliased "a"; the second should become "a_2".
-        let result = read_query(&test_db.pool, "SELECT 1 AS a, 2 AS a", false, 0, "none", 0)
+        let result = read_query(&test_db.pool, "SELECT 1 AS a, 2 AS a", 0, "none", 0)
             .await
             .unwrap();
         assert_eq!(result.row_count, 1);
@@ -617,7 +592,6 @@ mod integration_tests {
         let result = read_query(
             &test_db.pool,
             "SELECT 1 AS a, 2 AS a, 3 AS a",
-            false,
             0,
             "none",
             0,

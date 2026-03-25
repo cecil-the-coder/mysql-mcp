@@ -53,18 +53,17 @@ async fn main() -> Result<()> {
         (Arc::new(pool), None)
     };
 
-    // Warm up the connection pool in the background
-    if config.pool.warmup_connections > 0 {
+    // Warm up one connection so the pool is ready for the first query
+    {
         let warmup_pool = (*db).clone();
-        let n = config.pool.warmup_connections;
         tokio::spawn(async move {
-            for i in 0..n {
-                match warmup_pool.acquire().await {
-                    Ok(conn) => drop(conn),
-                    Err(e) => tracing::warn!("Pool warmup connection {} failed: {}", i + 1, e),
+            match warmup_pool.acquire().await {
+                Ok(conn) => {
+                    drop(conn);
+                    tracing::debug!("Pool warmup complete (1 connection)");
                 }
+                Err(e) => tracing::warn!("Pool warmup connection failed: {}", e),
             }
-            tracing::debug!("Pool warmup complete ({} connections)", n);
         });
     }
 

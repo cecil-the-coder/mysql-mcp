@@ -159,6 +159,22 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
         }
     }
 
+    // Block SET GLOBAL / SET PERSIST — they affect server-wide settings and could
+    // change security-sensitive config. Session-level SET is still allowed.
+    if parsed.statement_type == StatementType::Set {
+        let normalized = format!("{stmt}").to_ascii_uppercase();
+        if normalized.starts_with("SET GLOBAL")
+            || normalized.starts_with("SET PERSIST")
+            || normalized.contains("@@GLOBAL.")
+            || normalized.contains("@@PERSIST.")
+        {
+            bail!(
+                "SET GLOBAL and SET PERSIST are not allowed — they affect server-wide settings. \
+                 Use SET SESSION or SET (without scope) to change session-level variables."
+            );
+        }
+    }
+
     Ok(parsed)
 }
 

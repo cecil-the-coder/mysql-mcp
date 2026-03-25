@@ -327,16 +327,6 @@ impl SessionStore {
             return Ok(e);
         }
 
-        let explain_requested = args
-            .get("explain")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let effective_hints = if explain_requested {
-            "always".to_string()
-        } else {
-            self.config.pool.performance_hints.clone()
-        };
-
         // Session routing: resolve pool and introspector for this request
         let ctx = match self.resolve_session(&args).await {
             Ok(c) => c,
@@ -396,13 +386,7 @@ impl SessionStore {
                 &query_pool,
                 &sql,
                 &parsed,
-                self.config.pool.readonly_transaction,
-                self.config.pool.max_rows,
-                &effective_hints,
-                self.config.pool.slow_query_threshold_ms,
-                self.config.pool.query_timeout_ms,
-                self.config.pool.retry_attempts,
-                self.config.pool.max_result_memory_mb,
+                &self.config.pool,
             )
             .await
             {
@@ -465,11 +449,6 @@ impl SessionStore {
                     if !suggestions.is_empty() {
                         output["suggestions"] = json!(suggestions);
                     }
-                    // Add security warnings if any
-                    let warnings = self.config.security.security_warnings();
-                    if !warnings.is_empty() {
-                        output["security_warnings"] = json!(warnings);
-                    }
                     Ok(serialize_response(&output))
                 }
                 Err(e) => tool_error!("Query error: {}", e),
@@ -525,7 +504,7 @@ fn log_query_result(
     suggestions: &[String],
     slow_threshold_ms: u64,
 ) {
-    let sql_truncated = if sql.len() > 200 { &sql[..200] } else { sql };
+    let sql_truncated = sql.get(..200).unwrap_or(sql);
     let plan_tier = result
         .plan
         .as_ref()

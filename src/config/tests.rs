@@ -94,7 +94,6 @@ allow_insert = true
         assert!(!config.security.allow_delete);
         assert!(!config.security.allow_ddl);
         assert!(!config.security.ssl);
-        assert!(!config.security.multi_db_write_mode);
         assert!(config.security.schema_permissions.is_empty());
     }
 
@@ -131,7 +130,6 @@ allow_update = true
 allow_delete = true
 allow_ddl = true
 ssl = true
-multi_db_write_mode = true
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(config.security.allow_insert);
@@ -139,7 +137,6 @@ multi_db_write_mode = true
         assert!(config.security.allow_delete);
         assert!(config.security.allow_ddl);
         assert!(config.security.ssl);
-        assert!(config.security.multi_db_write_mode);
     }
 
     // Test: partial toml (missing sections fill with defaults)
@@ -190,14 +187,6 @@ host = "myhost"
         );
     }
 
-    // Test: warmup_connections > pool size fails validation
-    #[test]
-    fn test_warmup_connections_exceeds_pool_size_fails() {
-        let mut config = Config::default();
-        config.pool.warmup_connections = config.pool.size + 1;
-        assert!(config.validate().is_err());
-    }
-
     // Test: max_sessions=0 fails validation
     #[test]
     fn test_max_sessions_zero_fails_validation() {
@@ -218,16 +207,6 @@ host = "myhost"
         std::env::remove_var("MYSQL_MAX_SESSIONS");
 
         assert_eq!(config.security.max_sessions, 5);
-    }
-
-    // Test: readonly_transaction defaults to false
-    #[test]
-    fn test_readonly_transaction_default() {
-        let config = Config::default();
-        assert!(
-            !config.pool.readonly_transaction,
-            "readonly_transaction should default to false (prefer 1-RTT path)"
-        );
     }
 
     // Test: pool size defaults to 20

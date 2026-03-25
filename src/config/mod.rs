@@ -36,10 +36,8 @@ pub struct PoolConfig {
     pub query_timeout_ms: u64,
     pub connect_timeout_ms: u64,
     pub cache_ttl_secs: u64,
-    pub readonly_transaction: bool,
     pub performance_hints: String,
     pub slow_query_threshold_ms: u64,
-    pub warmup_connections: u32,
     pub max_rows: u32,
     /// Number of retry attempts for transient network errors (default: 2).
     /// Retries use exponential backoff (100ms, 200ms) between attempts.
@@ -63,7 +61,6 @@ pub struct SecurityConfig {
     pub ssl_ca: Option<String>,
     /// Per-schema permission overrides: schema_name -> SchemaPermissions
     pub schema_permissions: HashMap<String, SchemaPermissions>,
-    pub multi_db_write_mode: bool,
     /// Allow mysql_connect to accept raw credentials at runtime.
     /// When false (default), only preset-based connections are allowed.
     pub allow_runtime_connections: bool,
@@ -151,10 +148,8 @@ impl Default for PoolConfig {
             query_timeout_ms: 30_000,
             connect_timeout_ms: 10_000,
             cache_ttl_secs: 60,
-            readonly_transaction: false,
             performance_hints: "none".to_string(),
             slow_query_threshold_ms: 500,
-            warmup_connections: 1,
             max_rows: 1000,
             retry_attempts: 2,
             max_result_memory_mb: 256,
@@ -189,7 +184,6 @@ impl Default for SecurityConfig {
             ssl_accept_invalid_certs: false,
             ssl_ca: None,
             schema_permissions: HashMap::new(),
-            multi_db_write_mode: false,
             allow_runtime_connections: false,
             max_sessions: 50,
             dns_cache_ttl_secs: 60,
@@ -291,15 +285,6 @@ impl Config {
             anyhow::bail!(
                 "pool.retry_attempts is set to {} — this is unreasonably high. Use a value between 0 and 10.",
                 self.pool.retry_attempts
-            );
-        }
-
-        // warmup_connections cannot exceed the pool size
-        if self.pool.warmup_connections > self.pool.size {
-            anyhow::bail!(
-                "pool.warmup_connections ({}) cannot exceed pool.size ({})",
-                self.pool.warmup_connections,
-                self.pool.size
             );
         }
 

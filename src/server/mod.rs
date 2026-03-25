@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+
 use tokio::sync::Mutex;
 
 use crate::config::Config;
@@ -25,32 +25,6 @@ mod tool_schemas;
 
 use sessions::SessionStore;
 use tool_schemas::*;
-
-// ---------------------------------------------------------------------------
-// DNS cache for hostname validation (prevents DNS rebinding attacks)
-// ---------------------------------------------------------------------------
-
-/// Cached DNS validation result with timestamp.
-struct DnsCacheEntry {
-    blocked: bool,
-    reason: Option<String>,
-    cached_at: Instant,
-}
-
-/// Maximum number of entries in the DNS cache.
-/// MCP servers typically connect to a small number of known database hosts.
-const DNS_CACHE_MAX_ENTRIES: usize = 64;
-
-/// Global DNS cache protected by a mutex.
-/// Key: lowercase hostname. Value: validation result with TTL.
-static DNS_CACHE: std::sync::OnceLock<Arc<Mutex<HashMap<String, DnsCacheEntry>>>> =
-    std::sync::OnceLock::new();
-
-fn get_dns_cache() -> Arc<Mutex<HashMap<String, DnsCacheEntry>>> {
-    DNS_CACHE
-        .get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
-        .clone()
-}
 
 /// Check if an IP address is in a blocked range.
 /// When `allow_loopback` is true, loopback addresses are permitted (for hostname
@@ -91,12 +65,11 @@ pub(crate) struct HostValidation {
     pub(crate) reason: Option<String>,
 }
 
-/// Validate a host string, resolving hostnames via DNS with caching.
-/// This prevents DNS rebinding attacks by caching validation results.
-pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) -> HostValidation {
-    // Fast path: literal IP address (no DNS lookup needed, no caching needed)
+/// Validate a host string, resolving hostnames via DNS.
+pub(crate) async fn validate_host_with_dns(host: &str) -> HostValidation {
+    // Fast path: literal IP address (no DNS lookup needed)
     if let Ok(ip) = host.parse::<IpAddr>() {
-        let blocked = is_blocked_ip(ip, false); // loopback NOT allowed for direct IP
+        let blocked = is_blocked_ip(ip, false);
         return HostValidation {
             allowed: !blocked,
             reason: if blocked {
@@ -110,7 +83,7 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
         };
     }
 
-    // Hostname: normalize to lowercase for cache key
+    // Hostname: resolve via DNS and check all IPs
     let hostname = host.to_lowercase();
     if hostname.is_empty() {
         return HostValidation {
@@ -119,77 +92,30 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
         };
     }
 
-    // Check cache
-    {
-        let cache = get_dns_cache();
-        let cache = cache.lock().await;
-        if let Some(entry) = cache.get(&hostname) {
-            if entry.cached_at.elapsed() < dns_cache_ttl {
-                tracing::debug!(
-                    hostname = %hostname,
-                    blocked = entry.blocked,
-                    "DNS cache hit for hostname validation"
-                );
-                return HostValidation {
-                    allowed: !entry.blocked,
-                    reason: entry.reason.clone(),
-                };
-            }
-        }
-    }
-
-    // Cache miss or expired — perform DNS lookup
-    tracing::debug!(hostname = %hostname, "DNS cache miss, performing lookup");
     let lookup_target = format!("{}:0", hostname);
-    let (blocked, reason) = match tokio::net::lookup_host(&lookup_target).await {
+    let result = tokio::net::lookup_host(&lookup_target).await;
+    match result {
         Ok(addrs) => {
-            // Check if any resolved IP is blocked
-            // Loopback is allowed for hostnames (e.g., localhost) since that's legitimate
-            // for local development. DNS rebinding protection comes from caching.
-            let mut blocked = false;
-            let mut reason = None;
             for ip in addrs.map(|a| a.ip()) {
                 if is_blocked_ip(ip, true) {
-                    // loopback allowed for hostnames
-                    blocked = true;
-                    reason = Some(format!(
-                        "Hostname '{}' resolves to blocked IP address {} (link-local/multicast)",
-                        hostname, ip
-                    ));
-                    break;
+                    return HostValidation {
+                        allowed: false,
+                        reason: Some(format!(
+                            "Hostname '{}' resolves to blocked IP address {} (link-local/multicast)",
+                            hostname, ip
+                        )),
+                    };
                 }
             }
-            (blocked, reason)
-        }
-        Err(e) => (
-            true,
-            Some(format!("DNS resolution failed for '{}': {}", hostname, e)),
-        ),
-    };
-
-    // Cache the result
-    {
-        let cache = get_dns_cache();
-        let mut cache = cache.lock().await;
-        // Simple eviction if at capacity (remove arbitrary entry)
-        if cache.len() >= DNS_CACHE_MAX_ENTRIES {
-            if let Some(key) = cache.keys().next().cloned() {
-                cache.remove(&key);
+            HostValidation {
+                allowed: true,
+                reason: None,
             }
         }
-        cache.insert(
-            hostname,
-            DnsCacheEntry {
-                blocked,
-                reason: reason.clone(),
-                cached_at: Instant::now(),
-            },
-        );
-    }
-
-    HostValidation {
-        allowed: !blocked,
-        reason,
+        Err(e) => HostValidation {
+            allowed: false,
+            reason: Some(format!("DNS resolution failed for '{}': {}", hostname, e)),
+        },
     }
 }
 
@@ -234,7 +160,6 @@ impl McpServer {
         // Background task: drop sessions idle for > 10 minutes (600 s).
         // "default" is never dropped. SSH tunnels are explicitly closed so the
         // subprocess is reaped rather than relying on Drop's non-blocking start_kill().
-        // Sessions with in-flight requests are skipped to prevent query failures.
         let sessions_reaper = sessions.clone();
         let reaper_total_connections = total_connections.clone();
         tokio::spawn(async move {
