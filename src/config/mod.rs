@@ -67,9 +67,6 @@ pub struct SecurityConfig {
     /// Maximum number of concurrent named sessions (not counting the default session).
     /// Prevents unbounded session creation when allow_runtime_connections is true.
     pub max_sessions: u32,
-    /// DNS cache TTL in seconds for hostname validation.
-    /// After this time, hostnames are re-resolved to detect DNS rebinding attacks.
-    pub dns_cache_ttl_secs: u64,
     /// Maximum total database connections across all sessions (default pool + named session pools).
     /// Named sessions use 5 connections each. Prevents resource exhaustion.
     pub max_total_connections: u32,
@@ -186,7 +183,6 @@ impl Default for SecurityConfig {
             schema_permissions: HashMap::new(),
             allow_runtime_connections: false,
             max_sessions: 50,
-            dns_cache_ttl_secs: 60,
             max_total_connections: 100,
         }
     }
@@ -290,15 +286,6 @@ impl Config {
 
         if self.security.max_sessions == 0 {
             anyhow::bail!("security.max_sessions must be >= 1");
-        }
-
-        // dns_cache_ttl_secs=0 disables DNS caching — warn about the implications
-        if self.security.dns_cache_ttl_secs == 0 {
-            eprintln!(
-                "Warning: security.dns_cache_ttl_secs is 0 — DNS cache is disabled and every \
-                 connection will trigger a DNS lookup. Set to a positive value (e.g. 60) to \
-                 enable caching and prevent DNS rebinding attacks."
-            );
         }
 
         // max_total_connections must be at least pool.size

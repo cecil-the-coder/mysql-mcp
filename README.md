@@ -14,7 +14,7 @@ A MySQL MCP (Model Context Protocol) server written in Rust. It exposes a MySQL 
 - **Named sessions**: connect to additional databases at runtime via `mysql_connect`
 - **SSH tunneling**: reach databases behind a bastion/jump host
 - **Per-schema permissions**: fine-grained write control per database
-- **Connection pooling**: configurable pool size, timeouts, and warm-up
+- **Connection pooling**: configurable pool size and timeouts
 - **SSL support**: encrypted connections with optional CA verification
 - **Unix socket support**: connect via socket path instead of host:port
 
@@ -131,11 +131,9 @@ A `.env` file in the working directory is loaded automatically if present.
 | `pool.size` | `MYSQL_POOL_SIZE` | u32 | `20` | Maximum number of pooled connections |
 | `pool.query_timeout_ms` | `MYSQL_QUERY_TIMEOUT` | u64 | `30000` | Per-query timeout in milliseconds |
 | `pool.connect_timeout_ms` | `MYSQL_CONNECT_TIMEOUT` | u64 | `10000` | Connection establishment timeout in milliseconds; also serves as the acquire timeout |
-| `pool.readonly_transaction` | `MYSQL_READONLY_TRANSACTION` | bool | `false` | Wrap every SELECT in `SET TRANSACTION READ ONLY` + `BEGIN` + `COMMIT` (4-RTT). Leave `false` for bare 1-RTT fetches |
 | `pool.performance_hints` | `MYSQL_PERFORMANCE_HINTS` | string | `none` | When to run EXPLAIN: `none`, `auto` (only when query exceeds `slow_query_threshold_ms`), or `always` |
 | `pool.slow_query_threshold_ms` | `MYSQL_SLOW_QUERY_THRESHOLD_MS` | u64 | `500` | Threshold used by `performance_hints=auto` |
 | `pool.max_rows` | `MYSQL_MAX_ROWS` | u32 | `1000` | Cap on rows returned per query; `LIMIT {max_rows}` is appended when the query has no LIMIT. `0` disables the cap |
-| `pool.warmup_connections` | `MYSQL_POOL_WARMUP` | u32 | `1` | Number of connections to pre-open at startup |
 | `pool.cache_ttl_secs` | `MYSQL_CACHE_TTL` | u64 | `60` | Schema introspection cache TTL in seconds (`0` disables caching) |
 
 ### Security
@@ -150,7 +148,6 @@ A `.env` file in the working directory is loaded automatically if present.
 | `security.ssl_accept_invalid_certs` | `MYSQL_SSL_ACCEPT_INVALID_CERTS` | bool | `false` | Skip certificate validation (not for production) |
 | `security.ssl_ca` | `MYSQL_SSL_CA` | string | — | Path to PEM CA certificate file |
 | `security.schema_permissions` | `MYSQL_SCHEMA_<NAME>_PERMISSIONS` | map | `{}` | Per-schema write permission overrides (see below) |
-| `security.multi_db_write_mode` | `MYSQL_MULTI_DB_WRITE_MODE` | bool | `false` | Allow writes when no default database is set (multi-DB mode) |
 | `security.allow_runtime_connections` | `MYSQL_ALLOW_RUNTIME_CONNECTIONS` | bool | `false` | Allow `mysql_connect` to accept raw credentials at runtime |
 | `security.max_sessions` | `MYSQL_MAX_SESSIONS` | u32 | `50` | Maximum number of concurrent named sessions |
 
@@ -393,14 +390,6 @@ You can also override per-call by passing `"explain": true` to `mysql_query` or 
 
 By default, `max_rows = 1000`. When a SELECT has no LIMIT clause, `LIMIT 1000` is appended automatically and `capped: true` is set in the response. This prevents accidentally pulling back millions of rows. Set `max_rows = 0` to disable the cap entirely, or raise it for large exports.
 
-### `readonly_transaction` overhead
-
-By default (`readonly_transaction = false`), SELECT/SHOW/EXPLAIN run as bare `fetch_all` calls — a single round-trip to MySQL. Setting `readonly_transaction = true` wraps every read in `SET TRANSACTION READ ONLY` + `BEGIN` + query + `COMMIT`, adding three extra round-trips. Only enable this if your MySQL user has write privileges and you want extra safety guarantees.
-
-### Connection pool warm-up
-
-`warmup_connections = 1` (default) pre-opens one connection at startup so the first query is not delayed by connection establishment. Increase this if you expect many concurrent queries at startup.
-
 ---
 
 ## Security
@@ -451,10 +440,6 @@ allow_ddl = false
 ```
 
 Schema names in TOML are lowercase. The `MYSQL_SCHEMA_<NAME>_PERMISSIONS` env var name is case-insensitive in the `<NAME>` portion.
-
-### Multi-database mode
-
-When `connection.database` is not set, the server operates in multi-database mode: it lists tables from all non-system databases and accepts fully-qualified names (`SELECT * FROM mydb.users`). Writes in this mode require `multi_db_write_mode = true` (or `MYSQL_MULTI_DB_WRITE_MODE=true`) in addition to the relevant `allow_*` flags.
 
 ### SSL
 

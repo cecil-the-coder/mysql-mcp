@@ -67,7 +67,6 @@ pub fn load_env_config() -> EnvConfig {
         slow_query_threshold_ms: parse_env_num::<u64>("MYSQL_SLOW_QUERY_THRESHOLD_MS"),
         max_rows: parse_env_num::<u32>("MYSQL_MAX_ROWS"),
         max_sessions: parse_env_num::<u32>("MYSQL_MAX_SESSIONS"),
-        dns_cache_ttl_secs: parse_env_num::<u64>("MYSQL_DNS_CACHE_TTL"),
         max_total_connections: parse_env_num::<u32>("MYSQL_MAX_TOTAL_CONNECTIONS"),
         retry_attempts: parse_env_num::<u32>("MYSQL_RETRY_ATTEMPTS"),
         max_result_memory_mb: parse_env_num::<u32>("MYSQL_MAX_RESULT_MEMORY_MB"),
@@ -178,7 +177,6 @@ pub struct EnvConfig {
     pub slow_query_threshold_ms: Option<u64>,
     pub max_rows: Option<u32>,
     pub max_sessions: Option<u32>,
-    pub dns_cache_ttl_secs: Option<u64>,
     pub max_total_connections: Option<u32>,
     pub retry_attempts: Option<u32>,
     pub max_result_memory_mb: Option<u32>,
@@ -269,9 +267,6 @@ impl EnvConfig {
         }
         if let Some(v) = self.max_sessions {
             base.security.max_sessions = v;
-        }
-        if let Some(v) = self.dns_cache_ttl_secs {
-            base.security.dns_cache_ttl_secs = v;
         }
         if let Some(v) = self.max_total_connections {
             base.security.max_total_connections = v;

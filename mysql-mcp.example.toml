@@ -43,15 +43,6 @@ cache_ttl_secs = 60
 # Set to a large number like 10000 for effectively unlimited rows.
 # max_rows = 1000
 
-# Number of connections to pre-open at startup (default: 1).
-# Reduces latency on the first real queries by establishing connections in the background.
-# warmup_connections = 1
-
-# Wrap every SELECT in SET TRANSACTION READ ONLY (default: false).
-# Provides an additional database-level guarantee that no writes can occur during SELECT.
-# When false (the default), the server uses the faster single-round-trip path.
-# readonly_transaction = false
-
 # Performance hints control automatic EXPLAIN analysis (default: "none").
 # Valid values:
 #   "none"   — never run EXPLAIN automatically (default)
@@ -78,10 +69,6 @@ allow_ddl = false
 
 # Require SSL for MySQL connections (default: false)
 ssl = false
-
-# Allow write operations when operating in multi-database mode (no database set)
-# (default: false)
-multi_db_write_mode = false
 
 # Maximum number of concurrent named sessions (not counting the default session).
 # Prevents unbounded session creation when allow_runtime_connections is true.

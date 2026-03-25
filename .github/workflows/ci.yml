@@ -96,4 +96,3 @@ jobs:
           MYSQL_ALLOW_DELETE: "true"
           MYSQL_ALLOW_DDL: "true"
           MYSQL_ALLOW_RUNTIME_CONNECTIONS: "true"
-          MYSQL_MULTI_DB_WRITE_MODE: "true"

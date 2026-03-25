@@ -7,9 +7,22 @@
 /// Assertions catch gross regressions (not tight latency SLOs).
 #[cfg(test)]
 pub mod perf_impl {
+    use crate::config::PoolConfig;
     use crate::test_helpers::setup_test_db;
     use std::time::Instant;
     use tokio::task::JoinSet;
+
+    fn perf_config() -> PoolConfig {
+        PoolConfig {
+            max_rows: 0,
+            performance_hints: "none".to_string(),
+            query_timeout_ms: 0,
+            slow_query_threshold_ms: 0,
+            retry_attempts: 0,
+            max_result_memory_mb: 0,
+            ..Default::default()
+        }
+    }
 
     // ── Stats helpers ────────────────────────────────────────────────────────
 
@@ -88,24 +101,20 @@ pub mod perf_impl {
                 .acquire()
                 .await
                 .expect("DB semaphore closed");
+            let cfg = perf_config();
             for _ in 0..WARMUP {
                 crate::query::read::execute_read_query(
                     pool,
                     "SELECT 1",
                     &parsed_select1,
-                    false,
-                    0,
-                    "none",
-                    0,
-                    0,
-                    0,
-                    0,
+                    &cfg,
                 )
                 .await
                 .unwrap();
             }
         }
 
+        let cfg = perf_config();
         let wall = Instant::now();
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
@@ -114,13 +123,7 @@ pub mod perf_impl {
                 pool,
                 "SELECT 1",
                 &parsed_select1,
-                false,
-                0,
-                "none",
-                0,
-                0,
-                0,
-                0,
+                &cfg,
             )
             .await
             .unwrap();
@@ -175,6 +178,7 @@ pub mod perf_impl {
 
         let parsed_join = crate::sql_parser::parse_sql(sql).unwrap();
 
+        let cfg = perf_config();
         let wall = Instant::now();
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
@@ -183,13 +187,7 @@ pub mod perf_impl {
                 pool,
                 sql,
                 &parsed_join,
-                false,
-                0,
-                "none",
-                0,
-                0,
-                0,
-                0,
+                &cfg,
             )
             .await
             .unwrap();
@@ -250,12 +248,13 @@ pub mod perf_impl {
         for _ in 0..CONCURRENCY {
             let pool = pool.clone();
             let parsed = parsed_select1.clone();
+            let cfg = perf_config();
             set.spawn(async move {
                 let mut v = Vec::with_capacity(PER_TASK);
                 for _ in 0..PER_TASK {
                     let t = Instant::now();
                     crate::query::read::execute_read_query(
-                        &pool, "SELECT 1", &parsed, false, 0, "none", 0, 0, 0, 0,
+                        &pool, "SELECT 1", &parsed, &cfg,
                     )
                     .await
                     .unwrap();

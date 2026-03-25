@@ -26,6 +26,7 @@
 //!   against the ~100 ms connection setup measured here.
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use mysql_mcp::config::PoolConfig;
 use mysql_mcp::query::read::execute_read_query;
 use mysql_mcp::schema::SchemaIntrospector;
 use mysql_mcp::sql_parser::parse_sql;
@@ -110,6 +111,16 @@ fn try_connect() -> Option<BenchDb> {
 fn bench_query_execution(c: &mut Criterion) {
     let Some(db) = try_connect() else { return };
 
+    let bench_config = PoolConfig {
+        query_timeout_ms: 10_000,
+        max_result_memory_mb: 256,
+        max_rows: 0,
+        performance_hints: "none".to_string(),
+        slow_query_threshold_ms: 0,
+        retry_attempts: 0,
+        ..Default::default()
+    };
+
     let mut group = c.benchmark_group("execute_read_query");
 
     // 1. Constant SELECT — MySQL const-optimizes this; measures round-trip + minimal serialization
@@ -120,7 +131,7 @@ fn bench_query_execution(c: &mut Criterion) {
         group.bench_function("const_select_1row", |b| {
             b.iter(|| {
                 db.rt.block_on(async {
-                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0, 256)
+                    execute_read_query(&db.pool, sql, &parsed, &bench_config)
                         .await
                         .unwrap()
                 })
@@ -136,7 +147,7 @@ fn bench_query_execution(c: &mut Criterion) {
         group.bench_function("mixed_types_1row", |b| {
             b.iter(|| {
                 db.rt.block_on(async {
-                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0, 256)
+                    execute_read_query(&db.pool, sql, &parsed, &bench_config)
                         .await
                         .unwrap()
                 })
@@ -155,7 +166,7 @@ fn bench_query_execution(c: &mut Criterion) {
         group.bench_function("info_schema_10rows", |b| {
             b.iter(|| {
                 db.rt.block_on(async {
-                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0, 256)
+                    execute_read_query(&db.pool, sql, &parsed, &bench_config)
                         .await
                         .unwrap()
                 })
@@ -174,7 +185,7 @@ fn bench_query_execution(c: &mut Criterion) {
         group.bench_function("info_schema_100rows", |b| {
             b.iter(|| {
                 db.rt.block_on(async {
-                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0, 256)
+                    execute_read_query(&db.pool, sql, &parsed, &bench_config)
                         .await
                         .unwrap()
                 })
@@ -198,7 +209,7 @@ fn bench_query_execution(c: &mut Criterion) {
         group.bench_function("wide_20col_10rows", |b| {
             b.iter(|| {
                 db.rt.block_on(async {
-                    execute_read_query(&db.pool, sql, &parsed, false, 0, "none", 10_000, 0, 0, 256)
+                    execute_read_query(&db.pool, sql, &parsed, &bench_config)
                         .await
                         .unwrap()
                 })
