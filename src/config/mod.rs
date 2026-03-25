@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod env_config;
-pub mod merge;
 #[cfg(test)]
 mod tests;
 
@@ -200,150 +199,72 @@ impl Default for SecurityConfig {
 
 impl Config {
     pub fn validate(&self) -> anyhow::Result<()> {
-        // Host is only required when not using a Unix socket
-        if self.connection.socket.is_none() && self.connection.host.is_empty() {
-            anyhow::bail!("Config error: connection host must not be empty (unless using socket)");
+        let conn = &self.connection;
+        let pool = &self.pool;
+        let sec = &self.security;
+
+        // -- Connection checks --
+        if conn.socket.is_none() && conn.host.is_empty() {
+            anyhow::bail!("connection.host must not be empty (unless using socket)");
+        }
+        // Note: when both connection_string and socket are set, connection_string takes precedence.
+
+        // -- SSL checks --
+        if sec.ssl_ca.is_some() && !sec.ssl {
+            eprintln!("Warning: MYSQL_SSL_CA is set but MYSQL_SSL is false; CA cert will be ignored");
+        }
+        if sec.ssl_accept_invalid_certs {
+            eprintln!("Warning: ssl_accept_invalid_certs is enabled — TLS validation disabled");
         }
 
-        // Warn if both connection_string and socket are set — connection_string wins
-        if self.connection.connection_string.is_some() && self.connection.socket.is_some() {
-            eprintln!(
-                "Warning: both connection_string and socket are configured; \
-                 connection_string takes precedence and socket will be ignored"
-            );
+        // -- Pool bound checks --
+        if pool.connect_timeout_ms == 0 {
+            anyhow::bail!("pool.connect_timeout_ms must be > 0");
         }
-
-        // ssl_ca is only effective when ssl=true; warn if it's set but ssl is disabled.
-        if self.security.ssl_ca.is_some() && !self.security.ssl {
-            eprintln!(
-                "Warning: MYSQL_SSL_CA is set but MYSQL_SSL is false (or not set). \
-                 The CA certificate will be ignored. Set MYSQL_SSL=true to enable SSL and use the CA cert."
-            );
+        if pool.size == 0 || pool.size > 1000 {
+            anyhow::bail!("pool.size must be between 1 and 1000 (got: {})", pool.size);
         }
-
-        // ssl_accept_invalid_certs=true disables TLS certificate validation entirely.
-        // Warn prominently so it isn't set in production by accident.
-        if self.security.ssl_accept_invalid_certs {
-            eprintln!(
-                "Warning: ssl_accept_invalid_certs is enabled — TLS certificate validation is \
-                 disabled. Connections are vulnerable to MITM attacks. \
-                 Only use this in development or testing environments."
-            );
+        if pool.max_rows == 0 {
+            anyhow::bail!("pool.max_rows must be >= 1");
         }
-
-        // query_timeout_ms=0 disables query timeouts entirely (infinite wait).
-        // This is intentionally allowed for operators who need unbounded query time,
-        // but warn so it doesn't go unnoticed.
-        if self.pool.query_timeout_ms == 0 {
-            eprintln!(
-                "Warning: pool.query_timeout_ms is 0 — queries will never time out. \
-                 Set to a positive value (e.g. 30000) to limit runaway queries."
-            );
-        }
-
-        // cache_ttl_secs=0 disables the schema cache (always re-fetches from information_schema).
-        // This is intentionally allowed but can cause heavy load on the DB.
-        if self.pool.cache_ttl_secs == 0 {
-            eprintln!(
-                "Warning: pool.cache_ttl_secs is 0 — schema cache is disabled and every \
-                 query will re-fetch column metadata from information_schema. \
-                 Set to a positive value (e.g. 60) to enable caching and reduce database load."
-            );
-        }
-
-        // Port must be in valid range
-        if !(1..=65535).contains(&self.connection.port) {
-            anyhow::bail!(
-                "connection.port must be between 1 and 65535 (got: {})",
-                self.connection.port
-            );
-        }
-
-        // connect_timeout_ms=0 means immediate timeout — connections always fail
-        if self.pool.connect_timeout_ms == 0 {
-            anyhow::bail!("pool.connect_timeout_ms must be > 0 (got: 0 — connections would always time out immediately)");
-        }
-
-        // pool.size must be between 1 and 1000
-        if self.pool.size == 0 {
-            anyhow::bail!("pool.size must be >= 1");
-        }
-        if self.pool.size > 1000 {
-            anyhow::bail!(
-                "pool.size is set to {} — this is unreasonably large. \
-                 Use a value between 1 and 1000 (typical deployments use 5–50).",
-                self.pool.size
-            );
-        }
-
-        // max_rows must be at least 1
-        if self.pool.max_rows == 0 {
-            anyhow::bail!("pool.max_rows must be >= 1 (set to a large number like 10000 for effectively unlimited rows)");
-        }
-
-        // max_result_memory_mb must be at least 1
-        if self.pool.max_result_memory_mb == 0 {
+        if pool.max_result_memory_mb == 0 {
             anyhow::bail!("pool.max_result_memory_mb must be >= 1");
         }
-
-        // retry_attempts should have a reasonable upper bound
-        if self.pool.retry_attempts > 10 {
-            anyhow::bail!(
-                "pool.retry_attempts is set to {} — this is unreasonably high. Use a value between 0 and 10.",
-                self.pool.retry_attempts
-            );
+        if pool.retry_attempts > 10 {
+            anyhow::bail!("pool.retry_attempts must be between 0 and 10 (got: {})", pool.retry_attempts);
         }
-
-        // warmup_connections cannot exceed the pool size
-        if self.pool.warmup_connections > self.pool.size {
+        if pool.warmup_connections > pool.size {
             anyhow::bail!(
                 "pool.warmup_connections ({}) cannot exceed pool.size ({})",
-                self.pool.warmup_connections,
-                self.pool.size
+                pool.warmup_connections, pool.size
+            );
+        }
+        if !matches!(pool.performance_hints.as_str(), "none" | "auto" | "always") {
+            anyhow::bail!(
+                "MYSQL_PERFORMANCE_HINTS must be one of: none, auto, always (got: '{}')",
+                pool.performance_hints
             );
         }
 
-        if self.security.max_sessions == 0 {
+        // -- Security bound checks --
+        if sec.max_sessions == 0 {
             anyhow::bail!("security.max_sessions must be >= 1");
         }
-
-        // dns_cache_ttl_secs=0 disables DNS caching — warn about the implications
-        if self.security.dns_cache_ttl_secs == 0 {
-            eprintln!(
-                "Warning: security.dns_cache_ttl_secs is 0 — DNS cache is disabled and every \
-                 connection will trigger a DNS lookup. Set to a positive value (e.g. 60) to \
-                 enable caching and prevent DNS rebinding attacks."
-            );
-        }
-
-        // max_total_connections must be at least pool.size
-        if self.security.max_total_connections < self.pool.size {
+        if sec.max_total_connections < pool.size {
             anyhow::bail!(
                 "security.max_total_connections ({}) must be >= pool.size ({})",
-                self.security.max_total_connections,
-                self.pool.size
+                sec.max_total_connections, pool.size
             );
         }
 
-        // performance_hints must be one of the recognised modes
-        if !matches!(
-            self.pool.performance_hints.as_str(),
-            "none" | "auto" | "always"
-        ) {
-            anyhow::bail!(
-                "Config error: MYSQL_PERFORMANCE_HINTS must be one of: none, auto, always (got: '{}')",
-                self.pool.performance_hints
-            );
-        }
-
-        // SSL CA file must exist if specified
-        if let Some(ref ca) = self.security.ssl_ca {
+        // -- File existence checks --
+        if let Some(ref ca) = sec.ssl_ca {
             if !std::path::Path::new(ca).exists() {
-                anyhow::bail!("Config error: MYSQL_SSL_CA path does not exist: {}", ca);
+                anyhow::bail!("MYSQL_SSL_CA path does not exist: {}", ca);
             }
         }
 
-        // SSH validation (only when SSH is configured)
+        // -- SSH validation --
         if let Some(ref ssh) = self.ssh {
             if ssh.host.is_empty() {
                 anyhow::bail!("ssh.host must not be empty when SSH tunnel is configured");
@@ -351,10 +272,7 @@ impl Config {
             if ssh.user.is_empty() {
                 anyhow::bail!("ssh.user must not be empty when SSH tunnel is configured");
             }
-            if !matches!(
-                ssh.known_hosts_check.as_str(),
-                "strict" | "accept-new" | "insecure"
-            ) {
+            if !matches!(ssh.known_hosts_check.as_str(), "strict" | "accept-new" | "insecure") {
                 anyhow::bail!(
                     "ssh.known_hosts_check must be one of: strict, accept-new, insecure (got: '{}')",
                     ssh.known_hosts_check
@@ -368,23 +286,15 @@ impl Config {
             if let Some(ref khf) = ssh.known_hosts_file {
                 let khf_path = std::path::Path::new(khf);
                 if ssh.known_hosts_check == "strict" {
-                    // Strict mode requires the file to exist — SSH will not connect
-                    // to a host that isn't already listed there.
                     if !khf_path.exists() {
                         anyhow::bail!(
-                            "ssh.known_hosts_file path does not exist: {} \
-                            (required when known_hosts_check=\"strict\")",
-                            khf
+                            "ssh.known_hosts_file does not exist: {} (required for strict mode)", khf
                         );
                     }
-                } else {
-                    // accept-new / insecure: SSH creates the file on first connect.
-                    // Only require the parent directory to exist.
-                    let parent = khf_path.parent().unwrap_or(std::path::Path::new("."));
+                } else if let Some(parent) = khf_path.parent() {
                     if !parent.exists() {
                         anyhow::bail!(
-                            "ssh.known_hosts_file parent directory does not exist: {}",
-                            parent.display()
+                            "ssh.known_hosts_file parent directory does not exist: {}", parent.display()
                         );
                     }
                 }
@@ -393,4 +303,27 @@ impl Config {
 
         Ok(())
     }
+}
+
+/// Load config from a TOML file path. Returns default config if file doesn't exist.
+pub(crate) fn load_toml_config(path: &std::path::Path) -> anyhow::Result<Config> {
+    if !path.exists() {
+        return Ok(Config::default());
+    }
+    let content = std::fs::read_to_string(path)?;
+    Ok(toml::from_str(&content)?)
+}
+
+/// Load the final merged config: dotenv -> TOML base -> env var overrides.
+pub fn load_config() -> anyhow::Result<Config> {
+    if std::path::Path::new(".env").exists() {
+        if let Err(e) = dotenv::dotenv() {
+            eprintln!("Warning: failed to parse .env file: {}", e);
+        }
+    }
+    let path = std::env::var("MCP_CONFIG_FILE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("mysql-mcp.toml"));
+    let base = load_toml_config(&path)?;
+    Ok(env_config::load_env_config().apply_to(base))
 }

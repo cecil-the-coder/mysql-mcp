@@ -81,6 +81,35 @@ pub fn is_low_cardinality_type(data_type: &str) -> bool {
 // are not held in the regular cache structures.
 // --------------------------------------------------------------------------
 
+/// Fetches rows from an `information_schema` query that filters on
+/// `TABLE_SCHEMA`. When `database` is `Some`, binds it as a parameter;
+/// otherwise substitutes `DATABASE()` into the SQL directly.
+///
+/// `sql_template` must contain exactly one `{schema_filter}` placeholder
+/// which will be replaced with either `= ?` or `= DATABASE()`.
+async fn schema_query_all(
+    pool: &sqlx::MySqlPool,
+    sql_template: &str,
+    table_name: &str,
+    database: Option<&str>,
+) -> anyhow::Result<Vec<sqlx::mysql::MySqlRow>> {
+    let rows = if let Some(db) = database {
+        let sql = sql_template.replace("{schema_filter}", "= ?");
+        sqlx::query(&sql)
+            .bind(db)
+            .bind(table_name)
+            .fetch_all(pool)
+            .await?
+    } else {
+        let sql = sql_template.replace("{schema_filter}", "= DATABASE()");
+        sqlx::query(&sql)
+            .bind(table_name)
+            .fetch_all(pool)
+            .await?
+    };
+    Ok(rows)
+}
+
 impl SchemaIntrospector {
     /// Detailed schema metadata for a single table: columns, indexes, foreign keys,
     /// and a size estimate.
@@ -104,28 +133,16 @@ impl SchemaIntrospector {
 
         // Indexes — richer than the composite-index cache (includes INDEX_TYPE, NULLABLE).
         let indexes: serde_json::Value = if include_indexes {
-            let rows = if let Some(db) = database {
-                sqlx::query(
-                    "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE, NULLABLE \
-                     FROM information_schema.STATISTICS \
-                     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
-                     ORDER BY INDEX_NAME, SEQ_IN_INDEX",
-                )
-                .bind(db)
-                .bind(table_name)
-                .fetch_all(pool)
-                .await?
-            } else {
-                sqlx::query(
-                    "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE, NULLABLE \
-                     FROM information_schema.STATISTICS \
-                     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? \
-                     ORDER BY INDEX_NAME, SEQ_IN_INDEX",
-                )
-                .bind(table_name)
-                .fetch_all(pool)
-                .await?
-            };
+            let rows = schema_query_all(
+                pool,
+                "SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, INDEX_TYPE, NULLABLE \
+                 FROM information_schema.STATISTICS \
+                 WHERE TABLE_SCHEMA {schema_filter} AND TABLE_NAME = ? \
+                 ORDER BY INDEX_NAME, SEQ_IN_INDEX",
+                table_name,
+                database,
+            )
+            .await?;
             let mut idx_map: std::collections::BTreeMap<String, serde_json::Value> =
                 std::collections::BTreeMap::new();
             for row in &rows {
@@ -150,74 +167,52 @@ impl SchemaIntrospector {
         };
 
         // Foreign keys.
-        let foreign_keys: serde_json::Value =
-            if include_foreign_keys {
-                let rows = if let Some(db) = database {
-                    sqlx::query(
-                        "SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME, \
-                             kcu.REFERENCED_COLUMN_NAME, rc.UPDATE_RULE, rc.DELETE_RULE \
-                         FROM information_schema.KEY_COLUMN_USAGE kcu \
-                         JOIN information_schema.REFERENTIAL_CONSTRAINTS rc \
-                           ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME \
-                          AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA \
-                         WHERE kcu.TABLE_SCHEMA = ? AND kcu.TABLE_NAME = ? \
-                           AND kcu.REFERENCED_TABLE_NAME IS NOT NULL",
-                    )
-                    .bind(db)
-                    .bind(table_name)
-                    .fetch_all(pool)
-                    .await?
-                } else {
-                    sqlx::query(
-                        "SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME, \
-                             kcu.REFERENCED_COLUMN_NAME, rc.UPDATE_RULE, rc.DELETE_RULE \
-                         FROM information_schema.KEY_COLUMN_USAGE kcu \
-                         JOIN information_schema.REFERENTIAL_CONSTRAINTS rc \
-                           ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME \
-                          AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA \
-                         WHERE kcu.TABLE_SCHEMA = DATABASE() AND kcu.TABLE_NAME = ? \
-                           AND kcu.REFERENCED_TABLE_NAME IS NOT NULL",
-                    )
-                    .bind(table_name)
-                    .fetch_all(pool)
-                    .await?
-                };
-                serde_json::Value::Array(rows.iter().map(|row| serde_json::json!({
-                "constraint":        fetch::is_col_str(row, "CONSTRAINT_NAME"),
-                "column":            fetch::is_col_str(row, "COLUMN_NAME"),
-                "references_table":  fetch::is_col_str(row, "REFERENCED_TABLE_NAME"),
-                "references_column": fetch::is_col_str(row, "REFERENCED_COLUMN_NAME"),
-                "on_update":         fetch::is_col_str(row, "UPDATE_RULE"),
-                "on_delete":         fetch::is_col_str(row, "DELETE_RULE"),
-            })).collect())
-            } else {
-                serde_json::Value::Null
-            };
+        let foreign_keys: serde_json::Value = if include_foreign_keys {
+            let rows = schema_query_all(
+                pool,
+                "SELECT kcu.CONSTRAINT_NAME, kcu.COLUMN_NAME, kcu.REFERENCED_TABLE_NAME, \
+                     kcu.REFERENCED_COLUMN_NAME, rc.UPDATE_RULE, rc.DELETE_RULE \
+                 FROM information_schema.KEY_COLUMN_USAGE kcu \
+                 JOIN information_schema.REFERENTIAL_CONSTRAINTS rc \
+                   ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME \
+                  AND rc.CONSTRAINT_SCHEMA = kcu.TABLE_SCHEMA \
+                 WHERE kcu.TABLE_SCHEMA {schema_filter} AND kcu.TABLE_NAME = ? \
+                   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL",
+                table_name,
+                database,
+            )
+            .await?;
+            serde_json::Value::Array(
+                rows.iter()
+                    .map(|row| {
+                        serde_json::json!({
+                            "constraint":        fetch::is_col_str(row, "CONSTRAINT_NAME"),
+                            "column":            fetch::is_col_str(row, "COLUMN_NAME"),
+                            "references_table":  fetch::is_col_str(row, "REFERENCED_TABLE_NAME"),
+                            "references_column": fetch::is_col_str(row, "REFERENCED_COLUMN_NAME"),
+                            "on_update":         fetch::is_col_str(row, "UPDATE_RULE"),
+                            "on_delete":         fetch::is_col_str(row, "DELETE_RULE"),
+                        })
+                    })
+                    .collect(),
+            )
+        } else {
+            serde_json::Value::Null
+        };
 
         // Table size estimate.
         let size: serde_json::Value = if include_size {
-            let size_result = if let Some(db) = database {
-                sqlx::query(
-                    "SELECT TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH \
-                     FROM information_schema.TABLES \
-                     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
-                )
-                .bind(db)
-                .bind(table_name)
-                .fetch_one(pool)
-                .await
-            } else {
-                sqlx::query(
-                    "SELECT TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH \
-                     FROM information_schema.TABLES \
-                     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?",
-                )
-                .bind(table_name)
-                .fetch_one(pool)
-                .await
-            };
-            match size_result {
-                Ok(row) => {
+            let rows = schema_query_all(
+                pool,
+                "SELECT TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH \
+                 FROM information_schema.TABLES \
+                 WHERE TABLE_SCHEMA {schema_filter} AND TABLE_NAME = ?",
+                table_name,
+                database,
+            )
+            .await?;
+            match rows.into_iter().next() {
+                Some(row) => {
                     use sqlx::Row;
                     serde_json::json!({
                         "estimated_rows": row.try_get::<Option<u64>, _>("TABLE_ROWS").ok().flatten(),
@@ -225,9 +220,7 @@ impl SchemaIntrospector {
                         "index_bytes":    row.try_get::<Option<u64>, _>("INDEX_LENGTH").ok().flatten(),
                     })
                 }
-                // Table absent from information_schema — not an error.
-                Err(sqlx::Error::RowNotFound) => serde_json::Value::Null,
-                Err(e) => return Err(e.into()),
+                None => serde_json::Value::Null,
             }
         } else {
             serde_json::Value::Null

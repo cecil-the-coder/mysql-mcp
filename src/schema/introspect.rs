@@ -1,32 +1,15 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use tokio::time::timeout;
-
-/// Timeout for acquiring cache locks. Prevents indefinite blocking if a lock holder panics.
-const CACHE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Helper to acquire a cache lock with timeout. Returns a clear error if the lock
-/// cannot be acquired within CACHE_LOCK_TIMEOUT.
-async fn acquire_lock<T>(mutex: &Mutex<T>) -> Result<tokio::sync::MutexGuard<'_, T>> {
-    timeout(CACHE_LOCK_TIMEOUT, mutex.lock())
-        .await
-        .map_err(|_| {
-            anyhow!(
-                "Timeout acquiring schema cache lock after {}s - possible deadlock",
-                CACHE_LOCK_TIMEOUT.as_secs()
-            )
-        })
-}
 
 use super::fetch;
 use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
 
 // ---------------------------------------------------------------------------
-// Cache internals (inlined from former cache.rs)
+// Cache internals
 // ---------------------------------------------------------------------------
 
 pub(crate) struct CacheEntry<T> {
@@ -42,138 +25,47 @@ pub(crate) struct SchemaCache {
     pub(crate) columns_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<ColumnInfo>>>>>,
     pub(crate) indexed_columns_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<String>>>>>,
     pub(crate) composite_indexes_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<IndexDef>>>>>,
-    /// Tracks in-flight fetches per cache key to coalesce concurrent requests.
-    /// When a fetch is in progress, the Mutex<()> is held locked. Waiters can
-    /// await on it; when the fetch completes, the mutex is unlocked and the
-    /// entry is removed.
-    pub(crate) in_flight_fetch: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
 }
 
-/// Generic TTL cache helper. Returns a cached entry if still fresh; otherwise
-/// fetches synchronously, stores the result, and returns it.
-/// When `cache_ttl == Duration::ZERO`, always re-fetches (cache disabled).
-///
-/// Implements request coalescing: if multiple concurrent requests arrive for the
-/// same expired/missing cache key, only one will perform the fetch while others
-/// wait and then read the freshly populated cache.
+/// Simple TTL cache helper. Returns cached data if fresh, otherwise fetches,
+/// stores, and returns.
 pub(crate) async fn get_cached_or_refresh<T, F, Fut>(
     cache: Arc<Mutex<HashMap<String, CacheEntry<T>>>>,
     cache_key: String,
     cache_ttl: Duration,
-    in_flight: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     fetch_fn: F,
 ) -> Result<T>
 where
     T: Clone + Send + 'static,
-    F: Fn() -> Fut + Send + Sync + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = Result<T>> + Send + 'static,
 {
-    // Fast path: check cache under lock
+    // Check cache under lock, return if fresh
     {
-        let cache_guard = acquire_lock(&cache).await?;
-        if let Some(entry) = cache_guard.get(&cache_key) {
-            if entry.fetched_at.elapsed() < cache_ttl {
+        let guard = cache.lock().await;
+        if let Some(entry) = guard.get(&cache_key) {
+            if cache_ttl > Duration::ZERO && entry.fetched_at.elapsed() < cache_ttl {
                 return Ok(entry.data.clone());
             }
         }
     }
 
-    // Slow path: need to fetch. Check if another request is already fetching.
-    let fetch_permit = {
-        let mut in_flight_guard = acquire_lock(&in_flight).await?;
-        if let Some(existing) = in_flight_guard.get(&cache_key) {
-            // Another request is already fetching this key. Clone the permit
-            // so we can wait on it after releasing the in_flight lock.
-            Arc::clone(existing)
-        } else {
-            // We are the first to fetch. Create a new permit (locked state).
-            let permit = Arc::new(Mutex::new(()));
-            in_flight_guard.insert(cache_key.clone(), Arc::clone(&permit));
-            permit
-        }
-    };
+    // Fetch new data (lock released so we don't block readers during I/O)
+    let data = fetch_fn().await?;
 
-    // Lock the permit. If we created it, we get it immediately and proceed to fetch.
-    // If another request created it, we wait until they release it (after their fetch completes).
-    // Note: We use a longer timeout for the fetch_permit since it includes fetch time.
-    let _permit_guard = timeout(Duration::from_secs(120), fetch_permit.lock())
-        .await
-        .map_err(|_| {
-            anyhow!("Timeout waiting for in-flight fetch permit after 120s - possible deadlock")
-        })?;
-
-    // After acquiring the permit, re-check the cache in case the previous fetcher
-    // already populated it while we were waiting.
-    {
-        let cache_guard = acquire_lock(&cache).await?;
-        if let Some(entry) = cache_guard.get(&cache_key) {
-            if entry.fetched_at.elapsed() < cache_ttl {
-                // Another request populated the cache. Clean up in_flight and return.
-                let mut in_flight_guard = acquire_lock(&in_flight).await?;
-                in_flight_guard.remove(&cache_key);
-                return Ok(entry.data.clone());
-            }
-        }
+    // Store in cache if caching is enabled
+    if cache_ttl > Duration::ZERO {
+        let mut guard = cache.lock().await;
+        guard.insert(
+            cache_key,
+            CacheEntry {
+                data: data.clone(),
+                fetched_at: Instant::now(),
+            },
+        );
     }
 
-    // We need to fetch. Check again if we're the one who should do it
-    // (in case multiple waiters all got released simultaneously).
-    let should_fetch = {
-        let in_flight_guard = acquire_lock(&in_flight).await?;
-        in_flight_guard
-            .get(&cache_key)
-            .map(|p| Arc::ptr_eq(p, &fetch_permit))
-            .unwrap_or(false)
-    };
-
-    if should_fetch {
-        let result = fetch_fn().await;
-        // Clean up in_flight entry first (before storing to cache, to avoid
-        // a race where a new request sees stale in_flight data).
-        {
-            let mut in_flight_guard = acquire_lock(&in_flight).await?;
-            in_flight_guard.remove(&cache_key);
-        }
-        // Store result in cache if successful and caching is enabled.
-        if let Ok(ref data) = result {
-            if cache_ttl > Duration::ZERO {
-                let fetched_at = Instant::now();
-                let mut cache_guard = acquire_lock(&cache).await?;
-                cache_guard.insert(
-                    cache_key,
-                    CacheEntry {
-                        data: data.clone(),
-                        fetched_at,
-                    },
-                );
-            }
-        }
-        result
-    } else {
-        // Another waiter became the fetcher. Re-check the cache.
-        let cache_guard = acquire_lock(&cache).await?;
-        if let Some(entry) = cache_guard.get(&cache_key) {
-            if entry.fetched_at.elapsed() < cache_ttl {
-                return Ok(entry.data.clone());
-            }
-        }
-        // Cache still stale or missing - this shouldn't happen in normal operation,
-        // but fall back to fetching ourselves to avoid deadlock.
-        drop(cache_guard);
-        let data = fetch_fn().await?;
-        if cache_ttl > Duration::ZERO {
-            let fetched_at = Instant::now();
-            let mut cache_guard = acquire_lock(&cache).await?;
-            cache_guard.insert(
-                cache_key,
-                CacheEntry {
-                    data: data.clone(),
-                    fetched_at,
-                },
-            );
-        }
-        Ok(data)
-    }
+    Ok(data)
 }
 
 pub struct SchemaIntrospector {
@@ -198,7 +90,6 @@ impl SchemaIntrospector {
                 columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 indexed_columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 composite_indexes_cache: Arc::new(Mutex::new(HashMap::new())),
-                in_flight_fetch: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
     }
@@ -212,11 +103,9 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.tables_cache),
             cache_key,
             self.inner.cache_ttl,
-            Arc::clone(&self.inner.in_flight_fetch),
             move || {
                 let pool = Arc::clone(&pool);
-                let db = owned_database.clone();
-                async move { fetch::fetch_tables(&pool, db.as_deref()).await }
+                async move { fetch::fetch_tables(&pool, owned_database.as_deref()).await }
             },
         )
         .await
@@ -239,12 +128,12 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.indexed_columns_cache),
             cache_key,
             self.inner.cache_ttl,
-            Arc::clone(&self.inner.in_flight_fetch),
             move || {
                 let pool = Arc::clone(&pool);
-                let t = owned_table.clone();
-                let db = owned_database.clone();
-                async move { fetch::fetch_indexed_columns(&pool, &t, db.as_deref()).await }
+                async move {
+                    fetch::fetch_indexed_columns(&pool, &owned_table, owned_database.as_deref())
+                        .await
+                }
             },
         )
         .await
@@ -269,12 +158,12 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.composite_indexes_cache),
             cache_key,
             self.inner.cache_ttl,
-            Arc::clone(&self.inner.in_flight_fetch),
             move || {
                 let pool = Arc::clone(&pool);
-                let t = owned_table.clone();
-                let db = owned_database.clone();
-                async move { fetch::fetch_composite_indexes(&pool, &t, db.as_deref()).await }
+                async move {
+                    fetch::fetch_composite_indexes(&pool, &owned_table, owned_database.as_deref())
+                        .await
+                }
             },
         )
         .await
@@ -294,12 +183,11 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.columns_cache),
             cache_key,
             self.inner.cache_ttl,
-            Arc::clone(&self.inner.in_flight_fetch),
             move || {
                 let pool = Arc::clone(&pool);
-                let t = owned_table.clone();
-                let db = owned_database.clone();
-                async move { fetch::fetch_columns(&pool, &t, db.as_deref()).await }
+                async move {
+                    fetch::fetch_columns(&pool, &owned_table, owned_database.as_deref()).await
+                }
             },
         )
         .await
@@ -458,41 +346,24 @@ impl SchemaIntrospector {
     /// invalidated state (e.g., fresh columns but stale indexes).
     pub async fn invalidate_table(&self, table: &str, database: Option<&str>) {
         if table.is_empty() {
-            // Caller bug: empty table name should not reach here. The handler calls
-            // invalidate_all() directly when the target table is unknown.
             tracing::warn!("invalidate_table called with empty table name; ignoring");
             return;
         }
 
-        if let Err(e) = async {
-            // Acquire all locks before any modifications to ensure atomic invalidation.
-            // Lock order: columns -> indexed_columns -> composite_indexes -> tables
-            // (consistent with invalidate_all to prevent deadlock).
-            let mut columns_cache = acquire_lock(&self.inner.columns_cache).await?;
-            let mut indexed_columns_cache = acquire_lock(&self.inner.indexed_columns_cache).await?;
-            let mut composite_indexes_cache =
-                acquire_lock(&self.inner.composite_indexes_cache).await?;
-            let mut tables_cache = acquire_lock(&self.inner.tables_cache).await?;
+        let mut columns_cache = self.inner.columns_cache.lock().await;
+        let mut indexed_columns_cache = self.inner.indexed_columns_cache.lock().await;
+        let mut composite_indexes_cache = self.inner.composite_indexes_cache.lock().await;
+        let mut tables_cache = self.inner.tables_cache.lock().await;
 
-            // Now perform all modifications while holding all locks.
-            columns_cache.retain(|key, _| !key_matches_table(key, table));
-            indexed_columns_cache.retain(|key, _| !key_matches_table(key, table));
-            composite_indexes_cache.retain(|key, _| !key_matches_table(key, table));
+        columns_cache.retain(|key, _| !key_matches_table(key, table));
+        indexed_columns_cache.retain(|key, _| !key_matches_table(key, table));
+        composite_indexes_cache.retain(|key, _| !key_matches_table(key, table));
 
-            // Clear only the affected database's table list. When the database is unknown,
-            // clear all entries conservatively (we'd rather re-fetch than serve stale data).
-            match database {
-                Some(db) => {
-                    tables_cache.remove(db);
-                }
-                None => tables_cache.clear(),
+        match database {
+            Some(db) => {
+                tables_cache.remove(db);
             }
-
-            Ok::<(), anyhow::Error>(())
-        }
-        .await
-        {
-            tracing::error!("Failed to invalidate table cache: {}", e);
+            None => tables_cache.clear(),
         }
     }
 
@@ -502,27 +373,14 @@ impl SchemaIntrospector {
     /// Acquires all cache locks atomically to prevent readers from observing partially
     /// invalidated state.
     pub async fn invalidate_all(&self) {
-        if let Err(e) = async {
-            // Acquire all locks before any modifications to ensure atomic invalidation.
-            // Lock order: tables -> columns -> indexed_columns -> composite_indexes
-            // (consistent with invalidate_table to prevent deadlock).
-            let mut tables_cache = acquire_lock(&self.inner.tables_cache).await?;
-            let mut columns_cache = acquire_lock(&self.inner.columns_cache).await?;
-            let mut indexed_columns_cache = acquire_lock(&self.inner.indexed_columns_cache).await?;
-            let mut composite_indexes_cache =
-                acquire_lock(&self.inner.composite_indexes_cache).await?;
+        let mut tables_cache = self.inner.tables_cache.lock().await;
+        let mut columns_cache = self.inner.columns_cache.lock().await;
+        let mut indexed_columns_cache = self.inner.indexed_columns_cache.lock().await;
+        let mut composite_indexes_cache = self.inner.composite_indexes_cache.lock().await;
 
-            // Now perform all modifications while holding all locks.
-            tables_cache.clear();
-            columns_cache.clear();
-            indexed_columns_cache.clear();
-            composite_indexes_cache.clear();
-
-            Ok::<(), anyhow::Error>(())
-        }
-        .await
-        {
-            tracing::error!("Failed to invalidate all caches: {}", e);
-        }
+        tables_cache.clear();
+        columns_cache.clear();
+        indexed_columns_cache.clear();
+        composite_indexes_cache.clear();
     }
 }

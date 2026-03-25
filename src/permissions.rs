@@ -30,92 +30,67 @@ pub fn check_permission(
         .as_deref()
         .and_then(|s| sec.schema_permissions.get(s));
 
+    // Read-only and informational statements are always allowed.
+    // SET is allowed without restriction — operators should be aware that SET SESSION/GLOBAL
+    // can affect security/behavior (e.g. sql_mode, global settings).
     match stmt_type {
-        StatementType::Select | StatementType::Show | StatementType::Explain => {
-            // Always allowed (read-only)
-            Ok(())
-        }
-        StatementType::Insert => {
-            let allowed = schema_perms
-                .and_then(|p| p.allow_insert)
-                .unwrap_or(sec.allow_insert);
-            check_write_op(
-                allowed,
-                "INSERT",
-                "MYSQL_ALLOW_INSERT",
-                config,
-                target_schema,
-            )
-        }
-        StatementType::Update => {
-            let allowed = schema_perms
-                .and_then(|p| p.allow_update)
-                .unwrap_or(sec.allow_update);
-            check_write_op(
-                allowed,
-                "UPDATE",
-                "MYSQL_ALLOW_UPDATE",
-                config,
-                target_schema,
-            )
-        }
-        StatementType::Delete => {
-            let allowed = schema_perms
-                .and_then(|p| p.allow_delete)
-                .unwrap_or(sec.allow_delete);
-            check_write_op(
-                allowed,
-                "DELETE",
-                "MYSQL_ALLOW_DELETE",
-                config,
-                target_schema,
-            )
-        }
+        StatementType::Select
+        | StatementType::Show
+        | StatementType::Explain
+        | StatementType::Use
+        | StatementType::Set => return Ok(()),
+        _ => {}
+    }
+
+    // Write operations: resolve (allowed, label, env_var) from statement type + schema perms.
+    if let Some((allowed, label, env_var)) = match stmt_type {
+        StatementType::Insert => Some((
+            schema_perms.and_then(|p| p.allow_insert).unwrap_or(sec.allow_insert),
+            "INSERT".to_string(),
+            "MYSQL_ALLOW_INSERT",
+        )),
+        StatementType::Update => Some((
+            schema_perms.and_then(|p| p.allow_update).unwrap_or(sec.allow_update),
+            "UPDATE".to_string(),
+            "MYSQL_ALLOW_UPDATE",
+        )),
+        StatementType::Delete => Some((
+            schema_perms.and_then(|p| p.allow_delete).unwrap_or(sec.allow_delete),
+            "DELETE".to_string(),
+            "MYSQL_ALLOW_DELETE",
+        )),
         StatementType::Create
         | StatementType::Alter
         | StatementType::Drop
-        | StatementType::Truncate => {
-            let allowed = schema_perms
-                .and_then(|p| p.allow_ddl)
-                .unwrap_or(sec.allow_ddl);
-            let label = format!("DDL ({})", stmt_type.name());
-            check_write_op(allowed, &label, "MYSQL_ALLOW_DDL", config, target_schema)
-        }
-        StatementType::Use => {
-            // USE is informational, allow it
-            Ok(())
-        }
-        StatementType::Set => {
-            // SET is allowed without restriction.
-            // NOTE: Some SET variants can affect security/behavior:
-            // - SET SESSION sql_mode = '' could weaken validation
-            // - SET GLOBAL could affect server-wide settings
-            // These are intentionally allowed for operational flexibility,
-            // but operators should be aware of the implications.
-            Ok(())
-        }
-        StatementType::Other(name) => {
-            // Use exact equality (or starts_with for families) so that future sqlparser
-            // variants whose names happen to contain these substrings don't produce
-            // misleading error messages. "Load" uses starts_with to cover both
-            // Statement::Load and Statement::LoadData.
-            let hint = if name == "Call" {
-                "CALL (stored procedures) is not supported by this server".to_string()
-            } else if name.starts_with("Load") {
-                "LOAD DATA is not supported. Use INSERT statements to load data".to_string()
-            } else if name == "LockTables" || name == "UnlockTables" {
-                "LOCK/UNLOCK TABLES is not supported".to_string()
-            } else if name == "Prepare" || name == "Execute" || name == "Deallocate" {
-                "The prepared-statement protocol (PREPARE/EXECUTE/DEALLOCATE) is not supported. Send the final SQL directly"
-                    .to_string()
-            } else if name == "Do" {
-                "DO is not supported. Use SELECT instead (e.g. SELECT SLEEP(1))".to_string()
-            } else {
-                format!("Unsupported statement type: {name}. Supported types: SELECT, SHOW, EXPLAIN, INSERT, UPDATE, DELETE, CREATE (TABLE/DATABASE/INDEX), ALTER, DROP, TRUNCATE, USE, SET")
-            };
-            bail!("{}", hint);
-        }
+        | StatementType::Truncate => Some((
+            schema_perms.and_then(|p| p.allow_ddl).unwrap_or(sec.allow_ddl),
+            format!("DDL ({})", stmt_type.name()),
+            "MYSQL_ALLOW_DDL",
+        )),
+        _ => None,
+    } {
+        return check_write_op(allowed, &label, env_var, config, target_schema);
     }
+
+    // Unsupported statement types — provide targeted hints where possible.
+    // "Load" uses starts_with to cover both Statement::Load and Statement::LoadData.
+    if let StatementType::Other(name) = stmt_type {
+        let hint = match name.as_str() {
+            "Call" => "CALL (stored procedures) is not supported by this server".to_string(),
+            "LockTables" | "UnlockTables" => "LOCK/UNLOCK TABLES is not supported".to_string(),
+            "Prepare" | "Execute" | "Deallocate" => {
+                "The prepared-statement protocol (PREPARE/EXECUTE/DEALLOCATE) is not supported. Send the final SQL directly".to_string()
+            }
+            "Do" => "DO is not supported. Use SELECT instead (e.g. SELECT SLEEP(1))".to_string(),
+            _ if name.starts_with("Load") => {
+                "LOAD DATA is not supported. Use INSERT statements to load data".to_string()
+            }
+            _ => format!("Unsupported statement type: {name}. Supported types: SELECT, SHOW, EXPLAIN, INSERT, UPDATE, DELETE, CREATE (TABLE/DATABASE/INDEX), ALTER, DROP, TRUNCATE, USE, SET"),
+        };
+        bail!("{}", hint);
+    }
+
+    Ok(())
 }
 
 /// Check permissions for ALL target schemas in a parsed statement.
