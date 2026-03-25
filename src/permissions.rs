@@ -45,17 +45,23 @@ pub fn check_permission(
     // Write operations: resolve (allowed, label, env_var) from statement type + schema perms.
     if let Some((allowed, label, env_var)) = match stmt_type {
         StatementType::Insert => Some((
-            schema_perms.and_then(|p| p.allow_insert).unwrap_or(sec.allow_insert),
+            schema_perms
+                .and_then(|p| p.allow_insert)
+                .unwrap_or(sec.allow_insert),
             "INSERT".to_string(),
             "MYSQL_ALLOW_INSERT",
         )),
         StatementType::Update => Some((
-            schema_perms.and_then(|p| p.allow_update).unwrap_or(sec.allow_update),
+            schema_perms
+                .and_then(|p| p.allow_update)
+                .unwrap_or(sec.allow_update),
             "UPDATE".to_string(),
             "MYSQL_ALLOW_UPDATE",
         )),
         StatementType::Delete => Some((
-            schema_perms.and_then(|p| p.allow_delete).unwrap_or(sec.allow_delete),
+            schema_perms
+                .and_then(|p| p.allow_delete)
+                .unwrap_or(sec.allow_delete),
             "DELETE".to_string(),
             "MYSQL_ALLOW_DELETE",
         )),
@@ -63,7 +69,9 @@ pub fn check_permission(
         | StatementType::Alter
         | StatementType::Drop
         | StatementType::Truncate => Some((
-            schema_perms.and_then(|p| p.allow_ddl).unwrap_or(sec.allow_ddl),
+            schema_perms
+                .and_then(|p| p.allow_ddl)
+                .unwrap_or(sec.allow_ddl),
             format!("DDL ({})", stmt_type.name()),
             "MYSQL_ALLOW_DDL",
         )),

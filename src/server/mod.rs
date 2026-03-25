@@ -278,7 +278,8 @@ impl McpServer {
                             .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Release);
                         drop(map); // release lock before awaiting async operations
                         if let Some(tunnel) = session.tunnel {
-                            sessions::close_tunnel_with_timeout(tunnel, "during session reap").await;
+                            sessions::close_tunnel_with_timeout(tunnel, "during session reap")
+                                .await;
                         }
                         session.pool.close().await;
                     }

@@ -302,7 +302,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
                 // MySQL utilities
                 Statement::Call(_) => "Call",
                 Statement::LockTables { .. } => "LockTables",
-                Statement::UnlockTables { .. } => "UnlockTables",
+                Statement::UnlockTables => "UnlockTables",
                 Statement::Kill { .. } => "Kill",
                 Statement::Flush { .. } => "Flush",
                 Statement::OptimizeTable { .. } => "OptimizeTable",

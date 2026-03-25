@@ -102,10 +102,7 @@ async fn schema_query_all(
             .await?
     } else {
         let sql = sql_template.replace("{schema_filter}", "= DATABASE()");
-        sqlx::query(&sql)
-            .bind(table_name)
-            .fetch_all(pool)
-            .await?
+        sqlx::query(&sql).bind(table_name).fetch_all(pool).await?
     };
     Ok(rows)
 }

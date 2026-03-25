@@ -107,10 +107,7 @@ pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToo
             kind
         )));
     }
-    if !value
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_')
-    {
+    if !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(crate::server::error::error_response(format!(
             "{} must contain only alphanumeric characters or underscores",
             kind
@@ -124,10 +121,7 @@ const TUNNEL_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Close an SSH tunnel with a timeout. Logs a warning on error or timeout, never blocks
 /// cleanup indefinitely.
-pub(crate) async fn close_tunnel_with_timeout(
-    tunnel: crate::tunnel::TunnelHandle,
-    context: &str,
-) {
+pub(crate) async fn close_tunnel_with_timeout(tunnel: crate::tunnel::TunnelHandle, context: &str) {
     match tokio::time::timeout(TUNNEL_CLOSE_TIMEOUT, tunnel.close()).await {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
@@ -278,9 +272,8 @@ impl SessionStore {
                      Set ssl=true to use certificate validation, or remove ssl_ca."
                 );
             }
-            match std::fs::File::open(ca_path) {
-                Err(e) => return tool_error!("SSL CA file not readable: {}: {}", ca_path, e),
-                Ok(_) => {}
+            if let Err(e) = std::fs::File::open(ca_path) {
+                return tool_error!("SSL CA file not readable: {}: {}", ca_path, e);
             }
         }
 

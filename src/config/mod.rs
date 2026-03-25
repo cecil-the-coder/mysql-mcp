@@ -211,7 +211,9 @@ impl Config {
 
         // -- SSL checks --
         if sec.ssl_ca.is_some() && !sec.ssl {
-            eprintln!("Warning: MYSQL_SSL_CA is set but MYSQL_SSL is false; CA cert will be ignored");
+            eprintln!(
+                "Warning: MYSQL_SSL_CA is set but MYSQL_SSL is false; CA cert will be ignored"
+            );
         }
         if sec.ssl_accept_invalid_certs {
             eprintln!("Warning: ssl_accept_invalid_certs is enabled — TLS validation disabled");
@@ -231,12 +233,16 @@ impl Config {
             anyhow::bail!("pool.max_result_memory_mb must be >= 1");
         }
         if pool.retry_attempts > 10 {
-            anyhow::bail!("pool.retry_attempts must be between 0 and 10 (got: {})", pool.retry_attempts);
+            anyhow::bail!(
+                "pool.retry_attempts must be between 0 and 10 (got: {})",
+                pool.retry_attempts
+            );
         }
         if pool.warmup_connections > pool.size {
             anyhow::bail!(
                 "pool.warmup_connections ({}) cannot exceed pool.size ({})",
-                pool.warmup_connections, pool.size
+                pool.warmup_connections,
+                pool.size
             );
         }
         if !matches!(pool.performance_hints.as_str(), "none" | "auto" | "always") {
@@ -253,7 +259,8 @@ impl Config {
         if sec.max_total_connections < pool.size {
             anyhow::bail!(
                 "security.max_total_connections ({}) must be >= pool.size ({})",
-                sec.max_total_connections, pool.size
+                sec.max_total_connections,
+                pool.size
             );
         }
 
@@ -272,7 +279,10 @@ impl Config {
             if ssh.user.is_empty() {
                 anyhow::bail!("ssh.user must not be empty when SSH tunnel is configured");
             }
-            if !matches!(ssh.known_hosts_check.as_str(), "strict" | "accept-new" | "insecure") {
+            if !matches!(
+                ssh.known_hosts_check.as_str(),
+                "strict" | "accept-new" | "insecure"
+            ) {
                 anyhow::bail!(
                     "ssh.known_hosts_check must be one of: strict, accept-new, insecure (got: '{}')",
                     ssh.known_hosts_check
@@ -288,13 +298,15 @@ impl Config {
                 if ssh.known_hosts_check == "strict" {
                     if !khf_path.exists() {
                         anyhow::bail!(
-                            "ssh.known_hosts_file does not exist: {} (required for strict mode)", khf
+                            "ssh.known_hosts_file does not exist: {} (required for strict mode)",
+                            khf
                         );
                     }
                 } else if let Some(parent) = khf_path.parent() {
                     if !parent.exists() {
                         anyhow::bail!(
-                            "ssh.known_hosts_file parent directory does not exist: {}", parent.display()
+                            "ssh.known_hosts_file parent directory does not exist: {}",
+                            parent.display()
                         );
                     }
                 }
