@@ -29,6 +29,7 @@ pub(crate) struct SchemaCache {
 
 /// Simple TTL cache helper. Returns cached data if fresh, otherwise fetches,
 /// stores, and returns.
+/// When `cache_ttl == Duration::ZERO`, always re-fetches (cache disabled).
 pub(crate) async fn get_cached_or_refresh<T, F, Fut>(
     cache: Arc<Mutex<HashMap<String, CacheEntry<T>>>>,
     cache_key: String,
@@ -373,14 +374,16 @@ impl SchemaIntrospector {
     /// Acquires all cache locks atomically to prevent readers from observing partially
     /// invalidated state.
     pub async fn invalidate_all(&self) {
-        let mut tables_cache = self.inner.tables_cache.lock().await;
+        // Lock order: columns -> indexed_columns -> composite_indexes -> tables
+        // (consistent with invalidate_table to prevent deadlock).
         let mut columns_cache = self.inner.columns_cache.lock().await;
         let mut indexed_columns_cache = self.inner.indexed_columns_cache.lock().await;
         let mut composite_indexes_cache = self.inner.composite_indexes_cache.lock().await;
+        let mut tables_cache = self.inner.tables_cache.lock().await;
 
-        tables_cache.clear();
         columns_cache.clear();
         indexed_columns_cache.clear();
         composite_indexes_cache.clear();
+        tables_cache.clear();
     }
 }

@@ -212,8 +212,8 @@ pub async fn spawn_ssh_tunnel(
                     }
                     return Err(anyhow::anyhow!(
                         "SSH tunnel: timed out waiting for local port {} to become ready after 30s. \
-                         Check SSH connectivity to {} and server logs for details.",
-                        local_port, ssh.host
+                         Check SSH connectivity to [REDACTED] and server logs for details.",
+                        local_port
                     ));
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;

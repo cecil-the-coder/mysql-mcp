@@ -7,23 +7,13 @@
 
 use rmcp::model::{CallToolResult, Content};
 
-/// Format an error message for return to the MCP client.
-///
-/// Performs minimal cleanup: trims whitespace and removes trailing punctuation
-/// that looks odd in error messages.
-pub(crate) fn sanitize_error(error: &str) -> String {
-    let sanitized = error.trim();
-
-    // Remove trailing punctuation that looks odd
-    sanitized
-        .strip_suffix(':')
-        .or_else(|| sanitized.strip_suffix(','))
-        .unwrap_or(sanitized)
-        .to_string()
-}
-
 pub(crate) fn error_response(message: impl Into<String>) -> CallToolResult {
-    let sanitized = sanitize_error(&message.into());
+    let msg = message.into();
+    let trimmed = msg.trim();
+    let sanitized = trimmed
+        .strip_suffix(':')
+        .or_else(|| trimmed.strip_suffix(','))
+        .unwrap_or(trimmed);
     CallToolResult::error(vec![Content::text(sanitized)])
 }
 
@@ -54,57 +44,62 @@ macro_rules! tool_error {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_sanitize_trims_whitespace() {
-        let error = "  Connection failed  ";
-        let sanitized = sanitize_error(error);
-        assert_eq!(sanitized, "Connection failed");
+    fn extract_text(result: &CallToolResult) -> &str {
+        result.content[0]
+            .raw
+            .as_text()
+            .expect("expected text content")
+            .text
+            .as_str()
     }
 
     #[test]
-    fn test_sanitize_removes_trailing_colon() {
-        let error = "Connection failed:";
-        let sanitized = sanitize_error(error);
-        assert_eq!(sanitized, "Connection failed");
+    fn test_error_response_trims_whitespace() {
+        let result = error_response("  Connection failed  ");
+        assert_eq!(extract_text(&result), "Connection failed");
     }
 
     #[test]
-    fn test_sanitize_removes_trailing_comma() {
-        let error = "Connection failed,";
-        let sanitized = sanitize_error(error);
-        assert_eq!(sanitized, "Connection failed");
+    fn test_error_response_removes_trailing_colon() {
+        let result = error_response("Connection failed:");
+        assert_eq!(extract_text(&result), "Connection failed");
     }
 
     #[test]
-    fn test_preserves_connection_details() {
+    fn test_error_response_removes_trailing_comma() {
+        let result = error_response("Connection failed,");
+        assert_eq!(extract_text(&result), "Connection failed");
+    }
+
+    #[test]
+    fn test_error_response_preserves_connection_details() {
         // IPs and paths are no longer redacted - the user already knows these
-        let error = "Connection to 192.168.1.1:3306 failed";
-        let sanitized = sanitize_error(error);
-        assert_eq!(sanitized, "Connection to 192.168.1.1:3306 failed");
+        let result = error_response("Connection to 192.168.1.1:3306 failed");
+        assert_eq!(
+            extract_text(&result),
+            "Connection to 192.168.1.1:3306 failed"
+        );
     }
 
     #[test]
-    fn test_preserves_paths() {
-        let error = "Error reading /home/user/config.toml: permission denied";
-        let sanitized = sanitize_error(error);
+    fn test_error_response_preserves_paths() {
+        let result = error_response("Error reading /home/user/config.toml: permission denied");
         // Trailing colon removed, but path preserved
         assert_eq!(
-            sanitized,
+            extract_text(&result),
             "Error reading /home/user/config.toml: permission denied"
         );
     }
 
     #[test]
-    fn test_preserves_os_errors() {
-        let error = "Connection refused (os error 111)";
-        let sanitized = sanitize_error(error);
-        assert_eq!(sanitized, "Connection refused (os error 111)");
+    fn test_error_response_preserves_os_errors() {
+        let result = error_response("Connection refused (os error 111)");
+        assert_eq!(extract_text(&result), "Connection refused (os error 111)");
     }
 
     #[test]
-    fn test_preserves_safe_content() {
-        let error = "Table users not found in database";
-        let sanitized = sanitize_error(error);
-        assert_eq!(sanitized, "Table users not found in database");
+    fn test_error_response_preserves_safe_content() {
+        let result = error_response("Table users not found in database");
+        assert_eq!(extract_text(&result), "Table users not found in database");
     }
 }

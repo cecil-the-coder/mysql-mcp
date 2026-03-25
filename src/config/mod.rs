@@ -35,16 +35,14 @@ pub struct PoolConfig {
     pub query_timeout_ms: u64,
     pub connect_timeout_ms: u64,
     pub cache_ttl_secs: u64,
-    pub readonly_transaction: bool,
     pub performance_hints: String,
     pub slow_query_threshold_ms: u64,
-    pub warmup_connections: u32,
     pub max_rows: u32,
     /// Number of retry attempts for transient network errors (default: 2).
     /// Retries use exponential backoff (100ms, 200ms) between attempts.
     pub retry_attempts: u32,
     /// Maximum memory in MB for result sets (default: 256).
-    /// When exceeded, results are truncated with a memory_capped flag.
+    /// When exceeded, results are truncated with a warning in parse_warnings.
     pub max_result_memory_mb: u32,
 }
 
@@ -62,16 +60,12 @@ pub struct SecurityConfig {
     pub ssl_ca: Option<String>,
     /// Per-schema permission overrides: schema_name -> SchemaPermissions
     pub schema_permissions: HashMap<String, SchemaPermissions>,
-    pub multi_db_write_mode: bool,
     /// Allow mysql_connect to accept raw credentials at runtime.
     /// When false (default), only preset-based connections are allowed.
     pub allow_runtime_connections: bool,
     /// Maximum number of concurrent named sessions (not counting the default session).
     /// Prevents unbounded session creation when allow_runtime_connections is true.
     pub max_sessions: u32,
-    /// DNS cache TTL in seconds for hostname validation.
-    /// After this time, hostnames are re-resolved to detect DNS rebinding attacks.
-    pub dns_cache_ttl_secs: u64,
     /// Maximum total database connections across all sessions (default pool + named session pools).
     /// Named sessions use 5 connections each. Prevents resource exhaustion.
     pub max_total_connections: u32,
@@ -150,10 +144,8 @@ impl Default for PoolConfig {
             query_timeout_ms: 30_000,
             connect_timeout_ms: 10_000,
             cache_ttl_secs: 60,
-            readonly_transaction: false,
             performance_hints: "none".to_string(),
             slow_query_threshold_ms: 500,
-            warmup_connections: 1,
             max_rows: 1000,
             retry_attempts: 2,
             max_result_memory_mb: 256,
@@ -188,10 +180,8 @@ impl Default for SecurityConfig {
             ssl_accept_invalid_certs: false,
             ssl_ca: None,
             schema_permissions: HashMap::new(),
-            multi_db_write_mode: false,
             allow_runtime_connections: false,
             max_sessions: 50,
-            dns_cache_ttl_secs: 60,
             max_total_connections: 100,
         }
     }
@@ -236,13 +226,6 @@ impl Config {
             anyhow::bail!(
                 "pool.retry_attempts must be between 0 and 10 (got: {})",
                 pool.retry_attempts
-            );
-        }
-        if pool.warmup_connections > pool.size {
-            anyhow::bail!(
-                "pool.warmup_connections ({}) cannot exceed pool.size ({})",
-                pool.warmup_connections,
-                pool.size
             );
         }
         if !matches!(pool.performance_hints.as_str(), "none" | "auto" | "always") {

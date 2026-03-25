@@ -58,19 +58,15 @@ pub fn load_env_config() -> EnvConfig {
         allow_update: parse_bool_env("MYSQL_ALLOW_UPDATE"),
         allow_delete: parse_bool_env("MYSQL_ALLOW_DELETE"),
         allow_ddl: parse_bool_env("MYSQL_ALLOW_DDL"),
-        readonly_transaction: parse_bool_env("MYSQL_READONLY_TRANSACTION"),
         ssl: parse_bool_env("MYSQL_SSL"),
         ssl_accept_invalid_certs: parse_bool_env("MYSQL_SSL_ACCEPT_INVALID_CERTS"),
         ssl_ca: std::env::var("MYSQL_SSL_CA").ok().filter(|s| !s.is_empty()),
-        multi_db_write_mode: parse_bool_env("MYSQL_MULTI_DB_WRITE_MODE"),
         allow_runtime_connections: parse_bool_env("MYSQL_ALLOW_RUNTIME_CONNECTIONS"),
         schema_permissions: parse_schema_permissions(),
         performance_hints: std::env::var("MYSQL_PERFORMANCE_HINTS").ok(),
         slow_query_threshold_ms: parse_env_num::<u64>("MYSQL_SLOW_QUERY_THRESHOLD_MS"),
-        warmup_connections: parse_env_num::<u32>("MYSQL_POOL_WARMUP"),
         max_rows: parse_env_num::<u32>("MYSQL_MAX_ROWS"),
         max_sessions: parse_env_num::<u32>("MYSQL_MAX_SESSIONS"),
-        dns_cache_ttl_secs: parse_env_num::<u64>("MYSQL_DNS_CACHE_TTL"),
         max_total_connections: parse_env_num::<u32>("MYSQL_MAX_TOTAL_CONNECTIONS"),
         retry_attempts: parse_env_num::<u32>("MYSQL_RETRY_ATTEMPTS"),
         max_result_memory_mb: parse_env_num::<u32>("MYSQL_MAX_RESULT_MEMORY_MB"),
@@ -172,19 +168,15 @@ pub struct EnvConfig {
     pub allow_update: Option<bool>,
     pub allow_delete: Option<bool>,
     pub allow_ddl: Option<bool>,
-    pub readonly_transaction: Option<bool>,
     pub ssl: Option<bool>,
     pub ssl_accept_invalid_certs: Option<bool>,
     pub ssl_ca: Option<String>,
-    pub multi_db_write_mode: Option<bool>,
     pub allow_runtime_connections: Option<bool>,
     pub schema_permissions: HashMap<String, SchemaPermissions>,
     pub performance_hints: Option<String>,
     pub slow_query_threshold_ms: Option<u64>,
-    pub warmup_connections: Option<u32>,
     pub max_rows: Option<u32>,
     pub max_sessions: Option<u32>,
-    pub dns_cache_ttl_secs: Option<u64>,
     pub max_total_connections: Option<u32>,
     pub retry_attempts: Option<u32>,
     pub max_result_memory_mb: Option<u32>,
@@ -244,9 +236,6 @@ impl EnvConfig {
         if let Some(v) = self.allow_ddl {
             base.security.allow_ddl = v;
         }
-        if let Some(v) = self.readonly_transaction {
-            base.pool.readonly_transaction = v;
-        }
         if let Some(v) = self.ssl {
             base.security.ssl = v;
         }
@@ -255,9 +244,6 @@ impl EnvConfig {
         }
         if let Some(v) = self.ssl_ca {
             base.security.ssl_ca = Some(v);
-        }
-        if let Some(v) = self.multi_db_write_mode {
-            base.security.multi_db_write_mode = v;
         }
         if let Some(v) = self.allow_runtime_connections {
             base.security.allow_runtime_connections = v;
@@ -276,17 +262,11 @@ impl EnvConfig {
         if let Some(v) = self.slow_query_threshold_ms {
             base.pool.slow_query_threshold_ms = v;
         }
-        if let Some(v) = self.warmup_connections {
-            base.pool.warmup_connections = v;
-        }
         if let Some(v) = self.max_rows {
             base.pool.max_rows = v;
         }
         if let Some(v) = self.max_sessions {
             base.security.max_sessions = v;
-        }
-        if let Some(v) = self.dns_cache_ttl_secs {
-            base.security.dns_cache_ttl_secs = v;
         }
         if let Some(v) = self.max_total_connections {
             base.security.max_total_connections = v;

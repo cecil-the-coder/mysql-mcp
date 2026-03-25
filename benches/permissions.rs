@@ -46,7 +46,6 @@ fn make_config_multi_db() -> Config {
     // No database set = multi-DB mode
     let mut c = Config::default();
     c.security.allow_insert = true;
-    c.security.multi_db_write_mode = true;
     c
 }
 

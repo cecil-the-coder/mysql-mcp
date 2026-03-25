@@ -1,14 +1,27 @@
-/// Write, schema-cache, pool-saturation, read-isolation, and serialization perf tests.
+/// Write, schema-cache, pool-saturation, read-isolation (transaction vs bare), and serialization perf tests.
 ///
 /// Run with: cargo test perf_ -- --nocapture
 /// (or against real DB): MYSQL_HOST=... cargo test perf_ -- --nocapture
 #[cfg(test)]
 mod write_tests {
+    use crate::config::PoolConfig;
     use crate::perf_tests::perf_impl::{compute, print};
     use crate::test_helpers::setup_test_db;
     use std::sync::Arc;
     use std::time::Instant;
     use tokio::task::JoinSet;
+
+    fn perf_config() -> PoolConfig {
+        PoolConfig {
+            max_rows: 0,
+            performance_hints: "none".to_string(),
+            query_timeout_ms: 0,
+            slow_query_threshold_ms: 0,
+            retry_attempts: 0,
+            max_result_memory_mb: 0,
+            ..Default::default()
+        }
+    }
 
     // ── Tests ────────────────────────────────────────────────────────────────
 
@@ -199,6 +212,7 @@ mod write_tests {
         let mut set = JoinSet::new();
         for _ in 0..CONCURRENCY {
             let pool = small_pool.clone();
+            let cfg = perf_config();
             set.spawn(async move {
                 let mut v = Vec::with_capacity(PER_TASK);
                 for _ in 0..PER_TASK {
@@ -207,13 +221,7 @@ mod write_tests {
                         &pool,
                         "SELECT 1",
                         &crate::sql_parser::parse_sql("SELECT 1").unwrap(),
-                        false,
-                        0,
-                        "none",
-                        0,
-                        0,
-                        0,
-                        0,
+                        &cfg,
                     )
                     .await
                     .unwrap();
@@ -255,6 +263,8 @@ mod write_tests {
         let pool = &pool;
         const N: usize = 20;
 
+        let cfg = perf_config();
+
         // Warm up connections before timing (throttled through shared semaphore).
         {
             let _permit = crate::test_helpers::db_semaphore()
@@ -266,20 +276,14 @@ mod write_tests {
                     pool,
                     "SELECT 1",
                     &crate::sql_parser::parse_sql("SELECT 1").unwrap(),
-                    false,
-                    0,
-                    "none",
-                    0,
-                    0,
-                    0,
-                    0,
+                    &cfg,
                 )
                 .await
                 .unwrap();
             }
         }
 
-        // With force_readonly_transaction=true (4-RTT path — paranoia mode)
+        // With transaction wrapping (4-RTT path)
         let wall_with = Instant::now();
         let mut with_tx_ms = Vec::with_capacity(N);
         for _ in 0..N {
@@ -288,13 +292,7 @@ mod write_tests {
                 pool,
                 "SELECT 1",
                 &crate::sql_parser::parse_sql("SELECT 1").unwrap(),
-                true,
-                0,
-                "none",
-                0,
-                0,
-                0,
-                0,
+                &cfg,
             )
             .await
             .unwrap();
@@ -302,7 +300,7 @@ mod write_tests {
         }
         let wall_with_ms = wall_with.elapsed().as_secs_f64() * 1000.0;
 
-        // With force_readonly_transaction=false (1-RTT path — SELECT is known safe)
+        // Without transaction wrapping (1-RTT path — SELECT is known safe)
         let wall_without = Instant::now();
         let mut no_tx_ms = Vec::with_capacity(N);
         for _ in 0..N {
@@ -311,13 +309,7 @@ mod write_tests {
                 pool,
                 "SELECT 1",
                 &crate::sql_parser::parse_sql("SELECT 1").unwrap(),
-                false,
-                0,
-                "none",
-                0,
-                0,
-                0,
-                0,
+                &cfg,
             )
             .await
             .unwrap();
@@ -329,11 +321,11 @@ mod write_tests {
         let no_stats = compute(no_tx_ms, wall_without_ms);
 
         print(
-            &format!("SELECT 1 — WITH readonly_transaction (4-RTT, n={N})"),
+            &format!("SELECT 1 — WITH transaction (4-RTT, n={N})"),
             &with_stats,
         );
         print(
-            &format!("SELECT 1 — NO  readonly_transaction (1-RTT, n={N})"),
+            &format!("SELECT 1 — NO  transaction (1-RTT, n={N})"),
             &no_stats,
         );
 
@@ -408,18 +400,14 @@ mod write_tests {
             sqlx::query(&sql).execute(pool).await.unwrap();
         }
 
+        let cfg = perf_config();
+
         // Benchmark with 1 000 rows
         let result_1000 = crate::query::read::execute_read_query(
             pool,
             "SELECT * FROM perf_ser_test LIMIT 1000",
             &crate::sql_parser::parse_sql("SELECT * FROM perf_ser_test LIMIT 1000").unwrap(),
-            false,
-            0,
-            "none",
-            0,
-            0,
-            0,
-            0,
+            &cfg,
         )
         .await
         .unwrap();
@@ -429,13 +417,7 @@ mod write_tests {
             pool,
             "SELECT * FROM perf_ser_test LIMIT 100",
             &crate::sql_parser::parse_sql("SELECT * FROM perf_ser_test LIMIT 100").unwrap(),
-            false,
-            0,
-            "none",
-            0,
-            0,
-            0,
-            0,
+            &cfg,
         )
         .await
         .unwrap();

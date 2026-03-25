@@ -91,9 +91,7 @@ pub(crate) fn spawn_server(
         "MYSQL_ALLOW_UPDATE",
         "MYSQL_ALLOW_DELETE",
         "MYSQL_ALLOW_DDL",
-        "MYSQL_READONLY_TRANSACTION",
         "MYSQL_ALLOW_RUNTIME_CONNECTIONS",
-        "MYSQL_MULTI_DB_WRITE_MODE",
         "MYSQL_MAX_ROWS",
         "MYSQL_MAX_SESSIONS",
         "MYSQL_CACHE_TTL",
@@ -103,7 +101,6 @@ pub(crate) fn spawn_server(
         "MYSQL_QUERY_TIMEOUT",
         "MYSQL_POOL_SIZE",
         "MYSQL_SLOW_QUERY_THRESHOLD_MS",
-        "MYSQL_POOL_WARMUP",
         "MYSQL_PERFORMANCE_HINTS",
     ] {
         cmd.env_remove(var);
