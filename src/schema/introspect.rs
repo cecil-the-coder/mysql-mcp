@@ -118,7 +118,6 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.tables_cache),
             cache_key,
             self.inner.cache_ttl,
-
             move || {
                 let pool = Arc::clone(&pool);
                 let db = owned_database.clone();
@@ -145,7 +144,6 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.indexed_columns_cache),
             cache_key,
             self.inner.cache_ttl,
-
             move || {
                 let pool = Arc::clone(&pool);
                 let t = owned_table.clone();
@@ -175,7 +173,6 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.composite_indexes_cache),
             cache_key,
             self.inner.cache_ttl,
-
             move || {
                 let pool = Arc::clone(&pool);
                 let t = owned_table.clone();
@@ -200,7 +197,6 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.columns_cache),
             cache_key,
             self.inner.cache_ttl,
-
             move || {
                 let pool = Arc::clone(&pool);
                 let t = owned_table.clone();

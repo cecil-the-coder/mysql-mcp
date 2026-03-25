@@ -364,7 +364,6 @@ mod tests {
         assert!(err.to_string().contains("DELETE"));
     }
 
-
     // --- New tests for the schema-fallback and case-insensitivity fixes ---
 
     #[test]

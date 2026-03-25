@@ -103,14 +103,9 @@ pub mod perf_impl {
                 .expect("DB semaphore closed");
             let cfg = perf_config();
             for _ in 0..WARMUP {
-                crate::query::read::execute_read_query(
-                    pool,
-                    "SELECT 1",
-                    &parsed_select1,
-                    &cfg,
-                )
-                .await
-                .unwrap();
+                crate::query::read::execute_read_query(pool, "SELECT 1", &parsed_select1, &cfg)
+                    .await
+                    .unwrap();
             }
         }
 
@@ -119,14 +114,9 @@ pub mod perf_impl {
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(
-                pool,
-                "SELECT 1",
-                &parsed_select1,
-                &cfg,
-            )
-            .await
-            .unwrap();
+            crate::query::read::execute_read_query(pool, "SELECT 1", &parsed_select1, &cfg)
+                .await
+                .unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
@@ -183,14 +173,9 @@ pub mod perf_impl {
         let mut samples = Vec::with_capacity(N);
         for _ in 0..N {
             let t = Instant::now();
-            crate::query::read::execute_read_query(
-                pool,
-                sql,
-                &parsed_join,
-                &cfg,
-            )
-            .await
-            .unwrap();
+            crate::query::read::execute_read_query(pool, sql, &parsed_join, &cfg)
+                .await
+                .unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
@@ -253,11 +238,9 @@ pub mod perf_impl {
                 let mut v = Vec::with_capacity(PER_TASK);
                 for _ in 0..PER_TASK {
                     let t = Instant::now();
-                    crate::query::read::execute_read_query(
-                        &pool, "SELECT 1", &parsed, &cfg,
-                    )
-                    .await
-                    .unwrap();
+                    crate::query::read::execute_read_query(&pool, "SELECT 1", &parsed, &cfg)
+                        .await
+                        .unwrap();
                     v.push(t.elapsed().as_secs_f64() * 1000.0);
                 }
                 v

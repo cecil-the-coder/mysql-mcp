@@ -99,9 +99,7 @@ pub async fn execute_read_query(
         || {
             let pool = pool_clone.clone();
             let sql = effective_sql_owned.clone();
-            async move {
-                Ok(sqlx::query(&sql).fetch_all(&pool).await?)
-            }
+            async move { Ok(sqlx::query(&sql).fetch_all(&pool).await?) }
         },
         retry_attempts,
         "read_query",
@@ -464,15 +462,9 @@ mod integration_tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let result = read_query(
-            &test_db.pool,
-            "SELECT NULL AS null_col",
-            0,
-            "none",
-            0,
-        )
-        .await
-        .unwrap();
+        let result = read_query(&test_db.pool, "SELECT NULL AS null_col", 0, "none", 0)
+            .await
+            .unwrap();
         assert_eq!(result.rows[0]["null_col"], serde_json::Value::Null);
     }
 
@@ -589,15 +581,9 @@ mod integration_tests {
             return;
         };
         // All three columns are aliased "a"; they should become "a", "a_2", "a_3".
-        let result = read_query(
-            &test_db.pool,
-            "SELECT 1 AS a, 2 AS a, 3 AS a",
-            0,
-            "none",
-            0,
-        )
-        .await
-        .unwrap();
+        let result = read_query(&test_db.pool, "SELECT 1 AS a, 2 AS a, 3 AS a", 0, "none", 0)
+            .await
+            .unwrap();
         assert_eq!(result.row_count, 1);
         let row = &result.rows[0];
         assert!(row.contains_key("a"), "first 'a' column should be present");

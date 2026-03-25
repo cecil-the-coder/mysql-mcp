@@ -500,7 +500,10 @@ fn test_set_global_blocked() {
     let result = parse_sql("SET GLOBAL max_connections = 1000");
     assert!(result.is_err(), "SET GLOBAL must be rejected");
     let msg = result.unwrap_err().to_string();
-    assert!(msg.contains("SET GLOBAL"), "error should mention SET GLOBAL, got: {msg}");
+    assert!(
+        msg.contains("SET GLOBAL"),
+        "error should mention SET GLOBAL, got: {msg}"
+    );
 }
 
 #[test]
@@ -508,7 +511,10 @@ fn test_set_persist_blocked() {
     let result = parse_sql("SET PERSIST max_connections = 1000");
     assert!(result.is_err(), "SET PERSIST must be rejected");
     let msg = result.unwrap_err().to_string();
-    assert!(msg.contains("SET PERSIST"), "error should mention SET PERSIST, got: {msg}");
+    assert!(
+        msg.contains("SET PERSIST"),
+        "error should mention SET PERSIST, got: {msg}"
+    );
 }
 
 #[test]

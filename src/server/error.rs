@@ -45,7 +45,12 @@ mod tests {
     use super::*;
 
     fn extract_text(result: &CallToolResult) -> &str {
-        result.content[0].raw.as_text().expect("expected text content").text.as_str()
+        result.content[0]
+            .raw
+            .as_text()
+            .expect("expected text content")
+            .text
+            .as_str()
     }
 
     #[test]
@@ -70,7 +75,10 @@ mod tests {
     fn test_error_response_preserves_connection_details() {
         // IPs and paths are no longer redacted - the user already knows these
         let result = error_response("Connection to 192.168.1.1:3306 failed");
-        assert_eq!(extract_text(&result), "Connection to 192.168.1.1:3306 failed");
+        assert_eq!(
+            extract_text(&result),
+            "Connection to 192.168.1.1:3306 failed"
+        );
     }
 
     #[test]
