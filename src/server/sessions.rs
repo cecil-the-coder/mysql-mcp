@@ -3,6 +3,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 
 use super::tool_schemas::serialize_response;
@@ -48,7 +49,7 @@ pub(crate) struct SessionGuard {
 impl SessionGuard {
     /// Create a guard for a named session (with in-flight tracking).
     fn new_tracked(ctx: SessionContext, in_flight_requests: Arc<AtomicU32>) -> Self {
-        in_flight_requests.fetch_add(1, Ordering::Relaxed);
+        in_flight_requests.fetch_add(1, Ordering::Acquire);
         Self {
             ctx,
             in_flight_requests: Some(in_flight_requests),
@@ -75,7 +76,7 @@ impl std::ops::Deref for SessionGuard {
 impl Drop for SessionGuard {
     fn drop(&mut self) {
         if let Some(ref counter) = self.in_flight_requests {
-            counter.fetch_sub(1, Ordering::Relaxed);
+            counter.fetch_sub(1, Ordering::Release);
         }
     }
 }
@@ -92,7 +93,7 @@ pub(crate) struct SessionStore {
 }
 
 /// Validate a MySQL identifier (session name or database name): max 64 chars,
-/// alphanumeric/underscore/hyphen only. Returns `Err(CallToolResult)` on failure.
+/// alphanumeric/underscore only. Returns `Err(CallToolResult)` on failure.
 pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToolResult> {
     if value.is_empty() {
         return Err(crate::server::error::error_response(format!(
@@ -106,16 +107,35 @@ pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToo
             kind
         )));
     }
-    if !value
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
+    if !value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(crate::server::error::error_response(format!(
-            "{} must contain only alphanumeric characters, underscores, or hyphens",
+            "{} must contain only alphanumeric characters or underscores",
             kind
         )));
     }
     Ok(())
+}
+
+/// Timeout for SSH tunnel close operations. A hung SSH server should not block cleanup.
+const TUNNEL_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Close an SSH tunnel with a timeout. Logs a warning on error or timeout, never blocks
+/// cleanup indefinitely.
+pub(crate) async fn close_tunnel_with_timeout(tunnel: crate::tunnel::TunnelHandle, context: &str) {
+    match tokio::time::timeout(TUNNEL_CLOSE_TIMEOUT, tunnel.close()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            tracing::warn!("SSH tunnel close error {}: {}", context, e);
+        }
+        Err(_) => {
+            tracing::warn!(
+                "SSH tunnel close timed out after {}s {}",
+                TUNNEL_CLOSE_TIMEOUT.as_secs(),
+                context
+            );
+            // The TunnelHandle is dropped here, which triggers non-blocking start_kill()
+        }
+    }
 }
 
 impl SessionStore {
@@ -180,7 +200,7 @@ impl SessionStore {
             return tool_error!("Session name 'default' is reserved");
         }
 
-        // Validate session name: max 64 chars, alphanumeric + underscore + hyphen only
+        // Validate session name: max 64 chars, alphanumeric + underscore only
         if let Err(e) = validate_identifier(&name, "Session name") {
             return Ok(e);
         }
@@ -246,8 +266,14 @@ impl SessionStore {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
         if let Some(ref ca_path) = ssl_ca {
-            if !std::path::Path::new(ca_path).exists() {
-                return tool_error!("SSL CA file not found: {}", ca_path);
+            if !ssl {
+                return tool_error!(
+                    "Contradictory SSL config: ssl_ca was provided but ssl=false. \
+                     Set ssl=true to use certificate validation, or remove ssl_ca."
+                );
+            }
+            if let Err(e) = std::fs::File::open(ca_path) {
+                return tool_error!("SSL CA file not readable: {}: {}", ca_path, e);
             }
         }
 
@@ -354,7 +380,7 @@ impl SessionStore {
         let max_total = self.config.security.max_total_connections;
         let reserve_result =
             self.total_connections
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                     if current + NAMED_SESSION_POOL_SIZE <= max_total {
                         Some(current + NAMED_SESSION_POOL_SIZE)
                     } else {
@@ -399,7 +425,7 @@ impl SessionStore {
                 Ok((p, t)) => (p, Some(t)),
                 Err(e) => {
                     self.total_connections
-                        .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+                        .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
                     return tool_error!("SSH tunnel or connection failed: {}", e);
                 }
             }
@@ -420,7 +446,7 @@ impl SessionStore {
                 Ok(p) => (p, None),
                 Err(e) => {
                     self.total_connections
-                        .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+                        .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
                     return tool_error!("Connection failed: {}", e);
                 }
             }
@@ -445,9 +471,7 @@ impl SessionStore {
                 // could be slow, and holding the lock would block all session operations.
                 drop(sessions);
                 if let Some(t) = tunnel {
-                    if let Err(e) = t.close().await {
-                        tracing::warn!("SSH tunnel close error on session limit rejection: {}", e);
-                    }
+                    close_tunnel_with_timeout(t, "on session limit rejection").await;
                 }
                 pool.close().await;
                 return tool_error!(
@@ -458,12 +482,7 @@ impl SessionStore {
             if sessions.contains_key(&name) {
                 drop(sessions);
                 if let Some(t) = tunnel {
-                    if let Err(e) = t.close().await {
-                        tracing::warn!(
-                            "SSH tunnel close error on duplicate session rejection: {}",
-                            e
-                        );
-                    }
+                    close_tunnel_with_timeout(t, "on duplicate session rejection").await;
                 }
                 pool.close().await;
                 return tool_error!(
@@ -491,13 +510,11 @@ impl SessionStore {
             // Lost the race — clean up and report. Release the reserved connection slots.
             drop(sessions);
             if let Some(t) = session.tunnel {
-                if let Err(e) = t.close().await {
-                    tracing::warn!("SSH tunnel close error on post-race cleanup: {}", e);
-                }
+                close_tunnel_with_timeout(t, "on post-race cleanup").await;
             }
             session.pool.close().await;
             self.total_connections
-                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
             return tool_error!(
                 "Session name '{}' is now taken. Please try a different name.",
                 name
@@ -538,12 +555,10 @@ impl SessionStore {
         if let Some(session) = removed {
             // Decrement total connections counter
             self.total_connections
-                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
             // Clean up SSH tunnel if present (outside the lock — close() may be slow).
             if let Some(tunnel) = session.tunnel {
-                if let Err(e) = tunnel.close().await {
-                    tracing::warn!("SSH tunnel close error on disconnect: {}", e);
-                }
+                close_tunnel_with_timeout(tunnel, "on disconnect").await;
             }
             // Explicitly close the pool so server-side connections are released
             // immediately rather than waiting for sqlx's Drop impl to handle them.
@@ -653,17 +668,18 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_identifier_valid_with_hyphens() {
+    fn test_validate_identifier_rejects_hyphens() {
+        // Hyphens are not allowed — in MySQL, unquoted hyphens parse as subtraction
         let result = validate_identifier("valid-name-123", "Identifier");
-        assert!(result.is_ok());
+        assert!(result.is_err());
 
         let result = validate_identifier("my-session", "Identifier");
-        assert!(result.is_ok());
+        assert!(result.is_err());
 
         let result = validate_identifier("test-db-name", "Identifier");
-        assert!(result.is_ok());
+        assert!(result.is_err());
 
         let result = validate_identifier("mixed_name-with-hyphens", "Identifier");
-        assert!(result.is_ok());
+        assert!(result.is_err());
     }
 }

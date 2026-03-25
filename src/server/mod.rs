@@ -171,10 +171,14 @@ pub(crate) async fn validate_host_with_dns(host: &str, dns_cache_ttl: Duration) 
     {
         let cache = get_dns_cache();
         let mut cache = cache.lock().await;
-        // Simple eviction if at capacity (remove arbitrary entry)
+        // Evict the oldest entry if at capacity
         if cache.len() >= DNS_CACHE_MAX_ENTRIES {
-            if let Some(key) = cache.keys().next().cloned() {
-                cache.remove(&key);
+            if let Some(oldest_key) = cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.cached_at)
+                .map(|(key, _)| key.clone())
+            {
+                cache.remove(&oldest_key);
             }
         }
         cache.insert(
@@ -259,10 +263,10 @@ impl McpServer {
                             continue;
                         }
                         // Skip sessions with in-flight requests to prevent query failures
-                        if session.in_flight_requests.load(Ordering::Relaxed) > 0 {
+                        if session.in_flight_requests.load(Ordering::Acquire) > 0 {
                             tracing::debug!(
                                 session = %name,
-                                in_flight = session.in_flight_requests.load(Ordering::Relaxed),
+                                in_flight = session.in_flight_requests.load(Ordering::Acquire),
                                 "Skipping idle session reap: in-flight requests"
                             );
                             continue;
@@ -271,12 +275,11 @@ impl McpServer {
                     if let Some(session) = map.remove(&name) {
                         // Decrement total connections counter for reaped session
                         reaper_total_connections
-                            .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+                            .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Release);
                         drop(map); // release lock before awaiting async operations
                         if let Some(tunnel) = session.tunnel {
-                            if let Err(e) = tunnel.close().await {
-                                tracing::warn!("SSH tunnel close error during session reap: {}", e);
-                            }
+                            sessions::close_tunnel_with_timeout(tunnel, "during session reap")
+                                .await;
                         }
                         session.pool.close().await;
                     }
