@@ -30,92 +30,97 @@ pub fn check_permission(
         .as_deref()
         .and_then(|s| sec.schema_permissions.get(s));
 
+    // Read-only and informational statements are always allowed.
+    // SET is allowed without restriction — operators should be aware that SET SESSION/GLOBAL
+    // can affect security/behavior (e.g. sql_mode, global settings).
     match stmt_type {
-        StatementType::Select | StatementType::Show | StatementType::Explain => {
-            // Always allowed (read-only)
-            Ok(())
-        }
-        StatementType::Insert => {
-            let allowed = schema_perms
+        StatementType::Select
+        | StatementType::Show
+        | StatementType::Explain
+        | StatementType::Set => return Ok(()),
+        StatementType::Use => bail!(
+            "USE is not supported with connection pooling — the database change would be lost on the next query. \
+             Instead, specify the database in your SQL (e.g., SELECT * FROM mydb.table) or \
+             use mysql_connect to create a session with a different default database."
+        ),
+        _ => {}
+    }
+
+    // Write operations: resolve (allowed, label, env_var) from statement type + schema perms.
+    if let Some((allowed, label, env_var)) = match stmt_type {
+        StatementType::Insert => Some((
+            schema_perms
                 .and_then(|p| p.allow_insert)
-                .unwrap_or(sec.allow_insert);
-            check_write_op(
-                allowed,
-                "INSERT",
-                "MYSQL_ALLOW_INSERT",
-                config,
-                target_schema,
-            )
-        }
-        StatementType::Update => {
-            let allowed = schema_perms
+                .unwrap_or(sec.allow_insert),
+            "INSERT".to_string(),
+            "MYSQL_ALLOW_INSERT",
+        )),
+        StatementType::Update => Some((
+            schema_perms
                 .and_then(|p| p.allow_update)
-                .unwrap_or(sec.allow_update);
-            check_write_op(
-                allowed,
-                "UPDATE",
-                "MYSQL_ALLOW_UPDATE",
-                config,
-                target_schema,
-            )
-        }
-        StatementType::Delete => {
-            let allowed = schema_perms
+                .unwrap_or(sec.allow_update),
+            "UPDATE".to_string(),
+            "MYSQL_ALLOW_UPDATE",
+        )),
+        StatementType::Delete => Some((
+            schema_perms
                 .and_then(|p| p.allow_delete)
-                .unwrap_or(sec.allow_delete);
-            check_write_op(
-                allowed,
-                "DELETE",
-                "MYSQL_ALLOW_DELETE",
-                config,
-                target_schema,
-            )
-        }
+                .unwrap_or(sec.allow_delete),
+            "DELETE".to_string(),
+            "MYSQL_ALLOW_DELETE",
+        )),
         StatementType::Create
         | StatementType::Alter
         | StatementType::Drop
-        | StatementType::Truncate => {
-            let allowed = schema_perms
+        | StatementType::Truncate => Some((
+            schema_perms
                 .and_then(|p| p.allow_ddl)
-                .unwrap_or(sec.allow_ddl);
-            let label = format!("DDL ({})", stmt_type.name());
-            check_write_op(allowed, &label, "MYSQL_ALLOW_DDL", config, target_schema)
-        }
-        StatementType::Use => {
-            bail!(
-                "USE is not supported with connection pooling — the database change would be lost on the next query. \
-                 Instead, specify the database in your SQL (e.g., SELECT * FROM mydb.table) or \
-                 use mysql_connect to create a session with a different default database."
-            )
-        }
-        StatementType::Set => {
-            // SET SESSION is allowed for operational flexibility.
-            // SET GLOBAL/PERSIST are blocked at the parser level (sql_parser/mod.rs)
-            // because they affect server-wide settings and could change security-sensitive config.
-            Ok(())
-        }
-        StatementType::Other(name) => {
-            // Use exact equality (or starts_with for families) so that future sqlparser
-            // variants whose names happen to contain these substrings don't produce
-            // misleading error messages. "Load" uses starts_with to cover both
-            // Statement::Load and Statement::LoadData.
-            let hint = if name == "Call" {
-                "CALL (stored procedures) is not supported by this server".to_string()
-            } else if name.starts_with("Load") {
-                "LOAD DATA is not supported. Use INSERT statements to load data".to_string()
-            } else if name == "LockTables" || name == "UnlockTables" {
-                "LOCK/UNLOCK TABLES is not supported".to_string()
-            } else if name == "Prepare" || name == "Execute" || name == "Deallocate" {
-                "The prepared-statement protocol (PREPARE/EXECUTE/DEALLOCATE) is not supported. Send the final SQL directly"
-                    .to_string()
-            } else if name == "Do" {
-                "DO is not supported. Use SELECT instead (e.g. SELECT SLEEP(1))".to_string()
-            } else {
-                format!("Unsupported statement type: {name}. Supported types: SELECT, SHOW, EXPLAIN, INSERT, UPDATE, DELETE, CREATE (TABLE/DATABASE/INDEX), ALTER, DROP, TRUNCATE, USE, SET")
-            };
-            bail!("{}", hint);
-        }
+                .unwrap_or(sec.allow_ddl),
+            format!("DDL ({})", stmt_type.name()),
+            "MYSQL_ALLOW_DDL",
+        )),
+        _ => None,
+    } {
+        return check_write_op(allowed, &label, env_var, config, target_schema);
     }
+
+    // Unsupported statement types — provide targeted hints where possible.
+    // "Load" uses starts_with to cover both Statement::Load and Statement::LoadData.
+    if let StatementType::Other(name) = stmt_type {
+        let hint = match name.as_str() {
+            "Call" => "CALL (stored procedures) is not supported by this server".to_string(),
+            "LockTables" | "UnlockTables" => "LOCK/UNLOCK TABLES is not supported".to_string(),
+            "Prepare" | "Execute" | "Deallocate" => {
+                "The prepared-statement protocol (PREPARE/EXECUTE/DEALLOCATE) is not supported. Send the final SQL directly".to_string()
+            }
+            "Do" => "DO is not supported. Use SELECT instead (e.g. SELECT SLEEP(1))".to_string(),
+            _ if name.starts_with("Load") => {
+                "LOAD DATA is not supported. Use INSERT statements to load data".to_string()
+            }
+            _ => format!("Unsupported statement type: {name}. Supported types: SELECT, SHOW, EXPLAIN, INSERT, UPDATE, DELETE, CREATE (TABLE/DATABASE/INDEX), ALTER, DROP, TRUNCATE, USE, SET"),
+        };
+        bail!("{}", hint);
+    }
+
+    Ok(())
+}
+
+/// Check permissions for ALL target schemas in a parsed statement.
+/// For multi-table DELETEs, this checks every referenced schema and fails
+/// if ANY schema is denied. For single-schema statements, behaves identically
+/// to `check_permission`.
+pub fn check_all_permissions(
+    config: &Config,
+    parsed: &crate::sql_parser::ParsedStatement,
+) -> Result<()> {
+    if parsed.all_target_schemas.is_empty() {
+        // No explicit schema — check with None (falls back to connected DB).
+        return check_permission(config, &parsed.statement_type, None);
+    }
+    for schema in &parsed.all_target_schemas {
+        check_permission(config, &parsed.statement_type, Some(schema.as_str()))?;
+    }
+    Ok(())
 }
 
 /// Check a write operation permission.
@@ -401,6 +406,97 @@ mod tests {
         );
         // target_schema = None (unqualified SQL), but connected DB = mcp_test -> override denies
         assert!(check_permission(&config, &StatementType::Insert, None).is_err());
+    }
+
+    // --- Tests for check_all_permissions (multi-schema) ---
+
+    fn make_parsed(
+        stmt_type: StatementType,
+        target_schema: Option<String>,
+        all_target_schemas: Vec<String>,
+    ) -> crate::sql_parser::ParsedStatement {
+        crate::sql_parser::ParsedStatement {
+            statement_type: stmt_type,
+            target_schema,
+            all_target_schemas,
+            target_table: None,
+            has_limit: false,
+            has_where: true,
+            has_wildcard: false,
+            where_columns: vec![],
+            has_leading_wildcard_like: false,
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn test_multi_schema_delete_all_allowed() {
+        let mut config = Config::default();
+        config.security.allow_delete = true;
+
+        // Both schemas allowed globally
+        let parsed = make_parsed(
+            StatementType::Delete,
+            Some("db1".to_string()),
+            vec!["db1".to_string(), "db2".to_string()],
+        );
+        assert!(check_all_permissions(&config, &parsed).is_ok());
+    }
+
+    #[test]
+    fn test_multi_schema_delete_one_denied() {
+        use crate::config::SchemaPermissions;
+        let mut config = Config::default();
+        config.security.allow_delete = true;
+
+        // Deny delete on db2 specifically
+        config.security.schema_permissions.insert(
+            "db2".to_string(),
+            SchemaPermissions {
+                allow_delete: Some(false),
+                ..Default::default()
+            },
+        );
+        let parsed = make_parsed(
+            StatementType::Delete,
+            Some("db1".to_string()),
+            vec!["db1".to_string(), "db2".to_string()],
+        );
+        // Should fail because db2 denies delete
+        assert!(check_all_permissions(&config, &parsed).is_err());
+    }
+
+    #[test]
+    fn test_multi_schema_delete_first_denied_second_allowed() {
+        use crate::config::SchemaPermissions;
+        let mut config = Config::default();
+        config.security.allow_delete = true;
+
+        // Deny delete on db1 specifically
+        config.security.schema_permissions.insert(
+            "db1".to_string(),
+            SchemaPermissions {
+                allow_delete: Some(false),
+                ..Default::default()
+            },
+        );
+        let parsed = make_parsed(
+            StatementType::Delete,
+            Some("db1".to_string()),
+            vec!["db1".to_string(), "db2".to_string()],
+        );
+        // Should fail because db1 denies delete (even though db2 allows it)
+        assert!(check_all_permissions(&config, &parsed).is_err());
+    }
+
+    #[test]
+    fn test_multi_schema_empty_schemas_falls_back() {
+        // No explicit schemas — should fall back to connected DB check (like single-schema)
+        let mut config = Config::default();
+        config.connection.database = Some("testdb".to_string());
+        config.security.allow_delete = true;
+        let parsed = make_parsed(StatementType::Delete, None, vec![]);
+        assert!(check_all_permissions(&config, &parsed).is_ok());
     }
 
     #[test]

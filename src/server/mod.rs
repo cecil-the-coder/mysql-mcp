@@ -187,12 +187,11 @@ impl McpServer {
                     if let Some(session) = map.remove(&name) {
                         // Decrement total connections counter for reaped session
                         reaper_total_connections
-                            .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+                            .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Release);
                         drop(map); // release lock before awaiting async operations
                         if let Some(tunnel) = session.tunnel {
-                            if let Err(e) = tunnel.close().await {
-                                tracing::warn!("SSH tunnel close error during session reap: {}", e);
-                            }
+                            sessions::close_tunnel_with_timeout(tunnel, "during session reap")
+                                .await;
                         }
                         session.pool.close().await;
                     }

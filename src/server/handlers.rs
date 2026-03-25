@@ -356,11 +356,7 @@ impl SessionStore {
             }
         };
 
-        if let Err(e) = crate::permissions::check_permission(
-            &self.config,
-            &parsed.statement_type,
-            parsed.target_schema.as_deref(),
-        ) {
+        if let Err(e) = crate::permissions::check_all_permissions(&self.config, &parsed) {
             let perm_type = parsed.statement_type.permission_category();
             // StatementType::Other carries a full human-readable message rather than a
             // short category name, so bypass the generic wrapper which would produce

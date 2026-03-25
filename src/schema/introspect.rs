@@ -1,32 +1,15 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use tokio::time::timeout;
-
-/// Timeout for acquiring cache locks. Prevents indefinite blocking if a lock holder panics.
-const CACHE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Helper to acquire a cache lock with timeout. Returns a clear error if the lock
-/// cannot be acquired within CACHE_LOCK_TIMEOUT.
-async fn acquire_lock<T>(mutex: &Mutex<T>) -> Result<tokio::sync::MutexGuard<'_, T>> {
-    timeout(CACHE_LOCK_TIMEOUT, mutex.lock())
-        .await
-        .map_err(|_| {
-            anyhow!(
-                "Timeout acquiring schema cache lock after {}s - possible deadlock",
-                CACHE_LOCK_TIMEOUT.as_secs()
-            )
-        })
-}
 
 use super::fetch;
 use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
 
 // ---------------------------------------------------------------------------
-// Cache internals (inlined from former cache.rs)
+// Cache internals
 // ---------------------------------------------------------------------------
 
 pub(crate) struct CacheEntry<T> {
@@ -44,8 +27,8 @@ pub(crate) struct SchemaCache {
     pub(crate) composite_indexes_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<IndexDef>>>>>,
 }
 
-/// Generic TTL cache helper. Returns a cached entry if still fresh; otherwise
-/// fetches synchronously, stores the result, and returns it.
+/// Simple TTL cache helper. Returns cached data if fresh, otherwise fetches,
+/// stores, and returns.
 /// When `cache_ttl == Duration::ZERO`, always re-fetches (cache disabled).
 pub(crate) async fn get_cached_or_refresh<T, F, Fut>(
     cache: Arc<Mutex<HashMap<String, CacheEntry<T>>>>,
@@ -55,24 +38,26 @@ pub(crate) async fn get_cached_or_refresh<T, F, Fut>(
 ) -> Result<T>
 where
     T: Clone + Send + 'static,
-    F: Fn() -> Fut + Send + Sync + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = Result<T>> + Send + 'static,
 {
-    // Check cache
+    // Check cache under lock, return if fresh
     {
-        let cache_guard = acquire_lock(&cache).await?;
-        if let Some(entry) = cache_guard.get(&cache_key) {
-            if entry.fetched_at.elapsed() < cache_ttl {
+        let guard = cache.lock().await;
+        if let Some(entry) = guard.get(&cache_key) {
+            if cache_ttl > Duration::ZERO && entry.fetched_at.elapsed() < cache_ttl {
                 return Ok(entry.data.clone());
             }
         }
     }
 
-    // Cache miss — fetch fresh data
+    // Fetch new data (lock released so we don't block readers during I/O)
     let data = fetch_fn().await?;
+
+    // Store in cache if caching is enabled
     if cache_ttl > Duration::ZERO {
-        let mut cache_guard = acquire_lock(&cache).await?;
-        cache_guard.insert(
+        let mut guard = cache.lock().await;
+        guard.insert(
             cache_key,
             CacheEntry {
                 data: data.clone(),
@@ -80,6 +65,7 @@ where
             },
         );
     }
+
     Ok(data)
 }
 
@@ -120,8 +106,7 @@ impl SchemaIntrospector {
             self.inner.cache_ttl,
             move || {
                 let pool = Arc::clone(&pool);
-                let db = owned_database.clone();
-                async move { fetch::fetch_tables(&pool, db.as_deref()).await }
+                async move { fetch::fetch_tables(&pool, owned_database.as_deref()).await }
             },
         )
         .await
@@ -146,9 +131,10 @@ impl SchemaIntrospector {
             self.inner.cache_ttl,
             move || {
                 let pool = Arc::clone(&pool);
-                let t = owned_table.clone();
-                let db = owned_database.clone();
-                async move { fetch::fetch_indexed_columns(&pool, &t, db.as_deref()).await }
+                async move {
+                    fetch::fetch_indexed_columns(&pool, &owned_table, owned_database.as_deref())
+                        .await
+                }
             },
         )
         .await
@@ -175,9 +161,10 @@ impl SchemaIntrospector {
             self.inner.cache_ttl,
             move || {
                 let pool = Arc::clone(&pool);
-                let t = owned_table.clone();
-                let db = owned_database.clone();
-                async move { fetch::fetch_composite_indexes(&pool, &t, db.as_deref()).await }
+                async move {
+                    fetch::fetch_composite_indexes(&pool, &owned_table, owned_database.as_deref())
+                        .await
+                }
             },
         )
         .await
@@ -199,9 +186,9 @@ impl SchemaIntrospector {
             self.inner.cache_ttl,
             move || {
                 let pool = Arc::clone(&pool);
-                let t = owned_table.clone();
-                let db = owned_database.clone();
-                async move { fetch::fetch_columns(&pool, &t, db.as_deref()).await }
+                async move {
+                    fetch::fetch_columns(&pool, &owned_table, owned_database.as_deref()).await
+                }
             },
         )
         .await
@@ -360,41 +347,24 @@ impl SchemaIntrospector {
     /// invalidated state (e.g., fresh columns but stale indexes).
     pub async fn invalidate_table(&self, table: &str, database: Option<&str>) {
         if table.is_empty() {
-            // Caller bug: empty table name should not reach here. The handler calls
-            // invalidate_all() directly when the target table is unknown.
             tracing::warn!("invalidate_table called with empty table name; ignoring");
             return;
         }
 
-        if let Err(e) = async {
-            // Acquire all locks before any modifications to ensure atomic invalidation.
-            // Lock order: columns -> indexed_columns -> composite_indexes -> tables
-            // (consistent with invalidate_all to prevent deadlock).
-            let mut columns_cache = acquire_lock(&self.inner.columns_cache).await?;
-            let mut indexed_columns_cache = acquire_lock(&self.inner.indexed_columns_cache).await?;
-            let mut composite_indexes_cache =
-                acquire_lock(&self.inner.composite_indexes_cache).await?;
-            let mut tables_cache = acquire_lock(&self.inner.tables_cache).await?;
+        let mut columns_cache = self.inner.columns_cache.lock().await;
+        let mut indexed_columns_cache = self.inner.indexed_columns_cache.lock().await;
+        let mut composite_indexes_cache = self.inner.composite_indexes_cache.lock().await;
+        let mut tables_cache = self.inner.tables_cache.lock().await;
 
-            // Now perform all modifications while holding all locks.
-            columns_cache.retain(|key, _| !key_matches_table(key, table));
-            indexed_columns_cache.retain(|key, _| !key_matches_table(key, table));
-            composite_indexes_cache.retain(|key, _| !key_matches_table(key, table));
+        columns_cache.retain(|key, _| !key_matches_table(key, table));
+        indexed_columns_cache.retain(|key, _| !key_matches_table(key, table));
+        composite_indexes_cache.retain(|key, _| !key_matches_table(key, table));
 
-            // Clear only the affected database's table list. When the database is unknown,
-            // clear all entries conservatively (we'd rather re-fetch than serve stale data).
-            match database {
-                Some(db) => {
-                    tables_cache.remove(db);
-                }
-                None => tables_cache.clear(),
+        match database {
+            Some(db) => {
+                tables_cache.remove(db);
             }
-
-            Ok::<(), anyhow::Error>(())
-        }
-        .await
-        {
-            tracing::error!("Failed to invalidate table cache: {}", e);
+            None => tables_cache.clear(),
         }
     }
 
@@ -404,27 +374,16 @@ impl SchemaIntrospector {
     /// Acquires all cache locks atomically to prevent readers from observing partially
     /// invalidated state.
     pub async fn invalidate_all(&self) {
-        if let Err(e) = async {
-            // Acquire all locks before any modifications to ensure atomic invalidation.
-            // Lock order: columns -> indexed_columns -> composite_indexes -> tables
-            // (consistent with invalidate_table to prevent deadlock).
-            let mut columns_cache = acquire_lock(&self.inner.columns_cache).await?;
-            let mut indexed_columns_cache = acquire_lock(&self.inner.indexed_columns_cache).await?;
-            let mut composite_indexes_cache =
-                acquire_lock(&self.inner.composite_indexes_cache).await?;
-            let mut tables_cache = acquire_lock(&self.inner.tables_cache).await?;
+        // Lock order: columns -> indexed_columns -> composite_indexes -> tables
+        // (consistent with invalidate_table to prevent deadlock).
+        let mut columns_cache = self.inner.columns_cache.lock().await;
+        let mut indexed_columns_cache = self.inner.indexed_columns_cache.lock().await;
+        let mut composite_indexes_cache = self.inner.composite_indexes_cache.lock().await;
+        let mut tables_cache = self.inner.tables_cache.lock().await;
 
-            // Now perform all modifications while holding all locks.
-            columns_cache.clear();
-            indexed_columns_cache.clear();
-            composite_indexes_cache.clear();
-            tables_cache.clear();
-
-            Ok::<(), anyhow::Error>(())
-        }
-        .await
-        {
-            tracing::error!("Failed to invalidate all caches: {}", e);
-        }
+        columns_cache.clear();
+        indexed_columns_cache.clear();
+        composite_indexes_cache.clear();
+        tables_cache.clear();
     }
 }

@@ -21,6 +21,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
     let mut join_count: usize = 0;
     let mut has_leading_wildcard_like = false;
     let mut is_compound_query = false;
+    let mut all_target_schemas: Vec<String> = vec![];
 
     let (statement_type, target_schema, target_table) = match stmt {
         Statement::Query(query) if query.with.is_some() => (
@@ -103,17 +104,53 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         }
 
         Statement::Delete(delete) => {
-            // Note: Multi-table DELETE (e.g., DELETE t1, t2 FROM ...) only captures the first table.
-            // This is acceptable because: (1) permission checks only need one table to deny if any is restricted,
-            // (2) cache invalidation after DELETE is conservative and will invalidate all if needed.
-            let first_table = match &delete.from {
-                FromTable::WithFromKeyword(tables) | FromTable::WithoutKeyword(tables) => {
-                    tables.first()
-                }
+            // Collect schemas from ALL tables in the DELETE statement.
+            // Multi-table DELETE syntax: DELETE t1, t2 FROM db1.t1 JOIN db2.t2 ...
+            // We must check permissions for every referenced schema.
+            let from_tables = match &delete.from {
+                FromTable::WithFromKeyword(tables) | FromTable::WithoutKeyword(tables) => tables,
             };
+            let first_table = from_tables.first();
             let schema = first_table.and_then(|t| extract_schema_from_table_factor(&t.relation));
             let tbl = first_table.and_then(|t| extract_table_from_table_factor(&t.relation));
+
+            // Collect all distinct schemas from FROM tables and their JOINs.
+            let mut all_schemas: Vec<String> = Vec::new();
+            let mut seen_schemas: HashSet<String> = HashSet::new();
+            for twj in from_tables {
+                if let Some(s) = extract_schema_from_table_factor(&twj.relation) {
+                    if seen_schemas.insert(s.to_lowercase()) {
+                        all_schemas.push(s);
+                    }
+                }
+                for join in &twj.joins {
+                    if let Some(s) = extract_schema_from_table_factor(&join.relation) {
+                        if seen_schemas.insert(s.to_lowercase()) {
+                            all_schemas.push(s);
+                        }
+                    }
+                }
+            }
+            // Also collect from the USING clause (multi-table DELETE with USING).
+            if let Some(using_tables) = &delete.using {
+                for twj in using_tables {
+                    if let Some(s) = extract_schema_from_table_factor(&twj.relation) {
+                        if seen_schemas.insert(s.to_lowercase()) {
+                            all_schemas.push(s);
+                        }
+                    }
+                    for join in &twj.joins {
+                        if let Some(s) = extract_schema_from_table_factor(&join.relation) {
+                            if seen_schemas.insert(s.to_lowercase()) {
+                                all_schemas.push(s);
+                            }
+                        }
+                    }
+                }
+            }
+
             has_where = delete.selection.is_some();
+            all_target_schemas = all_schemas;
             (StatementType::Delete, schema, tbl)
         }
 
@@ -222,19 +259,81 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         }
 
         other => {
-            // Extract only the variant name from the debug representation.
-            // `format!("{:?}", other)` produces strings like "Call(...)" or
-            // "LockTables { ... }"; we take everything before the first '{', '(',
-            // or space to get just "Call" or "LockTables".
-            // This is far more useful than `std::mem::discriminant` which
-            // produces an opaque "Discriminant(N)".
-            let debug = format!("{other:?}");
-            let name = debug
-                .split(['{', '(', ' '])
-                .next()
-                .unwrap_or("Unknown")
-                .to_string();
-            (StatementType::Other(name), None, None)
+            // Explicit match on known Statement variants avoids relying on the
+            // Debug format, which can change between sqlparser releases without
+            // warning.  Variants already handled by earlier arms (Query, Insert,
+            // Update, Delete, CreateTable, CreateDatabase, CreateIndex, AlterTable,
+            // Drop, Truncate, Use, Show*, Set*, Explain, StartTransaction, Commit,
+            // Rollback, Grant, Revoke) are omitted — they never reach this point.
+            let name = match &other {
+                // DML
+                Statement::Merge { .. } => "Merge",
+                // DDL
+                Statement::CreateView { .. } => "CreateView",
+                Statement::CreateSchema { .. } => "CreateSchema",
+                Statement::CreateFunction { .. } => "CreateFunction",
+                Statement::CreateProcedure { .. } => "CreateProcedure",
+                Statement::CreateTrigger { .. } => "CreateTrigger",
+                Statement::CreateSequence { .. } => "CreateSequence",
+                Statement::CreateRole { .. } => "CreateRole",
+                Statement::CreateType { .. } => "CreateType",
+                Statement::AlterView { .. } => "AlterView",
+                Statement::AlterIndex { .. } => "AlterIndex",
+                Statement::AlterRole { .. } => "AlterRole",
+                Statement::DropFunction { .. } => "DropFunction",
+                Statement::DropProcedure { .. } => "DropProcedure",
+                Statement::DropTrigger { .. } => "DropTrigger",
+                // SHOW variants not matched above
+                Statement::ShowVariable { .. } => "ShowVariable",
+                Statement::ShowVariables { .. } => "ShowVariables",
+                Statement::ShowStatus { .. } => "ShowStatus",
+                Statement::ShowCollation { .. } => "ShowCollation",
+                Statement::ShowFunctions { .. } => "ShowFunctions",
+                // Session / SET not matched above
+                Statement::SetTransaction { .. } => "SetTransaction",
+                Statement::SetRole { .. } => "SetRole",
+                // Transaction control not matched above
+                Statement::Savepoint { .. } => "Savepoint",
+                Statement::ReleaseSavepoint { .. } => "ReleaseSavepoint",
+                // Prepared statements
+                Statement::Prepare { .. } => "Prepare",
+                Statement::Execute { .. } => "Execute",
+                Statement::Deallocate { .. } => "Deallocate",
+                // MySQL utilities
+                Statement::Call(_) => "Call",
+                Statement::LockTables { .. } => "LockTables",
+                Statement::UnlockTables => "UnlockTables",
+                Statement::Kill { .. } => "Kill",
+                Statement::Flush { .. } => "Flush",
+                Statement::OptimizeTable { .. } => "OptimizeTable",
+                Statement::Analyze { .. } => "Analyze",
+                Statement::ExplainTable { .. } => "ExplainTable",
+                Statement::Load { .. } => "Load",
+                Statement::LoadData { .. } => "LoadData",
+                // Fallback for uncommon/DB-specific variants (e.g. DuckDB,
+                // Snowflake extensions): extract variant name from Debug output.
+                _ => {
+                    let debug = format!("{other:?}");
+                    let fallback = debug
+                        .split(['{', '(', ' '])
+                        .next()
+                        .unwrap_or("Unknown")
+                        .to_string();
+                    return Ok(ParsedStatement {
+                        statement_type: StatementType::Other(fallback),
+                        target_schema: None,
+                        all_target_schemas: Vec::new(),
+                        target_table: None,
+                        has_limit: false,
+                        has_where: false,
+                        has_wildcard: false,
+                        where_columns: Vec::new(),
+                        has_leading_wildcard_like: false,
+                        warnings: Vec::new(),
+                    });
+                }
+            };
+            (StatementType::Other(name.to_string()), None, None)
         }
     };
 
@@ -256,9 +355,17 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         );
     }
 
+    // For non-DELETE statements, derive all_target_schemas from target_schema.
+    if all_target_schemas.is_empty() {
+        if let Some(ref s) = target_schema {
+            all_target_schemas.push(s.clone());
+        }
+    }
+
     Ok(ParsedStatement {
         statement_type,
         target_schema,
+        all_target_schemas,
         target_table,
         has_limit,
         has_where,

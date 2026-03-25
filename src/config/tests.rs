@@ -3,7 +3,7 @@
 #[cfg(test)]
 mod config_tests {
     use crate::config::env_config::EnvConfig;
-    use crate::config::merge::load_toml_config;
+    use crate::config::load_toml_config;
     use crate::config::{Config, ConnectionConfig, SchemaPermissions, SshConfig};
 
     /// Serializes tests that mutate process-wide environment variables.

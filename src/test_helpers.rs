@@ -77,7 +77,7 @@ pub struct TestDb {
 /// verification) rather than going through `db.rs`'s Disabled path.
 pub async fn setup_test_db() -> Option<TestDb> {
     if std::env::var("MYSQL_HOST").is_ok() {
-        let config = Arc::new(crate::config::merge::load_config().unwrap());
+        let config = Arc::new(crate::config::load_config().unwrap());
 
         // Acquire a semaphore permit before creating the MySQL connection.
         // This throttles simultaneous SSL handshakes so they complete within

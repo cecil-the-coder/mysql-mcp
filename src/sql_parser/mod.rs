@@ -94,8 +94,15 @@ impl StatementType {
 #[derive(Debug, Clone)]
 pub struct ParsedStatement {
     pub statement_type: StatementType,
-    /// The target schema/database extracted from the statement (if applicable)
+    /// The target schema/database extracted from the statement (if applicable).
+    /// For single-table statements this is the only schema. For multi-table
+    /// DELETE statements, this is the first schema (kept for backward compat);
+    /// use `all_target_schemas` for exhaustive permission checks.
     pub target_schema: Option<String>,
+    /// All distinct target schemas referenced by the statement. For most
+    /// statements this mirrors `target_schema` (0 or 1 entries). Multi-table
+    /// DELETEs populate this with schemas from every referenced table.
+    pub all_target_schemas: Vec<String>,
     /// The primary FROM table name for SELECT statements (if extractable)
     pub target_table: Option<String>,
 
@@ -144,13 +151,18 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
     // INTO OUTFILE target in an accessible AST field, so we scan the re-serialized
     // statement text. Using the AST Display (not raw `sql`) strips SQL comments so
     // that a comment like `-- INTO OUTFILE '/x'` doesn't cause a false rejection.
-    // Note: string literals containing these keywords remain a theoretical edge case
-    // but are extremely unlikely in practice (e.g. SELECT 'INTO OUTFILE' FROM t).
+    // We strip single-quoted string literals before scanning so that a value like
+    // SELECT 'INTO OUTFILE' FROM t doesn't cause a false positive.
     //
     // FOR UPDATE/SHARE locking reads are detected in classify_statement() via the
     // query.locks AST field — no raw-string scan needed here.
     if parsed.statement_type == StatementType::Select {
-        let normalized = format!("{stmt}").to_ascii_uppercase();
+        let serialized = format!("{stmt}");
+        // Remove single-quoted literals (sqlparser re-serializes strings with single
+        // quotes, using '' for escaped quotes inside). This regex replaces each
+        // '...' span with an empty placeholder so literals can't trigger the check.
+        let stripped = strip_single_quoted_literals(&serialized);
+        let normalized = stripped.to_ascii_uppercase();
         if normalized.contains("INTO OUTFILE") || normalized.contains("INTO DUMPFILE") {
             bail!(
                 "SELECT INTO OUTFILE/DUMPFILE is not supported — \
@@ -176,6 +188,38 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
     }
 
     Ok(parsed)
+}
+
+/// Replace single-quoted string literals with empty strings so that literal values
+/// like `'INTO OUTFILE'` are not mistaken for SQL keywords during safety checks.
+/// Handles escaped quotes (`''`) inside literals correctly.
+fn strip_single_quoted_literals(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\'' {
+            // Skip past the entire single-quoted literal.
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\'' {
+                    i += 1;
+                    // '' is an escaped quote inside the literal — keep consuming.
+                    if i < bytes.len() && bytes[i] == b'\'' {
+                        i += 1;
+                        continue;
+                    }
+                    // Single closing quote — literal is done.
+                    break;
+                }
+                i += 1;
+            }
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    result
 }
 
 /// Inspect a parsed write statement and return safety warnings.
