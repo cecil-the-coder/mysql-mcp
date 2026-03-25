@@ -48,7 +48,7 @@ pub(crate) struct SessionGuard {
 impl SessionGuard {
     /// Create a guard for a named session (with in-flight tracking).
     fn new_tracked(ctx: SessionContext, in_flight_requests: Arc<AtomicU32>) -> Self {
-        in_flight_requests.fetch_add(1, Ordering::Relaxed);
+        in_flight_requests.fetch_add(1, Ordering::Acquire);
         Self {
             ctx,
             in_flight_requests: Some(in_flight_requests),
@@ -75,7 +75,7 @@ impl std::ops::Deref for SessionGuard {
 impl Drop for SessionGuard {
     fn drop(&mut self) {
         if let Some(ref counter) = self.in_flight_requests {
-            counter.fetch_sub(1, Ordering::Relaxed);
+            counter.fetch_sub(1, Ordering::Release);
         }
     }
 }
@@ -354,7 +354,7 @@ impl SessionStore {
         let max_total = self.config.security.max_total_connections;
         let reserve_result =
             self.total_connections
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                     if current + NAMED_SESSION_POOL_SIZE <= max_total {
                         Some(current + NAMED_SESSION_POOL_SIZE)
                     } else {
@@ -399,7 +399,7 @@ impl SessionStore {
                 Ok((p, t)) => (p, Some(t)),
                 Err(e) => {
                     self.total_connections
-                        .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+                        .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
                     return tool_error!("SSH tunnel or connection failed: {}", e);
                 }
             }
@@ -420,7 +420,7 @@ impl SessionStore {
                 Ok(p) => (p, None),
                 Err(e) => {
                     self.total_connections
-                        .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+                        .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
                     return tool_error!("Connection failed: {}", e);
                 }
             }
@@ -497,7 +497,7 @@ impl SessionStore {
             }
             session.pool.close().await;
             self.total_connections
-                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
             return tool_error!(
                 "Session name '{}' is now taken. Please try a different name.",
                 name
@@ -538,7 +538,7 @@ impl SessionStore {
         if let Some(session) = removed {
             // Decrement total connections counter
             self.total_connections
-                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
             // Clean up SSH tunnel if present (outside the lock — close() may be slow).
             if let Some(tunnel) = session.tunnel {
                 if let Err(e) = tunnel.close().await {

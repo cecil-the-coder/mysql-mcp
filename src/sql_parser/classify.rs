@@ -21,6 +21,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
     let mut join_count: usize = 0;
     let mut has_leading_wildcard_like = false;
     let mut is_compound_query = false;
+    let mut all_target_schemas: Vec<String> = vec![];
 
     let (statement_type, target_schema, target_table) = match stmt {
         Statement::Query(query) if query.with.is_some() => (
@@ -103,17 +104,53 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         }
 
         Statement::Delete(delete) => {
-            // Note: Multi-table DELETE (e.g., DELETE t1, t2 FROM ...) only captures the first table.
-            // This is acceptable because: (1) permission checks only need one table to deny if any is restricted,
-            // (2) cache invalidation after DELETE is conservative and will invalidate all if needed.
-            let first_table = match &delete.from {
-                FromTable::WithFromKeyword(tables) | FromTable::WithoutKeyword(tables) => {
-                    tables.first()
-                }
+            // Collect schemas from ALL tables in the DELETE statement.
+            // Multi-table DELETE syntax: DELETE t1, t2 FROM db1.t1 JOIN db2.t2 ...
+            // We must check permissions for every referenced schema.
+            let from_tables = match &delete.from {
+                FromTable::WithFromKeyword(tables) | FromTable::WithoutKeyword(tables) => tables,
             };
+            let first_table = from_tables.first();
             let schema = first_table.and_then(|t| extract_schema_from_table_factor(&t.relation));
             let tbl = first_table.and_then(|t| extract_table_from_table_factor(&t.relation));
+
+            // Collect all distinct schemas from FROM tables and their JOINs.
+            let mut all_schemas: Vec<String> = Vec::new();
+            let mut seen_schemas: HashSet<String> = HashSet::new();
+            for twj in from_tables {
+                if let Some(s) = extract_schema_from_table_factor(&twj.relation) {
+                    if seen_schemas.insert(s.to_lowercase()) {
+                        all_schemas.push(s);
+                    }
+                }
+                for join in &twj.joins {
+                    if let Some(s) = extract_schema_from_table_factor(&join.relation) {
+                        if seen_schemas.insert(s.to_lowercase()) {
+                            all_schemas.push(s);
+                        }
+                    }
+                }
+            }
+            // Also collect from the USING clause (multi-table DELETE with USING).
+            if let Some(using_tables) = &delete.using {
+                for twj in using_tables {
+                    if let Some(s) = extract_schema_from_table_factor(&twj.relation) {
+                        if seen_schemas.insert(s.to_lowercase()) {
+                            all_schemas.push(s);
+                        }
+                    }
+                    for join in &twj.joins {
+                        if let Some(s) = extract_schema_from_table_factor(&join.relation) {
+                            if seen_schemas.insert(s.to_lowercase()) {
+                                all_schemas.push(s);
+                            }
+                        }
+                    }
+                }
+            }
+
             has_where = delete.selection.is_some();
+            all_target_schemas = all_schemas;
             (StatementType::Delete, schema, tbl)
         }
 
@@ -256,9 +293,17 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         );
     }
 
+    // For non-DELETE statements, derive all_target_schemas from target_schema.
+    if all_target_schemas.is_empty() {
+        if let Some(ref s) = target_schema {
+            all_target_schemas.push(s.clone());
+        }
+    }
+
     Ok(ParsedStatement {
         statement_type,
         target_schema,
+        all_target_schemas,
         target_table,
         has_limit,
         has_where,

@@ -118,6 +118,24 @@ pub fn check_permission(
     }
 }
 
+/// Check permissions for ALL target schemas in a parsed statement.
+/// For multi-table DELETEs, this checks every referenced schema and fails
+/// if ANY schema is denied. For single-schema statements, behaves identically
+/// to `check_permission`.
+pub fn check_all_permissions(
+    config: &Config,
+    parsed: &crate::sql_parser::ParsedStatement,
+) -> Result<()> {
+    if parsed.all_target_schemas.is_empty() {
+        // No explicit schema — check with None (falls back to connected DB).
+        return check_permission(config, &parsed.statement_type, None);
+    }
+    for schema in &parsed.all_target_schemas {
+        check_permission(config, &parsed.statement_type, Some(schema.as_str()))?;
+    }
+    Ok(())
+}
+
 /// In multi-DB mode, check if writes are allowed.
 fn check_multi_db_write(config: &Config, target_schema: Option<&str>) -> Result<()> {
     // If we're in single-DB mode (database is set), no additional check needed
@@ -459,6 +477,97 @@ mod tests {
         );
         // target_schema = None (unqualified SQL), but connected DB = mcp_test -> override denies
         assert!(check_permission(&config, &StatementType::Insert, None).is_err());
+    }
+
+    // --- Tests for check_all_permissions (multi-schema) ---
+
+    fn make_parsed(
+        stmt_type: StatementType,
+        target_schema: Option<String>,
+        all_target_schemas: Vec<String>,
+    ) -> crate::sql_parser::ParsedStatement {
+        crate::sql_parser::ParsedStatement {
+            statement_type: stmt_type,
+            target_schema,
+            all_target_schemas,
+            target_table: None,
+            has_limit: false,
+            has_where: true,
+            has_wildcard: false,
+            where_columns: vec![],
+            has_leading_wildcard_like: false,
+            warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn test_multi_schema_delete_all_allowed() {
+        let mut config = Config::default();
+        config.security.allow_delete = true;
+        config.security.multi_db_write_mode = true;
+        // Both schemas allowed globally
+        let parsed = make_parsed(
+            StatementType::Delete,
+            Some("db1".to_string()),
+            vec!["db1".to_string(), "db2".to_string()],
+        );
+        assert!(check_all_permissions(&config, &parsed).is_ok());
+    }
+
+    #[test]
+    fn test_multi_schema_delete_one_denied() {
+        use crate::config::SchemaPermissions;
+        let mut config = Config::default();
+        config.security.allow_delete = true;
+        config.security.multi_db_write_mode = true;
+        // Deny delete on db2 specifically
+        config.security.schema_permissions.insert(
+            "db2".to_string(),
+            SchemaPermissions {
+                allow_delete: Some(false),
+                ..Default::default()
+            },
+        );
+        let parsed = make_parsed(
+            StatementType::Delete,
+            Some("db1".to_string()),
+            vec!["db1".to_string(), "db2".to_string()],
+        );
+        // Should fail because db2 denies delete
+        assert!(check_all_permissions(&config, &parsed).is_err());
+    }
+
+    #[test]
+    fn test_multi_schema_delete_first_denied_second_allowed() {
+        use crate::config::SchemaPermissions;
+        let mut config = Config::default();
+        config.security.allow_delete = true;
+        config.security.multi_db_write_mode = true;
+        // Deny delete on db1 specifically
+        config.security.schema_permissions.insert(
+            "db1".to_string(),
+            SchemaPermissions {
+                allow_delete: Some(false),
+                ..Default::default()
+            },
+        );
+        let parsed = make_parsed(
+            StatementType::Delete,
+            Some("db1".to_string()),
+            vec!["db1".to_string(), "db2".to_string()],
+        );
+        // Should fail because db1 denies delete (even though db2 allows it)
+        assert!(check_all_permissions(&config, &parsed).is_err());
+    }
+
+    #[test]
+    fn test_multi_schema_empty_schemas_falls_back() {
+        // No explicit schemas — should fall back to connected DB check (like single-schema)
+        let mut config = Config::default();
+        config.connection.database = Some("testdb".to_string());
+        config.security.allow_delete = true;
+        let parsed = make_parsed(StatementType::Delete, None, vec![]);
+        assert!(check_all_permissions(&config, &parsed).is_ok());
     }
 
     #[test]
