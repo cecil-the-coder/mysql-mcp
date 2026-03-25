@@ -45,7 +45,7 @@ pub struct PoolConfig {
     /// Retries use exponential backoff (100ms, 200ms) between attempts.
     pub retry_attempts: u32,
     /// Maximum memory in MB for result sets (default: 256).
-    /// When exceeded, results are truncated with a memory_capped flag.
+    /// When exceeded, results are truncated with a warning in parse_warnings.
     pub max_result_memory_mb: u32,
 }
 

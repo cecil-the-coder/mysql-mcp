@@ -26,8 +26,6 @@ pub(crate) struct Session {
     pub(crate) tunnel: Option<crate::tunnel::TunnelHandle>,
     /// Bastion hostname shown in mysql_list_sessions when tunneling.
     pub(crate) ssh_host: Option<String>,
-    /// Count of in-flight requests on this session. The reaper skips sessions with >0.
-    pub(crate) in_flight_requests: Arc<AtomicU32>,
 }
 
 /// Named context returned by get_session(): pool, schema introspector, and optional database.
@@ -35,49 +33,6 @@ pub(crate) struct SessionContext {
     pub(crate) pool: sqlx::MySqlPool,
     pub(crate) schema: Arc<SchemaIntrospector>,
     pub(crate) database: Option<String>,
-}
-
-/// Guard that tracks in-flight requests on a session.
-/// Increments the counter on creation, decrements on Drop.
-/// Derefs to SessionContext for transparent access.
-pub(crate) struct SessionGuard {
-    pub(crate) ctx: SessionContext,
-    in_flight_requests: Option<Arc<AtomicU32>>,
-}
-
-impl SessionGuard {
-    /// Create a guard for a named session (with in-flight tracking).
-    fn new_tracked(ctx: SessionContext, in_flight_requests: Arc<AtomicU32>) -> Self {
-        in_flight_requests.fetch_add(1, Ordering::Relaxed);
-        Self {
-            ctx,
-            in_flight_requests: Some(in_flight_requests),
-        }
-    }
-
-    /// Create a guard for the default session (no in-flight tracking needed).
-    fn new_untracked(ctx: SessionContext) -> Self {
-        Self {
-            ctx,
-            in_flight_requests: None,
-        }
-    }
-}
-
-impl std::ops::Deref for SessionGuard {
-    type Target = SessionContext;
-
-    fn deref(&self) -> &Self::Target {
-        &self.ctx
-    }
-}
-
-impl Drop for SessionGuard {
-    fn drop(&mut self) {
-        if let Some(ref counter) = self.in_flight_requests {
-            counter.fetch_sub(1, Ordering::Relaxed);
-        }
-    }
 }
 
 /// Holds the named sessions map and the default connection references.
@@ -119,24 +74,23 @@ pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToo
 }
 
 impl SessionStore {
-    /// Resolve the "session" key from the args map to a SessionGuard.
+    /// Resolve the "session" key from the args map to a SessionContext.
     /// Updates last_used on non-default sessions.
-    /// Increments in_flight_requests on named sessions; the guard decrements on Drop.
     /// Returns Err(CallToolResult) that callers can propagate immediately with `?`.
     pub(crate) async fn resolve_session(
         &self,
         args: &serde_json::Map<String, serde_json::Value>,
-    ) -> Result<SessionGuard, CallToolResult> {
+    ) -> Result<SessionContext, CallToolResult> {
         let name = args
             .get("session")
             .and_then(|v| v.as_str())
             .unwrap_or("default");
         if name == "default" || name.is_empty() {
-            return Ok(SessionGuard::new_untracked(SessionContext {
+            return Ok(SessionContext {
                 pool: self.db.as_ref().clone(),
                 schema: self.introspector.clone(),
                 database: self.config.connection.database.clone(),
-            }));
+            });
         }
         let mut map = self.sessions.lock().await;
         match map.get_mut(name) {
@@ -145,14 +99,11 @@ impl SessionStore {
                 let pool = session.pool.clone();
                 let schema = session.introspector.clone();
                 let database = session.database.clone();
-                let in_flight_requests = session.in_flight_requests.clone();
-                drop(map);
-                let ctx = SessionContext {
+                Ok(SessionContext {
                     pool,
                     schema,
                     database,
-                };
-                Ok(SessionGuard::new_tracked(ctx, in_flight_requests))
+                })
             }
             None => {
                 let msg = format!(
@@ -450,6 +401,8 @@ impl SessionStore {
                     }
                 }
                 pool.close().await;
+                self.total_connections
+                    .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
                 return tool_error!(
                     "Maximum session limit ({}) reached. Disconnect an existing session first.",
                     self.config.security.max_sessions
@@ -466,6 +419,8 @@ impl SessionStore {
                     }
                 }
                 pool.close().await;
+                self.total_connections
+                    .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
                 return tool_error!(
                     "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
                     name
@@ -480,7 +435,6 @@ impl SessionStore {
             database,
             tunnel,
             ssh_host,
-            in_flight_requests: Arc::new(AtomicU32::new(0)),
         };
         // Re-acquire the lock to insert. A concurrent connect() could have raced
         // us since we released the lock above; re-check before inserting.

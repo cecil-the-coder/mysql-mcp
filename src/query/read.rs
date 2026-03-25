@@ -33,7 +33,6 @@ pub struct QueryResult {
     pub execution_time_ms: u64,
     pub serialization_time_ms: u64,
     pub capped: bool,
-    pub memory_capped: bool,
     pub parse_warnings: Vec<String>,
     pub plan: Option<Value>,
     pub explain_error: Option<String>,
@@ -135,8 +134,6 @@ pub async fn execute_read_query(
     let mut warnings = warnings; // make mutable so row_to_json can push serialization warnings
     let max_memory_bytes = (max_result_memory_mb as usize) * 1024 * 1024;
     let mut total_memory_bytes: usize = 0;
-    let mut memory_capped = false;
-
     let initial_capacity = if max_rows > 0 {
         rows.len().min(max_rows as usize + 1)
     } else {
@@ -153,7 +150,6 @@ pub async fn execute_read_query(
 
         // Check if adding this row would exceed the memory limit
         if max_memory_bytes > 0 && total_memory_bytes + row_total > max_memory_bytes {
-            memory_capped = true;
             warnings.push(format!(
                 "Result truncated at {} rows due to memory limit ({} MB). Add a more specific WHERE clause or reduce selected columns.",
                 json_rows.len(), max_result_memory_mb
@@ -227,7 +223,6 @@ pub async fn execute_read_query(
         execution_time_ms: db_elapsed,
         serialization_time_ms: ser_elapsed,
         capped: was_capped,
-        memory_capped,
         parse_warnings: warnings,
         plan,
         explain_error,
@@ -249,13 +244,7 @@ fn row_to_json(row: &sqlx::mysql::MySqlRow, warnings: &mut Vec<String>) -> Map<S
                 if !map.contains_key(&candidate) {
                     break candidate;
                 }
-                // Overflow guard: in practice this is unreachable (SQL length limits
-                // column counts to thousands, not quintillions), but prevents a debug-
-                // mode panic if somehow u64::MAX is reached.
-                n = match n.checked_add(1) {
-                    Some(next) => next,
-                    None => break format!("{}_dup", base),
-                };
+                n += 1;
             }
         };
         map.insert(key, column_to_json(row, i, col, warnings));

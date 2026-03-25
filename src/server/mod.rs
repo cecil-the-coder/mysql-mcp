@@ -258,15 +258,6 @@ impl McpServer {
                         if session.last_used > cutoff {
                             continue;
                         }
-                        // Skip sessions with in-flight requests to prevent query failures
-                        if session.in_flight_requests.load(Ordering::Relaxed) > 0 {
-                            tracing::debug!(
-                                session = %name,
-                                in_flight = session.in_flight_requests.load(Ordering::Relaxed),
-                                "Skipping idle session reap: in-flight requests"
-                            );
-                            continue;
-                        }
                     }
                     if let Some(session) = map.remove(&name) {
                         // Decrement total connections counter for reaped session
