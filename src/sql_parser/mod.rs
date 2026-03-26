@@ -195,28 +195,26 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
 /// Handles escaped quotes (`''`) inside literals correctly.
 fn strip_single_quoted_literals(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\'' {
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\'' {
             // Skip past the entire single-quoted literal.
-            i += 1;
-            while i < bytes.len() {
-                if bytes[i] == b'\'' {
-                    i += 1;
-                    // '' is an escaped quote inside the literal — keep consuming.
-                    if i < bytes.len() && bytes[i] == b'\'' {
-                        i += 1;
-                        continue;
+            loop {
+                match chars.next() {
+                    Some('\'') => {
+                        // Check if this is '' (escaped quote) or a closing quote.
+                        if chars.peek() == Some(&'\'') {
+                            chars.next(); // consume the second ' of the escaped pair
+                        } else {
+                            break; // closing quote
+                        }
                     }
-                    // Single closing quote — literal is done.
-                    break;
+                    Some(_) => {}
+                    None => break,
                 }
-                i += 1;
             }
         } else {
-            result.push(bytes[i] as char);
-            i += 1;
+            result.push(c);
         }
     }
     result

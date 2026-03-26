@@ -100,6 +100,26 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
             let schema = extract_schema_from_table_factor(&table.relation);
             let tbl = extract_table_from_table_factor(&table.relation);
             has_where = selection.is_some();
+
+            // Collect schemas from ALL tables in the UPDATE statement.
+            // Multi-table UPDATE syntax: UPDATE db1.t1 JOIN db2.t2 ON ... SET db2.t2.col = 'value'
+            // We must check permissions for every referenced schema.
+            let mut all_schemas: Vec<String> = Vec::new();
+            let mut seen_schemas: HashSet<String> = HashSet::new();
+            if let Some(s) = extract_schema_from_table_factor(&table.relation) {
+                if seen_schemas.insert(s.to_lowercase()) {
+                    all_schemas.push(s);
+                }
+            }
+            for join in &table.joins {
+                if let Some(s) = extract_schema_from_table_factor(&join.relation) {
+                    if seen_schemas.insert(s.to_lowercase()) {
+                        all_schemas.push(s);
+                    }
+                }
+            }
+            all_target_schemas = all_schemas;
+
             (StatementType::Update, schema, tbl)
         }
 
