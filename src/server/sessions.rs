@@ -330,7 +330,7 @@ impl SessionStore {
         let max_total = self.config.security.max_total_connections;
         let reserve_result =
             self.total_connections
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                .fetch_update(Ordering::Release, Ordering::Relaxed, |current| {
                     if current + NAMED_SESSION_POOL_SIZE <= max_total {
                         Some(current + NAMED_SESSION_POOL_SIZE)
                     } else {

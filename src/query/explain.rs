@@ -32,12 +32,22 @@ pub async fn run_explain(pool: &MySqlPool, sql: &str) -> Result<ExplainResult> {
     use sqlx::Row;
     let json_str: String = row.try_get(0)?;
     let v: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| {
-        let preview = if json_str.len() > 200 {
-            format!("{}...", &json_str[..200])
+        let location = format!("at line {}, column {}", e.line(), e.column());
+        let top_level_keys: Vec<String> = serde_json::from_str::<serde_json::Value>(&json_str)
+            .ok()
+            .and_then(|v| v.as_object().map(|obj| obj.keys().cloned().collect()))
+            .unwrap_or_default();
+        let structure_info = if top_level_keys.is_empty() {
+            "JSON is not a valid object or could not be partially parsed".to_string()
         } else {
-            json_str.clone()
+            format!("top-level keys: {}", top_level_keys.join(", "))
         };
-        anyhow::anyhow!("Failed to parse EXPLAIN JSON: {}. Preview: {}", e, preview)
+        anyhow::anyhow!(
+            "Failed to parse EXPLAIN JSON: {} {}. JSON structure: {}",
+            e,
+            location,
+            structure_info
+        )
     })?;
 
     super::explain_parse::parse(&v)
