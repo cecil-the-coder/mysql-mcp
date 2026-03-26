@@ -31,10 +31,11 @@ pub(crate) fn is_col_str_opt(row: &sqlx::mysql::MySqlRow, col: &str) -> Option<S
                 .flatten()
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
         })?;
-    if s.is_empty() {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
         None
     } else {
-        Some(s)
+        Some(trimmed.to_string())
     }
 }
 

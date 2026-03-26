@@ -224,7 +224,7 @@ fn row_to_json(row: &sqlx::mysql::MySqlRow, warnings: &mut Vec<String>) -> Map<S
                 if !map.contains_key(&candidate) {
                     break candidate;
                 }
-                n += 1;
+                n = n.saturating_add(1);
             }
         };
         map.insert(key, column_to_json(row, i, col, warnings));
