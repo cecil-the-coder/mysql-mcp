@@ -124,12 +124,13 @@ pub async fn execute_read_query(
         let json_row = row_to_json(row, &mut warnings);
 
         // Estimate memory usage of this row (rough approximation)
+        // Use saturating arithmetic to prevent overflow on pathological data
         let row_size: usize = json_row.values().map(estimate_value_size).sum();
-        let row_overhead = json_row.len() * 32; // HashMap overhead per key
-        let row_total = row_size + row_overhead;
+        let row_overhead = json_row.len().saturating_mul(32); // HashMap overhead per key
+        let row_total = row_size.saturating_add(row_overhead);
 
         // Check if adding this row would exceed the memory limit
-        if max_memory_bytes > 0 && total_memory_bytes + row_total > max_memory_bytes {
+        if max_memory_bytes > 0 && total_memory_bytes.saturating_add(row_total) > max_memory_bytes {
             warnings.push(format!(
                 "Result truncated at {} rows due to memory limit ({} MB). Add a more specific WHERE clause or reduce selected columns.",
                 json_rows.len(), max_result_memory_mb
@@ -137,7 +138,7 @@ pub async fn execute_read_query(
             break;
         }
 
-        total_memory_bytes += row_total;
+        total_memory_bytes = total_memory_bytes.saturating_add(row_total);
         json_rows.push(json_row);
     }
     let ser_elapsed = ser_start.elapsed().as_millis() as u64;

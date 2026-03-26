@@ -425,7 +425,7 @@ impl SessionStore {
                 }
                 pool.close().await;
                 self.total_connections
-                    .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+                    .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
                 return tool_error!(
                     "Maximum session limit ({}) reached. Disconnect an existing session first.",
                     self.config.security.max_sessions
@@ -438,7 +438,7 @@ impl SessionStore {
                 }
                 pool.close().await;
                 self.total_connections
-                    .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Relaxed);
+                    .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
                 return tool_error!(
                     "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
                     name

@@ -364,7 +364,9 @@ impl SchemaIntrospector {
             Some(db) => {
                 tables_cache.remove(db);
             }
-            None => tables_cache.clear(),
+            None => {
+                tables_cache.remove("");
+            }
         }
     }
 
