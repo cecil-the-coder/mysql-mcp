@@ -8,7 +8,7 @@ const TRANSIENT_ERROR_PATTERNS: &[&str] = &[
     "connection reset",
     "broken pipe",
     "timed out",
-    "Connection refused",
+    "connection refused",
     "reset by peer",
     "connection closed",
     "unexpected eof",
@@ -19,7 +19,7 @@ fn is_transient_error(error: &anyhow::Error) -> bool {
     let error_string = error.to_string().to_lowercase();
     TRANSIENT_ERROR_PATTERNS
         .iter()
-        .any(|pattern| error_string.contains(&pattern.to_lowercase()))
+        .any(|pattern| error_string.contains(pattern))
 }
 
 /// Execute an async operation with retry logic for transient network failures.

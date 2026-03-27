@@ -346,7 +346,7 @@ impl SchemaIntrospector {
     /// Acquires all cache locks atomically to prevent readers from observing partially
     /// invalidated state (e.g., fresh columns but stale indexes).
     pub async fn invalidate_table(&self, table: &str, database: Option<&str>) {
-        if table.is_empty() {
+        if table.trim().is_empty() {
             tracing::warn!("invalidate_table called with empty table name; ignoring");
             return;
         }
