@@ -121,7 +121,7 @@ impl Drop for TunnelHandle {
             // Try to register with the reaper via a spawned task
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.spawn(async move {
-                    ZOMBIE_REAPER.get().register_child(child).await;
+                    ZombieReaper::get().register_child(child).await;
                 });
             } else {
                 // No tokio runtime available; spawn a thread that creates a minimal runtime
@@ -132,7 +132,7 @@ impl Drop for TunnelHandle {
                         .ok();
                     if let Some(rt) = rt {
                         rt.block_on(async {
-                            ZOMBIE_REAPER.get().register_child(child).await;
+                            ZombieReaper::get().register_child(child).await;
                         });
                     }
                 });
