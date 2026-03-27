@@ -112,7 +112,8 @@ impl Drop for TunnelHandle {
             // Non-blocking best-effort kill. Cannot await in Drop.
             if let Err(e) = child.start_kill() {
                 tracing::debug!("Failed to kill SSH process: {}", e);
-                return;
+                // Fall through to still register with reaper - the child may already be dead
+                // and we still need to call wait() on it to reap it.
             }
 
             // To prevent zombies, we need to ensure wait() is called eventually.
