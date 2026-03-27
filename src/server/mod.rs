@@ -41,18 +41,20 @@ fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
                 || v4.is_multicast()
         }
         IpAddr::V6(v6) => {
-            // Check IPv4-mapped addresses
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                let loopback_blocked = !allow_loopback && v4.is_loopback();
-                return loopback_blocked
+            // Check IPv6 loopback first (::1 is loopback regardless of IPv4 conversion)
+            let loopback_blocked = !allow_loopback && v6.is_loopback();
+            if loopback_blocked {
+                return true;
+            }
+            // Check IPv4-mapped (::ffff:x.x.x.x) and IPv4-compatible (::x.x.x.x) addresses
+            if let Some(v4) = v6.to_ipv4() {
+                return v4.is_loopback()
                     || v4.is_link_local()
                     || v4.is_broadcast()
                     || v4.is_unspecified()
                     || v4.is_multicast();
             }
-            let loopback_blocked = !allow_loopback && v6.is_loopback();
-            loopback_blocked
-                || v6.is_unspecified()
+            v6.is_unspecified()
                 || v6.is_unicast_link_local()
                 || v6.is_multicast()
         }
@@ -389,6 +391,24 @@ mod tests {
         assert!(
             is_private_host("::ffff:169.254.169.254"),
             "::ffff:169.254.169.254 (IPv6-mapped cloud metadata) must be blocked"
+        );
+    }
+
+    #[test]
+    fn ipv6_compatible_ipv4_loopback_is_blocked() {
+        // IPv4-compatible IPv6 addresses (::x.x.x.x) are deprecated but must still be blocked
+        assert!(
+            is_private_host("::127.0.0.1"),
+            "::127.0.0.1 (IPv4-compatible loopback) must be blocked"
+        );
+    }
+
+    #[test]
+    fn ipv6_compatible_ipv4_link_local_is_blocked() {
+        // IPv4-compatible IPv6 addresses (::x.x.x.x) are deprecated but must still be blocked
+        assert!(
+            is_private_host("::169.254.169.254"),
+            "::169.254.169.254 (IPv4-compatible cloud metadata) must be blocked"
         );
     }
 

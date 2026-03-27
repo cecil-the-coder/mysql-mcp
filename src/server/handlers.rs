@@ -390,25 +390,26 @@ impl SessionStore {
                     // Generate schema-aware index suggestions when EXPLAIN detected a full
                     // table scan with no index used.
                     let mut suggestions: Vec<String> = vec![];
-                    let needs_suggestions = result.plan.as_ref().is_some_and(|p| {
-                        p.get("full_table_scan")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false)
-                            && p.get("index_used").map(|v| v.is_null()).unwrap_or(true)
-                    }) && parsed.target_table.is_some()
-                        && !parsed.where_columns.is_empty();
-                    if needs_suggestions {
-                        let tname = parsed
-                            .target_table
-                            .as_deref()
-                            .expect("target_table checked for Some above");
-                        suggestions = query_introspector
-                            .generate_index_suggestions(
-                                tname,
-                                session_db.as_deref(),
-                                &parsed.where_columns,
-                            )
-                            .await;
+                    if let Some(tname) = parsed.target_table.as_deref() {
+                        if !parsed.where_columns.is_empty() {
+                            if let Some(plan) = result.plan.as_ref() {
+                                let full_table_scan = plan
+                                    .get("full_table_scan")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                let index_used =
+                                    plan.get("index_used").map(|v| v.is_null()).unwrap_or(true);
+                                if full_table_scan && index_used {
+                                    suggestions = query_introspector
+                                        .generate_index_suggestions(
+                                            tname,
+                                            session_db.as_deref(),
+                                            &parsed.where_columns,
+                                        )
+                                        .await;
+                                }
+                            }
+                        }
                     }
 
                     // Structured performance log
