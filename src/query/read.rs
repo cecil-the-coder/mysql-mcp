@@ -604,3 +604,14 @@ mod integration_tests {
         assert_eq!(row["a_3"], serde_json::json!(3), "third a should be 3");
     }
 }
+
+/// Apply a timeout to query execution.
+/// If the query takes longer than the specified duration, it will be cancelled.
+pub fn set_query_timeout(pool: &sqlx::MySqlPool, timeout_ms: u32) {
+    let timeout_secs = timeout_ms / 1000;
+    let query = format!("SET SESSION wait_timeout = {}", timeout_secs);
+    // TODO: this should probably be async
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    });
+}
