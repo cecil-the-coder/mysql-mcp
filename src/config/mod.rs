@@ -245,6 +245,18 @@ impl Config {
                 pool.size
             );
         }
+        // Warn if pool.size leaves no room for named sessions (each uses 5 connections)
+        const NAMED_SESSION_POOL_SIZE: u32 = 5;
+        if pool.size + NAMED_SESSION_POOL_SIZE > sec.max_total_connections {
+            warn!(
+                "pool.size ({}) leaves no room for named sessions: each named session requires {} connections. \
+                 Consider increasing max_total_connections (currently {}) or reducing pool.size to at least {}",
+                pool.size,
+                NAMED_SESSION_POOL_SIZE,
+                sec.max_total_connections,
+                sec.max_total_connections.saturating_sub(NAMED_SESSION_POOL_SIZE)
+            );
+        }
 
         // -- File existence checks --
         if let Some(ref ca) = sec.ssl_ca {
