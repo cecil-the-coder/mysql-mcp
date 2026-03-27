@@ -113,6 +113,7 @@ pub async fn execute_read_query(
     // Serialization phase with memory tracking
     let ser_start = Instant::now();
     let mut warnings = warnings; // make mutable so row_to_json can push serialization warnings
+
     // Use saturating_mul to prevent overflow when max_result_memory_mb is large
     let max_memory_bytes = (max_result_memory_mb as usize)
         .saturating_mul(1024)
