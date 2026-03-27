@@ -3,7 +3,55 @@ use crate::sql_parser::StatementType;
 use anyhow::{bail, Result};
 
 /// Check if a SQL statement is allowed based on config.
-/// Returns Ok(()) if allowed, Err with descriptive message if denied.
+///
+/// Returns `Ok(())` if allowed, `Err` with a descriptive message if denied.
+///
+/// # Permission Resolution Order
+///
+/// 1. **Schema-specific override**: If `target_schema` matches a key in
+///    `config.security.schema_permissions`, that schema's permission flags are used.
+/// 2. **Global fallback**: If no schema-specific override exists, the global
+///    `config.security.allow_*` flags are used.
+///
+/// Schema lookup is case-insensitive (keys are stored lowercase).
+///
+/// # Schema Resolution
+///
+/// The `target_schema` parameter determines which schema's permissions to check:
+/// - If provided (e.g., from qualified table references like `mydb.users`), that schema is used.
+/// - If `None`, falls back to `config.connection.database` for single-database mode.
+/// - If neither is available, only global permissions apply.
+///
+/// # Statement Type Categories
+///
+/// ## Always Allowed (no configuration needed)
+/// - `SELECT`, `SHOW`, `EXPLAIN`: Read-only operations
+/// - `SET`: Session/local variable assignment (note: operators should be aware
+///   that `SET SESSION/GLOBAL` can affect security behavior)
+///
+/// ## Always Denied
+/// - `USE`: Not supported with connection pooling (database changes would be lost)
+/// - Other unsupported types (e.g., `CALL`, `LOCK TABLES`, `LOAD DATA`)
+///
+/// ## Opt-In (require explicit permission)
+/// - `INSERT`: Controlled by `MYSQL_ALLOW_INSERT` or schema-specific `allow_insert`
+/// - `UPDATE`: Controlled by `MYSQL_ALLOW_UPDATE` or schema-specific `allow_update`
+/// - `DELETE`: Controlled by `MYSQL_ALLOW_DELETE` or schema-specific `allow_delete`
+/// - `CREATE`, `ALTER`, `DROP`, `TRUNCATE` (DDL): Controlled by `MYSQL_ALLOW_DDL`
+///   or schema-specific `allow_ddl`
+///
+/// # Example
+///
+/// ```ignore
+/// use crate::permissions::check_permission;
+/// use crate::sql_parser::StatementType;
+///
+/// // Check if INSERT is allowed on a specific schema
+/// check_permission(&config, &StatementType::Insert, Some("mydb"))?;
+///
+/// // Check with default schema (uses connection.database)
+/// check_permission(&config, &StatementType::Insert, None)?;
+/// ```
 pub fn check_permission(
     config: &Config,
     stmt_type: &StatementType,
@@ -106,9 +154,34 @@ pub fn check_permission(
 }
 
 /// Check permissions for ALL target schemas in a parsed statement.
-/// For multi-table DELETEs, this checks every referenced schema and fails
-/// if ANY schema is denied. For single-schema statements, behaves identically
-/// to `check_permission`.
+///
+/// This function is used for multi-table statements (e.g., multi-table DELETEs)
+/// where multiple schemas may be referenced. It iterates through all target schemas
+/// and fails if **any** schema denies the operation.
+///
+/// # Behavior
+///
+/// - If `parsed.all_target_schemas` is empty, falls back to [`check_permission`]
+///   with `target_schema = None` (uses connected database for permission lookup).
+/// - Otherwise, calls [`check_permission`] for each schema in `all_target_schemas`.
+/// - Returns `Err` on the **first** denied schema (short-circuit evaluation).
+///
+/// # Permission Resolution
+///
+/// Each schema is checked independently using the same resolution order as
+/// [`check_permission`]: schema-specific overrides take precedence over global
+/// settings for each schema.
+///
+/// # Example
+///
+/// ```ignore
+/// use crate::permissions::check_all_permissions;
+///
+/// // For a multi-table DELETE across db1.table1 and db2.table2:
+/// // - Both db1 and db2 must allow DELETE
+/// let parsed = sql_parser::parse("DELETE FROM db1.t1, db2.t2 WHERE ...")?;
+/// check_all_permissions(&config, &parsed)?;
+/// ```
 pub fn check_all_permissions(
     config: &Config,
     parsed: &crate::sql_parser::ParsedStatement,

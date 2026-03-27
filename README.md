@@ -135,6 +135,8 @@ A `.env` file in the working directory is loaded automatically if present.
 | `pool.slow_query_threshold_ms` | `MYSQL_SLOW_QUERY_THRESHOLD_MS` | u64 | `500` | Threshold used by `performance_hints=auto` |
 | `pool.max_rows` | `MYSQL_MAX_ROWS` | u32 | `1000` | Cap on rows returned per query; `LIMIT {max_rows}` is appended when the query has no LIMIT. `0` disables the cap |
 | `pool.cache_ttl_secs` | `MYSQL_CACHE_TTL` | u64 | `60` | Schema introspection cache TTL in seconds (`0` disables caching) |
+| `pool.retry_attempts` | `MYSQL_RETRY_ATTEMPTS` | u32 | `2` | Number of retry attempts for transient network errors; uses exponential backoff (100ms, 200ms) between attempts |
+| `pool.max_result_memory_mb` | `MYSQL_MAX_RESULT_MEMORY_MB` | u32 | `256` | Maximum memory in MB for result sets; when exceeded, results are truncated with a warning |
 
 ### Security
 
@@ -150,6 +152,7 @@ A `.env` file in the working directory is loaded automatically if present.
 | `security.schema_permissions` | `MYSQL_SCHEMA_<NAME>_PERMISSIONS` | map | `{}` | Per-schema write permission overrides (see below) |
 | `security.allow_runtime_connections` | `MYSQL_ALLOW_RUNTIME_CONNECTIONS` | bool | `false` | Allow `mysql_connect` to accept raw credentials at runtime |
 | `security.max_sessions` | `MYSQL_MAX_SESSIONS` | u32 | `50` | Maximum number of concurrent named sessions |
+| `security.max_total_connections` | `MYSQL_MAX_TOTAL_CONNECTIONS` | u32 | `100` | Maximum total database connections across all sessions (default pool + named session pools); prevents resource exhaustion |
 
 ### SSH Tunnel
 
@@ -160,6 +163,7 @@ A `.env` file in the working directory is loaded automatically if present.
 | `ssh.user` | `MYSQL_SSH_USER` | string | — | SSH username |
 | `ssh.private_key` | `MYSQL_SSH_PRIVATE_KEY` | string | — | Path to PEM private key file |
 | `ssh.private_key_passphrase` | `MYSQL_SSH_PRIVATE_KEY_PASSPHRASE` | string | — | Passphrase for the private key (if encrypted) |
+| `ssh.use_agent` | `MYSQL_SSH_USE_AGENT` | bool | `false` | Use the system SSH agent for authentication; requires agent to be running with key loaded |
 | `ssh.known_hosts_check` | `MYSQL_SSH_KNOWN_HOSTS_CHECK` | string | `strict` | Host key verification: `strict`, `accept-new`, or `insecure` |
 | `ssh.known_hosts_file` | `MYSQL_SSH_KNOWN_HOSTS_FILE` | string | — | Override path to known_hosts file |
 
@@ -289,6 +293,25 @@ Always includes `columns` (name, type, nullable). Optional sections:
 - `include: ["indexes"]` — all indexes with column lists, uniqueness, and primary key flag
 - `include: ["foreign_keys"]` — FK constraints with referenced table and columns
 - `include: ["size"]` — estimated row count, data size, and index size in bytes
+
+---
+
+### `mysql_list_tables`
+
+List all tables in a database.
+
+**Parameters**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `database` | string | no | Database name to list tables from (uses connected database if omitted) |
+| `session` | string | no | Named session to use |
+
+**Response**
+
+Returns a JSON object with:
+- `tables` — array of table names in the database (sorted alphabetically)
+- `database` — the database that was queried
 
 ---
 
