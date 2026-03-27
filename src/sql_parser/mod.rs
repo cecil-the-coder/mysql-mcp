@@ -211,6 +211,7 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
             || normalized.starts_with("SET PERSIST")
             || normalized.contains("@@GLOBAL.")
             || normalized.contains("@@PERSIST.")
+            || normalized.contains("@@PERSIST_ONLY.")
         {
             bail!(
                 "SET GLOBAL and SET PERSIST are not allowed — they affect server-wide settings. \

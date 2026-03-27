@@ -662,6 +662,9 @@ pub(super) fn collect_where_info(
         Expr::InList { expr, .. } => {
             collect_where_info(expr, cols, seen, has_leading_wildcard);
         }
+        Expr::InSubquery { expr, .. } => {
+            collect_where_info(expr, cols, seen, has_leading_wildcard);
+        }
         Expr::Function(func) => {
             // Recurse into function arguments so columns inside UPPER(col), COALESCE(a, b), etc.
             // are included in index-suggestion analysis.
