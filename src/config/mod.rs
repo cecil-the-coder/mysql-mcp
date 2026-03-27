@@ -239,9 +239,11 @@ impl Config {
                 pool.slow_query_threshold_ms
             );
         }
-        if pool.cache_ttl_secs == 0 || pool.cache_ttl_secs > 86_400 {
+        if pool.cache_ttl_secs == 0 {
+            warn!("pool.cache_ttl_secs=0 disables schema cache; queries will refetch schema info every time");
+        } else if pool.cache_ttl_secs > 86_400 {
             anyhow::bail!(
-                "pool.cache_ttl_secs must be between 1 and 86400 seconds (24 hours) (got: {})",
+                "pool.cache_ttl_secs must be between 0 and 86400 seconds (24 hours) (got: {})",
                 pool.cache_ttl_secs
             );
         }
