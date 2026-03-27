@@ -54,9 +54,7 @@ fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
                     || v4.is_unspecified()
                     || v4.is_multicast();
             }
-            v6.is_unspecified()
-                || v6.is_unicast_link_local()
-                || v6.is_multicast()
+            v6.is_unspecified() || v6.is_unicast_link_local() || v6.is_multicast()
         }
     }
 }
