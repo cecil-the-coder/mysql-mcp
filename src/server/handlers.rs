@@ -498,7 +498,11 @@ fn log_query_result(
     suggestions: &[String],
     slow_threshold_ms: u64,
 ) {
-    let sql_truncated = sql.get(..200).unwrap_or(sql);
+    let mut sql_trunc_end = 200.min(sql.len());
+    while sql_trunc_end > 0 && !sql.is_char_boundary(sql_trunc_end) {
+        sql_trunc_end -= 1;
+    }
+    let sql_truncated = &sql[..sql_trunc_end];
     let plan_tier = result
         .plan
         .as_ref()
