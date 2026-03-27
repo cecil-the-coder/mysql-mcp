@@ -1,3 +1,35 @@
+//! SQL parsing and statement classification.
+//!
+//! This module parses SQL statements using the `sqlparser-rs` crate and classifies
+//! them by type (SELECT, INSERT, UPDATE, DELETE, DDL, etc.). It extracts metadata
+//! such as target schemas and tables, and detects potentially dangerous patterns
+//! like missing WHERE clauses or leading wildcard LIKE patterns.
+//!
+//! # Key Types
+//!
+//! - [`StatementType`] - Enum categorizing SQL statement types
+//! - [`ParsedStatement`] - Parsed result with type, target schema, and safety warnings
+//!
+//! # Key Functions
+//!
+//! - [`parse_sql`] - Parses a SQL string and returns a [`ParsedStatement`]
+//! - [`parse_write_warnings`] - Generates safety warnings for write operations
+//!
+//! # Safety Checks
+//!
+//! The parser blocks certain dangerous constructs:
+//! - `SELECT INTO OUTFILE/DUMPFILE` (server-side file access)
+//! - `SET GLOBAL/PERSIST` (server-wide configuration changes)
+//! - Multi-statement SQL (injection prevention)
+//!
+//! # Example
+//!
+//! ```ignore
+//! use sql_parser::parse_sql;
+//! let parsed = parse_sql("SELECT * FROM users WHERE id = 1")?;
+//! assert!(parsed.statement_type.is_read_only());
+//! ```
+
 use anyhow::{bail, Result};
 use sqlparser::dialect::MySqlDialect;
 use sqlparser::parser::Parser;

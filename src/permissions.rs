@@ -1,3 +1,29 @@
+//! SQL statement permission checking.
+//!
+//! This module enforces security policies by validating whether SQL statements
+//! are allowed to execute based on the configured permissions. It supports
+//! global permission flags (e.g., `allow_insert`) as well as per-schema
+//! overrides for fine-grained access control.
+//!
+//! # Key Functions
+//!
+//! - [`check_permission`] - Validates a single statement against the security config
+//! - [`check_all_permissions`] - Validates multi-table statements against all target schemas
+//!
+//! # Permission Model
+//!
+//! - Read operations (SELECT, SHOW, EXPLAIN, SET) are always allowed
+//! - Write operations (INSERT, UPDATE, DELETE) require explicit enablement
+//! - DDL operations (CREATE, ALTER, DROP, TRUNCATE) require explicit enablement
+//! - USE statements are blocked (incompatible with connection pooling)
+//!
+//! # Example
+//!
+//! ```ignore
+//! use permissions::check_permission;
+//! let result = check_permission(&config, &StatementType::Insert, Some("mydb"));
+//! ```
+
 use crate::config::Config;
 use crate::sql_parser::StatementType;
 use anyhow::{bail, Result};

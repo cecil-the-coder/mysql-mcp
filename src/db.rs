@@ -1,3 +1,39 @@
+//! Database connection pool management.
+//!
+//! This module provides MySQL connection pool creation and management using `sqlx`.
+//! It supports direct TCP connections, Unix socket connections, and SSH-tunneled
+//! connections through bastion hosts. SSL/TLS verification is configurable based
+//! on security requirements.
+//!
+//! # Key Functions
+//!
+//! - [`build_pool`] - Creates the main connection pool from configuration
+//! - [`build_pool_and_tunnel`] - Creates a pool through an SSH tunnel
+//! - [`build_session_pool`] - Creates a small pool for named sessions
+//! - [`build_connect_options`] - Builds `MySqlConnectOptions` from configuration
+//!
+//! # Connection Types
+//!
+//! - **TCP**: Standard network connections with optional SSL
+//! - **Socket**: Unix domain socket connections (local only)
+//! - **Connection String**: Full `mysql://` URL parsing
+//! - **SSH Tunnel**: Connections proxied through a bastion host
+//!
+//! # SSL Modes
+//!
+//! SSL mode is determined by the `ssl`, `ssl_accept_invalid_certs`, and `ssl_ca` flags:
+//! - `Disabled`: No SSL
+//! - `Required`: SSL without certificate validation
+//! - `VerifyCa`: SSL with CA validation (when `ssl_ca` is set)
+//! - `VerifyIdentity`: Full SSL with hostname verification
+//!
+//! # Example
+//!
+//! ```ignore
+//! let pool = build_pool(&config).await?;
+//! let row = sqlx::query("SELECT 1").fetch_one(&pool).await?;
+//! ```
+
 use crate::config::Config;
 use anyhow::Result;
 use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlSslMode};
