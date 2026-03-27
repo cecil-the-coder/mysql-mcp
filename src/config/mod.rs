@@ -202,9 +202,7 @@ impl Config {
 
         // -- SSL checks --
         if sec.ssl_ca.is_some() && !sec.ssl {
-            warn!(
-                "MYSQL_SSL_CA is set but MYSQL_SSL is false; CA cert will be ignored"
-            );
+            warn!("MYSQL_SSL_CA is set but MYSQL_SSL is false; CA cert will be ignored");
         }
         if sec.ssl_accept_invalid_certs {
             warn!("ssl_accept_invalid_certs is enabled — TLS validation disabled");
