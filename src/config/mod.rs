@@ -1,3 +1,26 @@
+//! Configuration management for the MySQL MCP server.
+//!
+//! This module provides configuration structures and loading logic for database
+//! connections, connection pooling, security settings, and SSH tunnel options.
+//! Configuration can be provided via TOML files and/or environment variables.
+//!
+//! # Key Types
+//!
+//! - [`Config`] - Top-level configuration container
+//! - [`ConnectionConfig`] - MySQL connection parameters (host, port, credentials)
+//! - [`PoolConfig`] - Connection pool sizing and timeouts
+//! - [`SecurityConfig`] - Write permissions and SSL settings
+//! - [`SshConfig`] - SSH tunnel configuration for bastion host access
+//! - [`SchemaPermissions`] - Per-schema permission overrides
+//!
+//! # Example
+//!
+//! ```ignore
+//! use config::load_config;
+//! let config = load_config()?;
+//! config.validate()?;
+//! ```
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::warn;

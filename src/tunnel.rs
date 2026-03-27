@@ -1,3 +1,34 @@
+//! SSH tunnel management for secure database access.
+//!
+//! This module provides SSH tunnel functionality for connecting to MySQL databases
+//! through bastion hosts or jump servers. It spawns and manages `ssh` child processes
+//! with local port forwarding, handling the full lifecycle from establishment to
+//! graceful shutdown.
+//!
+//! # Key Types
+//!
+//! - [`TunnelHandle`] - Owning handle to a live SSH tunnel; dropping it tears down the tunnel
+//!
+//! # Key Functions
+//!
+//! - [`spawn_ssh_tunnel`] - Establishes a new SSH tunnel and returns a handle
+//! - [`build_ssh_args`] - Constructs SSH command-line arguments (usable for testing)
+//!
+//! # Features
+//!
+//! - Automatic local port allocation
+//! - Configurable host key verification (strict, accept-new, insecure)
+//! - Zombie process prevention via background reaper task
+//! - Graceful async shutdown via [`TunnelHandle::close`]
+//!
+//! # Example
+//!
+//! ```ignore
+//! let tunnel = spawn_ssh_tunnel(&ssh_config, "db.internal", 3306).await?;
+//! // Connect to 127.0.0.1:tunnel.local_port
+//! tunnel.close().await?;
+//! ```
+
 use crate::config::SshConfig;
 use anyhow::Result;
 use std::net::TcpListener;

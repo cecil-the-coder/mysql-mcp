@@ -30,8 +30,23 @@ pub struct ExplainResult {
     pub tier: ExplainTier,
 }
 
-pub async fn run_explain(pool: &MySqlPool, sql: &str) -> Result<ExplainResult> {
-    let timeout_ms = query_timeout_from_env();
+/// Execute EXPLAIN FORMAT=JSON for the given SQL query.
+///
+/// # Arguments
+/// * `pool` - MySQL connection pool
+/// * `sql` - The SQL query to explain
+/// * `query_timeout_ms` - Optional timeout in milliseconds. When None, falls back to
+///   the MYSQL_QUERY_TIMEOUT environment variable for backward compatibility.
+///
+/// # Note
+/// Prefer passing the timeout from config (pool.query_timeout_ms) for consistency
+/// with other query operations rather than relying on the environment variable fallback.
+pub async fn run_explain(
+    pool: &MySqlPool,
+    sql: &str,
+    query_timeout_ms: Option<u64>,
+) -> Result<ExplainResult> {
+    let timeout_ms = query_timeout_ms.unwrap_or_else(query_timeout_from_env);
     let explain_sql = format!("EXPLAIN FORMAT=JSON {}", sql);
     let explain_fut = async {
         sqlx::query(&explain_sql)
@@ -80,6 +95,7 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT table_name FROM information_schema.tables LIMIT 5",
+            None,
         )
         .await;
         assert!(
@@ -120,6 +136,7 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_fts WHERE val = 'hello'",
+            None,
         )
         .await;
         assert!(
@@ -163,6 +180,7 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_idx WHERE val = 'hello'",
+            None,
         )
         .await;
         assert!(
@@ -213,6 +231,7 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT a.name, b.score FROM explain_join_a a JOIN explain_join_b b ON a.id = b.a_id",
+            None,
         )
         .await;
         assert!(
@@ -259,6 +278,7 @@ mod tests {
         let er = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_fts WHERE val = 'hello'",
+            None,
         )
         .await
         .unwrap();
@@ -294,6 +314,7 @@ mod tests {
         let er = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_idx WHERE val = 'hello'",
+            None,
         )
         .await
         .unwrap();
@@ -337,6 +358,7 @@ mod tests {
         let er = run_explain(
             &test_db.pool,
             "SELECT a.name, b.score FROM explain_join_a a JOIN explain_join_b b ON a.id = b.a_id",
+            None,
         )
         .await
         .unwrap();
@@ -368,6 +390,7 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_sort ORDER BY name",
+            None,
         )
         .await;
         assert!(
