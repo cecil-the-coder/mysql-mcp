@@ -172,18 +172,50 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         }
 
         Statement::Drop { names, .. } => {
-            let schema = names.first().and_then(extract_schema_from_object_name);
-            let table = names.first().and_then(extract_table_from_object_name);
+            // Collect schemas from ALL table names in the DROP statement.
+            // Multi-table DROP syntax: DROP TABLE db1.t1, db2.t2 ...
+            // We must check permissions for every referenced schema.
+            let first_name = names.first();
+            let schema = first_name.and_then(extract_schema_from_object_name);
+            let table = first_name.and_then(extract_table_from_object_name);
+
+            // Collect all distinct schemas from all table names.
+            let mut all_schemas: Vec<String> = Vec::new();
+            let mut seen_schemas: HashSet<String> = HashSet::new();
+            for name in names {
+                if let Some(s) = extract_schema_from_object_name(name) {
+                    if seen_schemas.insert(s.to_lowercase()) {
+                        all_schemas.push(s);
+                    }
+                }
+            }
+
+            all_target_schemas = all_schemas;
             (StatementType::Drop, schema, table)
         }
 
         Statement::Truncate { table_names, .. } => {
-            let schema = table_names
-                .first()
-                .and_then(|t| extract_schema_from_object_name(&t.name));
-            let table = table_names
-                .first()
-                .and_then(|t| extract_table_from_object_name(&t.name));
+            // Collect schemas from ALL table names in the TRUNCATE statement.
+            // While MySQL's TRUNCATE currently supports only a single table,
+            // the sqlparser AST uses a Vec for table_names. If a future MySQL
+            // version or alternative parser allows multi-table TRUNCATE, we must
+            // check permissions for every referenced schema.
+            let first_name = table_names.first();
+            let schema = first_name.and_then(|t| extract_schema_from_object_name(&t.name));
+            let table = first_name.and_then(|t| extract_table_from_object_name(&t.name));
+
+            // Collect all distinct schemas from all table names.
+            let mut all_schemas: Vec<String> = Vec::new();
+            let mut seen_schemas: HashSet<String> = HashSet::new();
+            for t in table_names {
+                if let Some(s) = extract_schema_from_object_name(&t.name) {
+                    if seen_schemas.insert(s.to_lowercase()) {
+                        all_schemas.push(s);
+                    }
+                }
+            }
+
+            all_target_schemas = all_schemas;
             (StatementType::Truncate, schema, table)
         }
 
