@@ -135,6 +135,8 @@ A `.env` file in the working directory is loaded automatically if present.
 | `pool.slow_query_threshold_ms` | `MYSQL_SLOW_QUERY_THRESHOLD_MS` | u64 | `500` | Threshold used by `performance_hints=auto` |
 | `pool.max_rows` | `MYSQL_MAX_ROWS` | u32 | `1000` | Cap on rows returned per query; `LIMIT {max_rows}` is appended when the query has no LIMIT. `0` disables the cap |
 | `pool.cache_ttl_secs` | `MYSQL_CACHE_TTL` | u64 | `60` | Schema introspection cache TTL in seconds (`0` disables caching) |
+| `pool.retry_attempts` | `MYSQL_RETRY_ATTEMPTS` | u32 | `2` | Number of retry attempts for transient network errors; uses exponential backoff (100ms, 200ms) between attempts; 0–10 |
+| `pool.max_result_memory_mb` | `MYSQL_MAX_RESULT_MEMORY_MB` | u32 | `256` | Maximum memory in MB for result sets; when exceeded, results are truncated with a warning in parse_warnings; 1–16384 |
 
 ### Security
 
@@ -150,6 +152,7 @@ A `.env` file in the working directory is loaded automatically if present.
 | `security.schema_permissions` | `MYSQL_SCHEMA_<NAME>_PERMISSIONS` | map | `{}` | Per-schema write permission overrides (see below) |
 | `security.allow_runtime_connections` | `MYSQL_ALLOW_RUNTIME_CONNECTIONS` | bool | `false` | Allow `mysql_connect` to accept raw credentials at runtime |
 | `security.max_sessions` | `MYSQL_MAX_SESSIONS` | u32 | `50` | Maximum number of concurrent named sessions |
+| `security.max_total_connections` | `MYSQL_MAX_TOTAL_CONNECTIONS` | u32 | `100` | Maximum total database connections across all sessions (default pool + named session pools). Each named session uses 5 connections. |
 
 ### SSH Tunnel
 
@@ -325,6 +328,28 @@ Get the execution plan for a SELECT query without running it. Returns index usag
 **Response**
 
 Returns the same `plan` object as described for `mysql_query` above.
+
+---
+
+### `mysql_list_tables`
+
+List all tables in the current or specified database. More discoverable than querying information_schema directly.
+
+**Parameters**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `database` | string | no | Database name to list tables from (uses connected database if omitted) |
+| `session` | string | no | Named session to use |
+
+**Response**
+
+Returns a JSON object with:
+
+| Field | Type | Description |
+|---|---|---|
+| `tables` | array of strings | List of table names in the database, sorted alphabetically |
+| `database` | string | The database name that was queried |
 
 ---
 
