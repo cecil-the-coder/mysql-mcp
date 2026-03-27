@@ -1,3 +1,23 @@
+//! Read-only query execution with automatic limiting and EXPLAIN analysis.
+//!
+//! This module handles execution of read-only SQL statements (SELECT, SHOW, EXPLAIN)
+//! against a MySQL database. Key features:
+//!
+//! - **Automatic LIMIT injection**: When `max_rows` is configured and a SELECT query
+//!   lacks a LIMIT clause, one is automatically appended to prevent unbounded result sets.
+//!   Results exceeding the limit are truncated and flagged via `QueryResult::capped`.
+//!
+//! - **Memory limits**: Results are tracked for memory usage during serialization and
+//!   truncated if they exceed `max_result_memory_mb`, with a warning added to the response.
+//!
+//! - **EXPLAIN-based performance analysis**: When `performance_hints` is enabled, the
+//!   module can automatically run EXPLAIN on slow SELECT queries and return the execution
+//!   plan for analysis.
+//!
+//! - **Type-aware JSON serialization**: MySQL rows are converted to JSON with careful
+//!   handling of MySQL-specific types (BIGINT precision, DATETIME formatting, binary
+//!   columns as hex, DECIMAL as strings to preserve precision, etc.).
+
 use crate::sql_parser::{ParsedStatement, StatementType};
 use anyhow::Result;
 use serde_json::{Map, Value};

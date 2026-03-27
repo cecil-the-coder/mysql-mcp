@@ -1,3 +1,11 @@
+//! MCP tool handler implementations.
+//!
+//! This module contains the MCP tool handler implementations (mysql_query,
+//! mysql_schema_info, mysql_connect, mysql_explain_plan, etc.) that bridge the
+//! rmcp protocol layer to the underlying query, schema, and session logic.
+//! Handlers validate input parameters, resolve sessions, execute operations,
+//! and serialize responses.
+
 use rmcp::model::CallToolResult;
 use serde_json::json;
 

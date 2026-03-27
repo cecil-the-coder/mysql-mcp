@@ -18,6 +18,35 @@ A MySQL MCP (Model Context Protocol) server written in Rust. It exposes a MySQL 
 - **SSL support**: encrypted connections with optional CA verification
 - **Unix socket support**: connect via socket path instead of host:port
 
+## Architecture
+
+mysql-mcp follows a modular design with clear separation of concerns:
+
+- **`main.rs`** — Entry point that sets up the async runtime (Tokio) and initializes the MCP server.
+- **`config/`** — Configuration layer that merges TOML files, environment variables, and defaults into a unified config.
+- **`db.rs`** — MySQL connection pooling via `sqlx`, with configurable pool size and timeouts.
+- **`server/`** — MCP tool handlers (`mysql_query`, `mysql_schema_info`, etc.) and named session management.
+- **`query/`** — SQL execution engine with retry logic for transient errors, EXPLAIN parsing, and performance hints.
+- **`schema/`** — Cached schema introspection for table metadata, indexes, and foreign keys.
+- **`sql_parser/`** — SQL statement classification (SELECT, INSERT, DDL, etc.) for permission checks.
+- **`tunnel.rs`** — SSH subprocess-based tunneling for reaching databases behind bastion hosts.
+
+### Data Flow
+
+```
+MCP Request → Tool Handler → Permission Check → SQL Parser → Query Execution → JSON Response
+                              ↓
+                        Schema Cache (if needed)
+```
+
+1. An MCP client sends a tool invocation (e.g., `mysql_query`)
+2. The tool handler validates parameters and resolves the target session
+3. The SQL parser classifies the statement; permissions are checked against config
+4. If allowed, the query executor runs the SQL against the connection pool
+5. Results are serialized to JSON and returned to the client
+
+---
+
 ## Quick Start
 
 ### Installation

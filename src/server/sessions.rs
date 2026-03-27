@@ -1,3 +1,25 @@
+//! Named database session management for multi-database connectivity.
+//!
+//! This module implements [`SessionStore`] which manages both the default connection
+//! (configured at startup) and named sessions created at runtime via the `mysql_connect` tool.
+//!
+//! # Key Features
+//!
+//! - **Session creation**: Create named database connections with optional SSH tunnel support
+//!   for accessing databases through bastion hosts
+//! - **Idle session reaping**: Sessions track their `last_used` timestamp; the server's
+//!   reaper task cleans up sessions idle for more than 10 minutes
+//! - **Connection pool limits**: Each named session uses a fixed pool size (5 connections),
+//!   with enforcement of `max_sessions` and `max_total_connections` limits
+//! - **Session lifecycle**: Full lifecycle management including creation, lookup,
+//!   listing, and cleanup with proper resource release
+//!
+//! # Session Resolution
+//!
+//! Tools that accept a `session` parameter use [`SessionStore::resolve_session`] to
+//! obtain a [`SessionContext`] containing the connection pool and schema introspector.
+//! If no session is specified, the default connection is used.
+
 use rmcp::model::CallToolResult;
 use serde_json::json;
 use std::collections::hash_map::Entry;

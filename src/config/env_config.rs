@@ -1,3 +1,25 @@
+//! Environment variable configuration for the MySQL MCP server.
+//!
+//! This module provides environment variable parsing for all `MYSQL_*` configuration
+//! options, allowing configuration to be supplied via environment variables instead of
+//! or in addition to TOML config files.
+//!
+//! The [`EnvConfig`] struct holds optional overrides parsed from environment variables.
+//! These overrides are merged onto a TOML base config via the [`EnvConfig::apply_to`]
+//! method, with environment variables taking precedence over TOML values.
+//!
+//! # Per-Schema Permissions
+//!
+//! This module also handles parsing of `MYSQL_SCHEMA_<NAME>_PERMISSIONS` environment
+//! variables for per-schema permission overrides. For example:
+//!
+//! ```text
+//! MYSQL_SCHEMA_mydb_PERMISSIONS=insert,update
+//! ```
+//!
+//! This allows write operations (insert and update) specifically for the `mydb` schema,
+//! overriding the global permission settings.
+
 use crate::config::{Config, SchemaPermissions};
 use std::collections::HashMap;
 
