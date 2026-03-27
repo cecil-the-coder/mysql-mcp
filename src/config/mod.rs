@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::warn;
 
 pub mod env_config;
 #[cfg(test)]
@@ -201,12 +202,10 @@ impl Config {
 
         // -- SSL checks --
         if sec.ssl_ca.is_some() && !sec.ssl {
-            eprintln!(
-                "Warning: MYSQL_SSL_CA is set but MYSQL_SSL is false; CA cert will be ignored"
-            );
+            warn!("MYSQL_SSL_CA is set but MYSQL_SSL is false; CA cert will be ignored");
         }
         if sec.ssl_accept_invalid_certs {
-            eprintln!("Warning: ssl_accept_invalid_certs is enabled — TLS validation disabled");
+            warn!("ssl_accept_invalid_certs is enabled — TLS validation disabled");
         }
 
         // -- Pool bound checks --
@@ -313,7 +312,7 @@ pub(crate) fn load_toml_config(path: &std::path::Path) -> anyhow::Result<Config>
 pub fn load_config() -> anyhow::Result<Config> {
     if std::path::Path::new(".env").exists() {
         if let Err(e) = dotenv::dotenv() {
-            eprintln!("Warning: failed to parse .env file: {}", e);
+            warn!("failed to parse .env file: {}", e);
         }
     }
     let path = std::env::var("MCP_CONFIG_FILE")
