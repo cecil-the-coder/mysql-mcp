@@ -164,13 +164,17 @@ impl McpServer {
         // Total connections counter shared between session store and reaper
         let total_connections: Arc<AtomicU32> = Arc::new(AtomicU32::new(config.pool.size));
 
+        // Shutdown channel for graceful termination of the session reaper task.
+        // When McpServer is dropped, the sender is dropped, causing receivers to get
+        // a Closed error, which signals the reaper to exit.
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+
         // Background task: drop sessions idle for > 10 minutes (600 s).
         // "default" is never dropped. SSH tunnels are explicitly closed so the
         // subprocess is reaped rather than relying on Drop's non-blocking start_kill().
         // The task exits when _shutdown_tx is dropped (server shutdown).
         let sessions_reaper = sessions.clone();
         let reaper_total_connections = total_connections.clone();
-        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {

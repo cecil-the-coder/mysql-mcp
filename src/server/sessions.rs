@@ -1,5 +1,6 @@
 use rmcp::model::CallToolResult;
 use serde_json::json;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -308,7 +309,7 @@ impl SessionStore {
         );
 
         // Pre-check: fast path before the expensive pool/tunnel creation.
-        // We re-check both conditions after creation to handle concurrent races.
+        // A single atomic check-and-insert after pool creation handles any races.
         {
             let sessions = self.sessions.lock().await;
             if sessions.len() >= self.config.security.max_sessions as usize {
@@ -414,37 +415,9 @@ impl SessionStore {
             "database": &database,
             "ssh_host": &ssh_host,
         });
-        {
-            let sessions = self.sessions.lock().await;
-            if sessions.len() >= self.config.security.max_sessions as usize {
-                // Drop the lock before closing resources — tunnel.close() or pool.close()
-                // could be slow, and holding the lock would block all session operations.
-                drop(sessions);
-                if let Some(t) = tunnel {
-                    close_tunnel_with_timeout(t, "on session limit rejection").await;
-                }
-                pool.close().await;
-                self.total_connections
-                    .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
-                return tool_error!(
-                    "Maximum session limit ({}) reached. Disconnect an existing session first.",
-                    self.config.security.max_sessions
-                );
-            }
-            if sessions.contains_key(&name) {
-                drop(sessions);
-                if let Some(t) = tunnel {
-                    close_tunnel_with_timeout(t, "on duplicate session rejection").await;
-                }
-                pool.close().await;
-                self.total_connections
-                    .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
-                return tool_error!(
-                    "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
-                    name
-                );
-            }
-        }
+
+        // Single atomic check-and-insert using entry API.
+        // This eliminates the redundant triple-checking pattern while maintaining correctness.
         let session = Session {
             pool,
             introspector,
@@ -454,27 +427,45 @@ impl SessionStore {
             tunnel,
             ssh_host,
         };
-        // Re-acquire the lock to insert. A concurrent connect() could have raced
-        // us since we released the lock above; re-check before inserting.
+
         let mut sessions = self.sessions.lock().await;
-        if sessions.len() >= self.config.security.max_sessions as usize
-            || sessions.contains_key(&name)
-        {
-            // Lost the race — clean up and report. Release the reserved connection slots.
+        // Check session limit first
+        if sessions.len() >= self.config.security.max_sessions as usize {
+            // Release lock before cleanup operations
             drop(sessions);
             if let Some(t) = session.tunnel {
-                close_tunnel_with_timeout(t, "on post-race cleanup").await;
+                close_tunnel_with_timeout(t, "on session limit rejection").await;
             }
             session.pool.close().await;
             self.total_connections
                 .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
             return tool_error!(
-                "Session name '{}' is now taken. Please try a different name.",
-                name
+                "Maximum session limit ({}) reached. Disconnect an existing session first.",
+                self.config.security.max_sessions
             );
         }
-        sessions.insert(name, session);
-        // Connection slots were already reserved atomically at the start of handle_connect
+
+        // Use entry API for atomic check-and-insert
+        match sessions.entry(name.clone()) {
+            Entry::Occupied(_) => {
+                // Release lock before cleanup operations
+                drop(sessions);
+                if let Some(t) = session.tunnel {
+                    close_tunnel_with_timeout(t, "on duplicate session rejection").await;
+                }
+                session.pool.close().await;
+                self.total_connections
+                    .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
+                return tool_error!(
+                    "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
+                    name
+                );
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(session);
+                // Connection slots were already reserved atomically at the start of handle_connect
+            }
+        }
 
         // Add security warnings if any
         let mut response = info;
