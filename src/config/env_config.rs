@@ -93,10 +93,18 @@ pub fn load_env_config() -> EnvConfig {
 /// Format: MYSQL_SCHEMA_mydb_PERMISSIONS=insert,update (comma-separated allowed ops)
 fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
     let mut map = HashMap::new();
+    const PREFIX: &str = "MYSQL_SCHEMA_";
+    const SUFFIX: &str = "_PERMISSIONS";
+
     for (key, val) in std::env::vars() {
+        // Early filter: skip keys that don't start with our prefix to avoid
+        // unnecessary string operations on irrelevant environment variables.
+        if !key.starts_with(PREFIX) {
+            continue;
+        }
         if let Some(schema_name) = key
-            .strip_prefix("MYSQL_SCHEMA_")
-            .and_then(|s| s.strip_suffix("_PERMISSIONS"))
+            .strip_prefix(PREFIX)
+            .and_then(|s| s.strip_suffix(SUFFIX))
         {
             let schema_name = schema_name.to_lowercase();
             if schema_name.is_empty() {

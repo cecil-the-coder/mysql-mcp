@@ -1,6 +1,16 @@
 use anyhow::Result;
 use sqlx::MySqlPool;
-use std::time::Duration;
+
+use super::with_timeout;
+
+/// Read MYSQL_QUERY_TIMEOUT from environment, returning the value in milliseconds.
+/// Returns 0 (no timeout) if not set or if parsing fails.
+fn query_timeout_from_env() -> u64 {
+    std::env::var("MYSQL_QUERY_TIMEOUT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+}
 
 /// Query performance tier derived from EXPLAIN output.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -21,12 +31,15 @@ pub struct ExplainResult {
 }
 
 pub async fn run_explain(pool: &MySqlPool, sql: &str) -> Result<ExplainResult> {
+    let timeout_ms = query_timeout_from_env();
     let explain_sql = format!("EXPLAIN FORMAT=JSON {}", sql);
-    let explain_fut = sqlx::query(&explain_sql).fetch_one(pool);
-    let row: sqlx::mysql::MySqlRow = tokio::time::timeout(Duration::from_secs(30), explain_fut)
-        .await
-        .map_err(|_| anyhow::anyhow!("EXPLAIN query timed out after 30 seconds"))?
-        .map_err(anyhow::Error::from)?;
+    let explain_fut = async {
+        sqlx::query(&explain_sql)
+            .fetch_one(pool)
+            .await
+            .map_err(anyhow::Error::from)
+    };
+    let row: sqlx::mysql::MySqlRow = with_timeout(timeout_ms, "EXPLAIN", explain_fut).await?;
 
     // EXPLAIN FORMAT=JSON returns a single row with one column: the JSON string
     use sqlx::Row;
