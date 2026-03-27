@@ -13,7 +13,7 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 
 use crate::config::Config;
 use crate::schema::SchemaIntrospector;
@@ -144,6 +144,8 @@ pub struct McpServer {
     /// Holds the SSH tunnel for the default session alive for the server's lifetime.
     /// None when not using SSH tunneling.
     _default_tunnel: Option<crate::tunnel::TunnelHandle>,
+    /// When dropped, signals the session reaper task to shut down.
+    _shutdown_tx: oneshot::Sender<()>,
 }
 
 impl McpServer {
@@ -165,12 +167,18 @@ impl McpServer {
         // Background task: drop sessions idle for > 10 minutes (600 s).
         // "default" is never dropped. SSH tunnels are explicitly closed so the
         // subprocess is reaped rather than relying on Drop's non-blocking start_kill().
+        // The task exits when _shutdown_tx is dropped (server shutdown).
         let sessions_reaper = sessions.clone();
         let reaper_total_connections = total_connections.clone();
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    // Prioritize shutdown signal over interval tick
+                    _ = &mut shutdown_rx => break,
+                    _ = interval.tick() => {}
+                }
                 // Use a single lock scope for both identifying and removing stale sessions
                 // to avoid TOCTOU race conditions between collection and removal.
                 let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(600);
@@ -216,6 +224,7 @@ impl McpServer {
             introspector,
             store,
             _default_tunnel: tunnel,
+            _shutdown_tx: shutdown_tx,
         }
     }
 

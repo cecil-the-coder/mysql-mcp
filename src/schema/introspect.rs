@@ -88,8 +88,14 @@ fn key_matches_table_and_db(key: &str, table: &str, database: Option<&str>) -> b
             }
         }
         None => {
-            // Key has no tab separator - shouldn't happen for table-specific caches,
-            // but handle gracefully by not matching
+            // Key has no tab separator - shouldn't happen for table-specific caches.
+            // Log a warning to help diagnose cache integrity issues, and don't match
+            // so the caller's retain() will keep the entry (though it should be removed
+            // manually if this occurs).
+            tracing::warn!(
+                "malformed cache key '{}' lacks tab separator; cache entry may persist indefinitely",
+                key
+            );
             false
         }
     }

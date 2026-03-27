@@ -291,7 +291,8 @@ impl SessionStore {
         };
 
         let explain_start = std::time::Instant::now();
-        match crate::query::explain::run_explain(&ctx.pool, &sql).await {
+        let query_timeout_ms = self.config.pool.query_timeout_ms;
+        match crate::query::explain::run_explain(&ctx.pool, &sql, Some(query_timeout_ms)).await {
             Ok(plan) => {
                 let elapsed = explain_start.elapsed().as_millis() as u64;
                 let output = json!({
