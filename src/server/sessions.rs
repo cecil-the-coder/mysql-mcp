@@ -293,8 +293,21 @@ impl SessionStore {
             }
         }
         if let Some(ref khf) = ssh_known_hosts_file {
-            if !std::path::Path::new(khf).exists() {
-                return tool_error!("SSH known_hosts file not found: {}", khf);
+            let khf_path = std::path::Path::new(khf);
+            if ssh_known_hosts_check == "strict" {
+                if !khf_path.exists() {
+                    return tool_error!(
+                        "SSH known_hosts file not found: {} (required for strict mode)",
+                        khf
+                    );
+                }
+            } else if let Some(parent) = khf_path.parent() {
+                if !parent.exists() {
+                    return tool_error!(
+                        "SSH known_hosts_file parent directory does not exist: {}",
+                        parent.display()
+                    );
+                }
             }
         }
 

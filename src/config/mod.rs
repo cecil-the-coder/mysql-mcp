@@ -292,8 +292,8 @@ impl Config {
 
         // -- File existence checks --
         if let Some(ref ca) = sec.ssl_ca {
-            if !std::path::Path::new(ca).exists() {
-                anyhow::bail!("MYSQL_SSL_CA path does not exist: {}", ca);
+            if let Err(e) = std::fs::File::open(ca) {
+                anyhow::bail!("MYSQL_SSL_CA path is not readable: {} ({})", ca, e);
             }
         }
 
