@@ -78,7 +78,8 @@ where
 
                 // Calculate backoff: 100ms * 2^attempt (100ms, 200ms, 400ms, ...)
                 // with ±25% jitter to prevent thundering herd
-                let base_ms = 100u64 * (1u64 << (attempt - 1).min(10)); // cap at ~100s
+                // Max shift of 10 gives 100 * 1024 = 102,400ms (~102s max backoff)
+                let base_ms = 100u64.saturating_mul(1u64 << (attempt - 1).min(10));
                 let nanos = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()

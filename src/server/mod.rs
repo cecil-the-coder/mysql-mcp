@@ -171,35 +171,33 @@ impl McpServer {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
                 interval.tick().await;
+                // Use a single lock scope for both identifying and removing stale sessions
+                // to avoid TOCTOU race conditions between collection and removal.
                 let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(600);
-                let stale: Vec<String> = {
-                    let map = sessions_reaper.lock().await;
-                    map.iter()
+                let reaped: Vec<sessions::Session> = {
+                    let mut map = sessions_reaper.lock().await;
+                    let stale_names: Vec<String> = map
+                        .iter()
                         .filter(|(_, s)| s.last_used <= cutoff)
                         .map(|(name, _)| name.clone())
-                        .collect()
+                        .collect();
+                    let mut reaped = Vec::with_capacity(stale_names.len());
+                    for name in stale_names {
+                        if let Some(session) = map.remove(&name) {
+                            // Decrement total connections counter for reaped session
+                            reaper_total_connections
+                                .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Release);
+                            reaped.push(session);
+                        }
+                    }
+                    reaped
                 };
-                for name in stale {
-                    let mut map = sessions_reaper.lock().await;
-                    // Re-check: session may have been used since we collected the stale
-                    // list (TOCTOU). If last_used has advanced past the cutoff, skip it.
-                    let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(600);
-                    if let Some(session) = map.get(&name) {
-                        if session.last_used > cutoff {
-                            continue;
-                        }
+                // Perform async cleanup outside the lock
+                for session in reaped {
+                    if let Some(tunnel) = session.tunnel {
+                        sessions::close_tunnel_with_timeout(tunnel, "during session reap").await;
                     }
-                    if let Some(session) = map.remove(&name) {
-                        // Decrement total connections counter for reaped session
-                        reaper_total_connections
-                            .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Release);
-                        drop(map); // release lock before awaiting async operations
-                        if let Some(tunnel) = session.tunnel {
-                            sessions::close_tunnel_with_timeout(tunnel, "during session reap")
-                                .await;
-                        }
-                        session.pool.close().await;
-                    }
+                    session.pool.close().await;
                 }
             }
         });

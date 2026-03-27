@@ -374,14 +374,8 @@ impl SchemaIntrospector {
         indexed_columns_cache.retain(|key, _| !key_matches_table_and_db(key, table, database));
         composite_indexes_cache.retain(|key, _| !key_matches_table_and_db(key, table, database));
 
-        match database {
-            Some(db) => {
-                tables_cache.remove(db);
-            }
-            None => {
-                tables_cache.remove("");
-            }
-        }
+        let cache_key = database.unwrap_or("");
+        tables_cache.remove(cache_key);
     }
 
     /// Invalidate ALL cached schema data (tables list + all column caches).
