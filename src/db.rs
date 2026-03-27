@@ -183,10 +183,20 @@ pub fn build_connect_options(config: &Config) -> Result<MySqlConnectOptions> {
             let opts = MySqlConnectOptions::from_str(cs)?;
             return Ok(opts);
         } else {
+            // Find where to truncate the preview. If "://" is present, include it;
+            // otherwise truncate to 32 bytes, walking back to a valid UTF-8 char boundary.
+            let split_pos = if let Some(i) = cs.find("://") {
+                i + 3
+            } else {
+                let mut pos = cs.len().min(32);
+                while pos > 0 && !cs.is_char_boundary(pos) {
+                    pos -= 1;
+                }
+                pos
+            };
             anyhow::bail!(
                 "connection_string must start with 'mysql://' or 'mysql+ssl://', got: '{}'",
-                cs.split_at(cs.find("://").map(|i| i + 3).unwrap_or(cs.len().min(32)))
-                    .0
+                &cs[..split_pos]
             );
         }
     }
