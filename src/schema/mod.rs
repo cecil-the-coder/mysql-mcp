@@ -146,7 +146,13 @@ impl SchemaIntrospector {
             for row in &rows {
                 use sqlx::Row;
                 let name: String = fetch::is_col_str(row, "INDEX_NAME");
-                let non_unique: i64 = row.try_get("NON_UNIQUE").unwrap_or(1);
+                let non_unique: i64 = row.try_get("NON_UNIQUE").unwrap_or_else(|e| {
+                    tracing::debug!(
+                        "NON_UNIQUE column missing from STATISTICS query for index '{}', defaulting to non-unique: {}",
+                        name, e
+                    );
+                    1
+                });
                 let col: String = fetch::is_col_str(row, "COLUMN_NAME");
                 let idx_type: String = fetch::is_col_str(row, "INDEX_TYPE");
                 let nullable: String = fetch::is_col_str(row, "NULLABLE");

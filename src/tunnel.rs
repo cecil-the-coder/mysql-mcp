@@ -92,7 +92,8 @@ async fn reap_zombies() {
         match child.try_wait() {
             Ok(Some(_status)) => {
                 // Child has exited and been reaped
-                tracing::trace!(pid = child.id().unwrap_or(0), "Reaped zombie SSH process");
+                // Log the PID if available; None indicates the process already exited
+                tracing::trace!(pid = child.id(), "Reaped zombie SSH process");
             }
             Ok(None) => {
                 // Child still running, keep it for next cycle
@@ -288,7 +289,7 @@ pub async fn spawn_ssh_tunnel(
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         // Check if the child process has already exited (tunnel failed to start)
-        let child = handle.child.as_mut().unwrap(); // safe: we just created it
+        let child = handle.child.as_mut().expect("child must exist immediately after construction");
         match child.try_wait() {
             Ok(Some(status)) => {
                 // Collect any buffered stderr for diagnostics (best effort, 500 ms cap).

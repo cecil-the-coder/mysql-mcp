@@ -232,7 +232,13 @@ pub(crate) async fn fetch_composite_indexes(
     for row in &rows {
         use sqlx::Row;
         let name = is_col_str(row, "INDEX_NAME");
-        let non_unique: i64 = row.try_get("NON_UNIQUE").unwrap_or(1);
+        let non_unique: i64 = row.try_get("NON_UNIQUE").unwrap_or_else(|e| {
+            tracing::debug!(
+                "NON_UNIQUE column missing from STATISTICS query for index '{}', defaulting to non-unique: {}",
+                name, e
+            );
+            1
+        });
         let col = is_col_str(row, "COLUMN_NAME");
         let entry = index_map.entry(name.clone()).or_insert_with(|| IndexDef {
             name,
