@@ -354,7 +354,10 @@ mod write_tests {
 
     /// Serialization overhead: measure DB time vs JSON serialization time separately.
     /// Uses a wide table (10 varchar + 10 int columns) with 1 000 and 100 rows.
+    /// Ignored by default: timing assertions are unreliable on shared CI runners.
+    /// Run manually with: cargo test perf_serialization_overhead -- --ignored
     #[tokio::test]
+    #[ignore]
     async fn perf_serialization_overhead() {
         let Some(test_db) = setup_test_db().await else {
             return;
