@@ -15,10 +15,6 @@ pub(crate) fn mysql_query_schema() -> Arc<serde_json::Map<String, serde_json::Va
                 "type": "string",
                 "description": "The SQL query to execute"
             },
-            "explain": {
-                "type": "boolean",
-                "description": "Set to true when investigating a slow query (default: false) — returns full execution plan including index usage, rows examined, and optimization suggestions. Overrides the server performance_hints setting for this call."
-            },
             "session": {
                 "type": "string",
                 "description": "Named session to route this query to (omit for default connection). Use 'default' or a session name from mysql_connect."

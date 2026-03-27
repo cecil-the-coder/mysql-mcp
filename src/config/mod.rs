@@ -218,6 +218,12 @@ impl Config {
         if pool.max_rows == 0 {
             anyhow::bail!("pool.max_rows must be >= 1");
         }
+        if pool.max_rows > 1_000_000 {
+            anyhow::bail!(
+                "pool.max_rows must be <= 1,000,000 (got: {})",
+                pool.max_rows
+            );
+        }
         if pool.max_result_memory_mb == 0 {
             anyhow::bail!("pool.max_result_memory_mb must be >= 1");
         }
