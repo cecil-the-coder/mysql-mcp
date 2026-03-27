@@ -446,10 +446,7 @@ fn test_is_low_cardinality_type() {
         !is_low_cardinality_type("bit(64)"),
         "bit(64) is NOT low cardinality (2^64 values)"
     );
-    assert!(
-        is_low_cardinality_type("BIT(1)"),
-        "BIT(1) case-insensitive"
-    );
+    assert!(is_low_cardinality_type("BIT(1)"), "BIT(1) case-insensitive");
     assert!(
         is_low_cardinality_type("tinyint(1) unsigned"),
         "tinyint(1) unsigned is low cardinality"
