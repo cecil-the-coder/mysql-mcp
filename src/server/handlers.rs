@@ -390,25 +390,22 @@ impl SessionStore {
                     // Generate schema-aware index suggestions when EXPLAIN detected a full
                     // table scan with no index used.
                     let mut suggestions: Vec<String> = vec![];
-                    let needs_suggestions = result.plan.as_ref().is_some_and(|p| {
-                        p.get("full_table_scan")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false)
-                            && p.get("index_used").map(|v| v.is_null()).unwrap_or(true)
-                    }) && parsed.target_table.is_some()
-                        && !parsed.where_columns.is_empty();
-                    if needs_suggestions {
-                        let tname = parsed
-                            .target_table
-                            .as_deref()
-                            .expect("target_table checked for Some above");
-                        suggestions = query_introspector
-                            .generate_index_suggestions(
-                                tname,
-                                session_db.as_deref(),
-                                &parsed.where_columns,
-                            )
-                            .await;
+                    if let Some(tname) = parsed.target_table.as_deref() {
+                        let needs_suggestions = result.plan.as_ref().is_some_and(|p| {
+                            p.get("full_table_scan")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                                && p.get("index_used").map(|v| v.is_null()).unwrap_or(true)
+                        }) && !parsed.where_columns.is_empty();
+                        if needs_suggestions {
+                            suggestions = query_introspector
+                                .generate_index_suggestions(
+                                    tname,
+                                    session_db.as_deref(),
+                                    &parsed.where_columns,
+                                )
+                                .await;
+                        }
                     }
 
                     // Structured performance log

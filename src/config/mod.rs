@@ -218,6 +218,12 @@ impl Config {
         if pool.max_rows == 0 {
             anyhow::bail!("pool.max_rows must be >= 1");
         }
+        if pool.max_rows > 1_000_000 {
+            anyhow::bail!(
+                "pool.max_rows must be <= 1,000,000 (got: {})",
+                pool.max_rows
+            );
+        }
         if pool.max_result_memory_mb == 0 || pool.max_result_memory_mb > 16384 {
             anyhow::bail!(
                 "pool.max_result_memory_mb must be between 1 and 16384 (got: {})",
@@ -246,6 +252,18 @@ impl Config {
                 "security.max_total_connections ({}) must be >= pool.size ({})",
                 sec.max_total_connections,
                 pool.size
+            );
+        }
+        // Warn if pool.size leaves no room for named sessions (each uses 5 connections)
+        const NAMED_SESSION_POOL_SIZE: u32 = 5;
+        if pool.size + NAMED_SESSION_POOL_SIZE > sec.max_total_connections {
+            warn!(
+                "pool.size ({}) leaves no room for named sessions: each named session requires {} connections. \
+                 Consider increasing max_total_connections (currently {}) or reducing pool.size to at least {}",
+                pool.size,
+                NAMED_SESSION_POOL_SIZE,
+                sec.max_total_connections,
+                sec.max_total_connections.saturating_sub(NAMED_SESSION_POOL_SIZE)
             );
         }
 

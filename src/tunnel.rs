@@ -2,8 +2,81 @@ use crate::config::SshConfig;
 use anyhow::Result;
 use std::net::TcpListener;
 use std::process::Stdio;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::process::{Child, Command};
+use tokio::sync::Mutex;
+
+/// Global registry of Child handles that need to be reaped.
+/// This prevents zombie processes when tunnels are dropped without a proper close()
+/// (e.g., during session reaper timeout scenarios).
+/// Uses tokio::sync::Mutex since reaping happens in async context.
+static ZOMBIE_REAPER: OnceLock<ZombieReaper> = OnceLock::new();
+
+/// Holds child processes awaiting reaping and ensures the background task is spawned.
+struct ZombieReaper {
+    children: Mutex<Vec<Child>>,
+}
+
+impl ZombieReaper {
+    /// Get or initialize the global zombie reaper.
+    fn get() -> &'static Self {
+        ZOMBIE_REAPER.get_or_init(|| {
+            // Spawn the background reaper task
+            spawn_reaper_task();
+            ZombieReaper {
+                children: Mutex::new(Vec::new()),
+            }
+        })
+    }
+
+    /// Register a child for eventual reaping.
+    /// Called from Drop via a spawned task since we can't await in Drop.
+    async fn register_child(&self, child: Child) {
+        self.children.lock().await.push(child);
+    }
+}
+
+/// Spawn the background task that periodically reaps zombie SSH processes.
+fn spawn_reaper_task() {
+    tokio::spawn(async {
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            reap_zombies().await;
+        }
+    });
+}
+
+/// Attempt to reap any registered zombie processes by calling wait() on them.
+async fn reap_zombies() {
+    let Some(reaper) = ZOMBIE_REAPER.get() else {
+        return;
+    };
+
+    let mut children = reaper.children.lock().await;
+    let mut still_running = Vec::new();
+
+    for mut child in children.drain(..) {
+        // Check if the child has exited using try_wait (non-blocking)
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                // Child has exited and been reaped
+                tracing::trace!(pid = child.id().unwrap_or(0), "Reaped zombie SSH process");
+            }
+            Ok(None) => {
+                // Child still running, keep it for next cycle
+                still_running.push(child);
+            }
+            Err(e) => {
+                // Error checking status (e.g., process already reaped elsewhere)
+                tracing::trace!("Error checking SSH process status: {}", e);
+            }
+        }
+    }
+
+    // Put back the children that are still running
+    *children = still_running;
+}
 
 /// A live SSH tunnel that forwards `127.0.0.1:{local_port}` through an SSH connection
 /// to a remote database host/port.
@@ -11,7 +84,8 @@ use tokio::process::{Child, Command};
 /// Dropping this handle kills the `ssh` child process — the tunnel tears down automatically
 /// when the owning `Session` is dropped or `close()` is called explicitly.
 pub struct TunnelHandle {
-    pub(crate) child: Child,
+    /// The SSH child process. Wrapped in Option to allow taking ownership in Drop.
+    pub(crate) child: Option<Child>,
     /// The local port on 127.0.0.1 that sqlx should connect to.
     pub local_port: u16,
 }
@@ -20,10 +94,12 @@ impl TunnelHandle {
     /// Gracefully close the tunnel: kill the ssh process and wait for it to exit.
     /// Prefer this over relying on Drop when you want clean teardown.
     pub async fn close(mut self) -> Result<()> {
-        self.child.kill().await?;
-        // Wait for the child to be fully reaped so no zombie process is left behind.
-        if let Err(e) = self.child.wait().await {
-            tracing::debug!("Failed to wait for SSH process: {}", e);
+        if let Some(mut child) = self.child.take() {
+            child.kill().await?;
+            // Wait for the child to be fully reaped so no zombie process is left behind.
+            if let Err(e) = child.wait().await {
+                tracing::debug!("Failed to wait for SSH process: {}", e);
+            }
         }
         Ok(())
     }
@@ -31,10 +107,36 @@ impl TunnelHandle {
 
 impl Drop for TunnelHandle {
     fn drop(&mut self) {
-        // Non-blocking best-effort kill. Cannot await in Drop.
-        // The OS will reap the child process when it exits.
-        if let Err(e) = self.child.start_kill() {
-            tracing::debug!("Failed to kill SSH process: {}", e);
+        // Take the child to hand off to the zombie reaper
+        if let Some(mut child) = self.child.take() {
+            // Non-blocking best-effort kill. Cannot await in Drop.
+            if let Err(e) = child.start_kill() {
+                tracing::debug!("Failed to kill SSH process: {}", e);
+                // Fall through to still register with reaper - the child may already be dead
+                // and we still need to call wait() on it to reap it.
+            }
+
+            // To prevent zombies, we need to ensure wait() is called eventually.
+            // Spawn a task to hand off the child to the zombie reaper.
+            // Try to register with the reaper via a spawned task
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    ZombieReaper::get().register_child(child).await;
+                });
+            } else {
+                // No tokio runtime available; spawn a thread that creates a minimal runtime
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .ok();
+                    if let Some(rt) = rt {
+                        rt.block_on(async {
+                            ZombieReaper::get().register_child(child).await;
+                        });
+                    }
+                });
+            }
         }
     }
 }
@@ -146,16 +248,20 @@ pub async fn spawn_ssh_tunnel(
             }
         })?;
 
-    let mut handle = TunnelHandle { child, local_port };
+    let mut handle = TunnelHandle {
+        child: Some(child),
+        local_port,
+    };
 
     // Poll until the local port is accepting connections or the child exits early.
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         // Check if the child process has already exited (tunnel failed to start)
-        match handle.child.try_wait() {
+        let child = handle.child.as_mut().unwrap(); // safe: we just created it
+        match child.try_wait() {
             Ok(Some(status)) => {
                 // Collect any buffered stderr for diagnostics (best effort, 500 ms cap).
-                let stderr_snippet = if let Some(mut stderr) = handle.child.stderr.take() {
+                let stderr_snippet = if let Some(mut stderr) = child.stderr.take() {
                     let mut buf = vec![0u8; 2048];
                     let n = tokio::time::timeout(
                         Duration::from_millis(500),
@@ -207,8 +313,10 @@ pub async fn spawn_ssh_tunnel(
             Err(_) => {
                 if std::time::Instant::now() >= deadline {
                     // Timeout — kill the child before returning error
-                    if let Err(e) = handle.child.start_kill() {
-                        tracing::debug!("Failed to kill SSH process on timeout: {}", e);
+                    if let Some(ref mut child) = handle.child {
+                        if let Err(e) = child.start_kill() {
+                            tracing::debug!("Failed to kill SSH process on timeout: {}", e);
+                        }
                     }
                     return Err(anyhow::anyhow!(
                         "SSH tunnel: timed out waiting for local port {} to become ready after 30s. \
