@@ -102,7 +102,10 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
         if !key.starts_with(PREFIX) {
             continue;
         }
-        if let Some(schema_name) = key.strip_prefix(PREFIX).and_then(|s| s.strip_suffix(SUFFIX)) {
+        if let Some(schema_name) = key
+            .strip_prefix(PREFIX)
+            .and_then(|s| s.strip_suffix(SUFFIX))
+        {
             let schema_name = schema_name.to_lowercase();
             if schema_name.is_empty() {
                 eprintln!("Warning: {key} has an empty schema name (double underscore?); expected MYSQL_SCHEMA_<name>_PERMISSIONS — skipping");
