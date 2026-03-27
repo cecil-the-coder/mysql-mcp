@@ -183,7 +183,7 @@ pub async fn execute_read_query(
     let (plan, explain_error): (Option<Value>, Option<String>) = if run_explain {
         // Use effective_sql_ref (which may have an injected LIMIT) so the EXPLAIN
         // plan reflects the query that was actually executed.
-        match crate::query::explain::run_explain(pool, effective_sql_ref).await {
+        match crate::query::explain::run_explain(pool, effective_sql_ref, Some(query_timeout_ms)).await {
             Ok(explain_result) => {
                 // Tier is computed inside parse_v2 based on full_table_scan and
                 // rows_examined_estimate — not wall-clock time, which includes
