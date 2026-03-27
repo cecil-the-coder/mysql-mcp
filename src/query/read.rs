@@ -113,7 +113,11 @@ pub async fn execute_read_query(
     // Serialization phase with memory tracking
     let ser_start = Instant::now();
     let mut warnings = warnings; // make mutable so row_to_json can push serialization warnings
-    let max_memory_bytes = (max_result_memory_mb as usize) * 1024 * 1024;
+    // Use saturating_mul to prevent overflow on 32-bit platforms where
+    // max_result_memory_mb * 1024 * 1024 could exceed usize::MAX.
+    let max_memory_bytes = (max_result_memory_mb as usize)
+        .saturating_mul(1024)
+        .saturating_mul(1024);
     let mut total_memory_bytes: usize = 0;
     let initial_capacity = if max_rows > 0 {
         rows.len().min(max_rows as usize + 1)
@@ -126,7 +130,7 @@ pub async fn execute_read_query(
 
         // Estimate memory usage of this row (rough approximation)
         // Use saturating arithmetic to prevent overflow on pathological data
-        let row_size: usize = json_row.values().map(estimate_value_size).sum();
+        let row_size: usize = json_row.values().map(estimate_value_size).fold(0, usize::saturating_add);
         let row_overhead = json_row.len().saturating_mul(32); // HashMap overhead per key
         let row_total = row_size.saturating_add(row_overhead);
 

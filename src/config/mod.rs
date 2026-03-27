@@ -233,6 +233,18 @@ impl Config {
                 pool.performance_hints
             );
         }
+        if pool.slow_query_threshold_ms == 0 || pool.slow_query_threshold_ms > 86_400_000 {
+            anyhow::bail!(
+                "pool.slow_query_threshold_ms must be between 1 and 86400000 ms (24 hours) (got: {})",
+                pool.slow_query_threshold_ms
+            );
+        }
+        if pool.cache_ttl_secs == 0 || pool.cache_ttl_secs > 86_400 {
+            anyhow::bail!(
+                "pool.cache_ttl_secs must be between 1 and 86400 seconds (24 hours) (got: {})",
+                pool.cache_ttl_secs
+            );
+        }
 
         // -- Security bound checks --
         if sec.max_sessions == 0 {
