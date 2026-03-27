@@ -13,7 +13,7 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 
 use crate::config::Config;
 use crate::schema::SchemaIntrospector;
@@ -144,6 +144,9 @@ pub struct McpServer {
     /// Holds the SSH tunnel for the default session alive for the server's lifetime.
     /// None when not using SSH tunneling.
     _default_tunnel: Option<crate::tunnel::TunnelHandle>,
+    /// Shutdown signal sender for the session reaper task.
+    /// When McpServer is dropped, this sender is dropped, signaling the reaper to exit.
+    _shutdown_tx: broadcast::Sender<()>,
 }
 
 impl McpServer {
@@ -162,6 +165,11 @@ impl McpServer {
         // Total connections counter shared between session store and reaper
         let total_connections: Arc<AtomicU32> = Arc::new(AtomicU32::new(config.pool.size));
 
+        // Shutdown channel for graceful termination of the session reaper task.
+        // When McpServer is dropped, the sender is dropped, causing receivers to get
+        // a Closed error, which signals the reaper to exit.
+        let (shutdown_tx, mut shutdown_rx) = broadcast::channel::<()>(1);
+
         // Background task: drop sessions idle for > 10 minutes (600 s).
         // "default" is never dropped. SSH tunnels are explicitly closed so the
         // subprocess is reaped rather than relying on Drop's non-blocking start_kill().
@@ -170,34 +178,42 @@ impl McpServer {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
-                interval.tick().await;
-                // Use a single lock scope for both identifying and removing stale sessions
-                // to avoid TOCTOU race conditions between collection and removal.
-                let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(600);
-                let reaped: Vec<sessions::Session> = {
-                    let mut map = sessions_reaper.lock().await;
-                    let stale_names: Vec<String> = map
-                        .iter()
-                        .filter(|(_, s)| s.last_used <= cutoff)
-                        .map(|(name, _)| name.clone())
-                        .collect();
-                    let mut reaped = Vec::with_capacity(stale_names.len());
-                    for name in stale_names {
-                        if let Some(session) = map.remove(&name) {
-                            // Decrement total connections counter for reaped session
-                            reaper_total_connections
-                                .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Release);
-                            reaped.push(session);
+                tokio::select! {
+                    _ = interval.tick() => {
+                        // Use a single lock scope for both identifying and removing stale sessions
+                        // to avoid TOCTOU race conditions between collection and removal.
+                        let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(600);
+                        let reaped: Vec<sessions::Session> = {
+                            let mut map = sessions_reaper.lock().await;
+                            let stale_names: Vec<String> = map
+                                .iter()
+                                .filter(|(_, s)| s.last_used <= cutoff)
+                                .map(|(name, _)| name.clone())
+                                .collect();
+                            let mut reaped = Vec::with_capacity(stale_names.len());
+                            for name in stale_names {
+                                if let Some(session) = map.remove(&name) {
+                                    // Decrement total connections counter for reaped session
+                                    reaper_total_connections
+                                        .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Release);
+                                    reaped.push(session);
+                                }
+                            }
+                            reaped
+                        };
+                        // Perform async cleanup outside the lock
+                        for session in reaped {
+                            if let Some(tunnel) = session.tunnel {
+                                sessions::close_tunnel_with_timeout(tunnel, "during session reap").await;
+                            }
+                            session.pool.close().await;
                         }
                     }
-                    reaped
-                };
-                // Perform async cleanup outside the lock
-                for session in reaped {
-                    if let Some(tunnel) = session.tunnel {
-                        sessions::close_tunnel_with_timeout(tunnel, "during session reap").await;
+                    _ = shutdown_rx.recv() => {
+                        // Shutdown signal received - exit gracefully
+                        tracing::debug!("Session reaper task shutting down");
+                        break;
                     }
-                    session.pool.close().await;
                 }
             }
         });
@@ -216,6 +232,7 @@ impl McpServer {
             introspector,
             store,
             _default_tunnel: tunnel,
+            _shutdown_tx: shutdown_tx,
         }
     }
 

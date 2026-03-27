@@ -167,11 +167,25 @@ fn walk_v1_table(table: &Value, stats: &mut PlanStats) {
         .as_f64()
         .or_else(|| table["rows"].as_f64())
         .unwrap_or_else(|| {
-            tracing::warn!(
-                "EXPLAIN v1 table node missing row count fields \
-                 (rows_examined_per_scan, rows); treating as 0"
-            );
-            0.0
+            // When row count fields are missing, use a conservative estimate.
+            // If this is a full table scan (ALL), we must not report 0 rows
+            // which would misleadingly classify the query as 'Fast'. Instead,
+            // use SLOW_ROW_THRESHOLD + 1 to ensure at least 'Slow' tier.
+            if stats.has_full_table_scan {
+                tracing::warn!(
+                    "EXPLAIN v1 table node missing row count fields \
+                     (rows_examined_per_scan, rows) for full table scan; \
+                     using conservative estimate of {}",
+                    SLOW_ROW_THRESHOLD + 1
+                );
+                (SLOW_ROW_THRESHOLD + 1) as f64
+            } else {
+                tracing::warn!(
+                    "EXPLAIN v1 table node missing row count fields \
+                     (rows_examined_per_scan, rows); treating as 0"
+                );
+                0.0
+            }
         });
 
     if table["using_filesort"].as_bool().unwrap_or(false) {
@@ -590,6 +604,36 @@ mod tests {
         assert_eq!(result.index_used.as_deref(), Some("PRIMARY"));
         assert_eq!(result.rows_examined_estimate, 1);
         assert_eq!(result.tier, ExplainTier::Fast);
+    }
+
+    #[test]
+    fn test_v1_full_table_scan_missing_rows_uses_conservative_estimate() {
+        // When a full table scan is detected but row count fields are missing,
+        // we should use a conservative estimate (SLOW_ROW_THRESHOLD + 1) to avoid
+        // misleading 'Fast' tier classification.
+        let v = make_v1(json!({
+            "select_id": 1,
+            "table": {
+                "table_name": "t",
+                "access_type": "ALL"
+                // Note: no rows_examined_per_scan or rows field
+            }
+        }));
+        let result = parse(&v).unwrap();
+        assert!(
+            result.full_table_scan,
+            "ALL access_type should be detected as full table scan"
+        );
+        assert!(
+            result.rows_examined_estimate > SLOW_ROW_THRESHOLD,
+            "missing rows with full scan should use conservative estimate > SLOW_ROW_THRESHOLD, got {}",
+            result.rows_examined_estimate
+        );
+        assert!(
+            result.tier != ExplainTier::Fast,
+            "full table scan with unknown row count should not be classified as Fast, got {:?}",
+            result.tier
+        );
     }
 
     #[test]
