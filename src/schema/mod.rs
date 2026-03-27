@@ -60,15 +60,16 @@ pub fn is_low_cardinality_type(data_type: &str) -> bool {
     let dt = data_type.to_lowercase();
     // TINYINT(1) is used as BOOLEAN in MySQL; BOOL/BOOLEAN are aliases.
     // ENUM and SET have a fixed, typically small value domain.
-    // BIT columns are usually 1-bit flags.
-    // bool/boolean are exact aliases; enum/set/bit use prefix matching so that
+    // BIT(1) is a single-bit flag (2 possible values). Multi-bit columns like BIT(64)
+    // are NOT low cardinality since they can represent 2^n distinct values.
+    // bool/boolean are exact aliases; enum/set/bit(1)/tinyint(1) use prefix matching so that
     // MySQL's full column_type strings like `enum('Y','N')`, `set('a','b')`,
     // and `bit(1)` are all recognised.
     dt == "bool"
         || dt == "boolean"
         || dt.starts_with("enum")
         || dt.starts_with("set")
-        || dt.starts_with("bit")
+        || dt.starts_with("bit(1)")
         || dt.starts_with("tinyint(1)")
 }
 
