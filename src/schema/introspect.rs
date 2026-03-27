@@ -73,12 +73,26 @@ pub struct SchemaIntrospector {
     pub(crate) inner: Arc<SchemaCache>,
 }
 
-/// Returns true if the cache key's table segment matches `table` (case-insensitive).
+/// Returns true if the cache key matches the given table (and optionally database).
 /// Cache keys have the form "{database}\t{table}" where database may be empty.
 /// Tab is used as separator because it is not a valid MySQL identifier character.
-fn key_matches_table(key: &str, table: &str) -> bool {
-    let key_table = key.split_once('\t').map(|x| x.1).unwrap_or(key);
-    key_table.eq_ignore_ascii_case(table)
+/// When `database` is Some, both database and table must match (case-insensitive).
+/// When `database` is None, only the table must match (case-insensitive).
+fn key_matches_table_and_db(key: &str, table: &str, database: Option<&str>) -> bool {
+    match key.split_once('\t') {
+        Some((key_db, key_table)) => {
+            let table_matches = key_table.eq_ignore_ascii_case(table);
+            match database {
+                Some(db) => table_matches && key_db.eq_ignore_ascii_case(db),
+                None => table_matches,
+            }
+        }
+        None => {
+            // Key has no tab separator - shouldn't happen for table-specific caches,
+            // but handle gracefully by not matching
+            false
+        }
+    }
 }
 
 impl SchemaIntrospector {
@@ -339,8 +353,8 @@ impl SchemaIntrospector {
         suggestions
     }
 
-    /// Invalidate cached column data for a specific table (case-insensitive match on the
-    /// table-name segment of the cache key, ignoring the database qualifier).
+    /// Invalidate cached column data for a specific table (case-insensitive match on
+    /// both database and table-name segments of the cache key when database is provided).
     /// Use after DDL that targets a known table (CREATE TABLE, ALTER TABLE, TRUNCATE).
     ///
     /// Acquires all cache locks atomically to prevent readers from observing partially
@@ -356,9 +370,9 @@ impl SchemaIntrospector {
         let mut composite_indexes_cache = self.inner.composite_indexes_cache.lock().await;
         let mut tables_cache = self.inner.tables_cache.lock().await;
 
-        columns_cache.retain(|key, _| !key_matches_table(key, table));
-        indexed_columns_cache.retain(|key, _| !key_matches_table(key, table));
-        composite_indexes_cache.retain(|key, _| !key_matches_table(key, table));
+        columns_cache.retain(|key, _| !key_matches_table_and_db(key, table, database));
+        indexed_columns_cache.retain(|key, _| !key_matches_table_and_db(key, table, database));
+        composite_indexes_cache.retain(|key, _| !key_matches_table_and_db(key, table, database));
 
         match database {
             Some(db) => {
