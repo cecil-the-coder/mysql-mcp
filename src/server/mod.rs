@@ -93,9 +93,10 @@ pub(crate) async fn validate_host_with_dns(host: &str) -> HostValidation {
     }
 
     let lookup_target = format!("{}:0", hostname);
-    let result = tokio::net::lookup_host(&lookup_target).await;
+    let lookup_future = tokio::net::lookup_host(&lookup_target);
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), lookup_future).await;
     match result {
-        Ok(addrs) => {
+        Ok(Ok(addrs)) => {
             for ip in addrs.map(|a| a.ip()) {
                 if is_blocked_ip(ip, true) {
                     return HostValidation {
@@ -112,9 +113,13 @@ pub(crate) async fn validate_host_with_dns(host: &str) -> HostValidation {
                 reason: None,
             }
         }
-        Err(e) => HostValidation {
+        Ok(Err(e)) => HostValidation {
             allowed: false,
             reason: Some(format!("DNS resolution failed for '{}': {}", hostname, e)),
+        },
+        Err(_) => HostValidation {
+            allowed: false,
+            reason: Some(format!("DNS resolution timed out for '{}'", hostname)),
         },
     }
 }

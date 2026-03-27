@@ -2,6 +2,7 @@ use crate::sql_parser::{ParsedStatement, StatementType};
 use anyhow::Result;
 use serde_json::{Map, Value};
 use sqlx::{Column, MySqlPool, Row, TypeInfo};
+use std::collections::HashMap;
 use std::time::Instant;
 
 use super::retry::retry_on_transient_error;
@@ -212,21 +213,22 @@ pub async fn execute_read_query(
 
 fn row_to_json(row: &sqlx::mysql::MySqlRow, warnings: &mut Vec<String>) -> Map<String, Value> {
     let mut map = Map::new();
+    // Track the next suffix to use for each base column name, enabling O(1)
+    // disambiguation of duplicate column names instead of O(n) probing per column.
+    let mut suffix_counters: HashMap<&str, u64> = HashMap::new();
     for (i, col) in row.columns().iter().enumerate() {
-        let base = col.name().to_string();
+        let base = col.name();
         // Disambiguate duplicate column names (e.g. SELECT t1.a, t2.a FROM …)
         // so the second value is not silently overwritten.
-        let key = if !map.contains_key(&base) {
-            base
+        let key = if let Some(&counter) = suffix_counters.get(base) {
+            // This base name was seen before; use the tracked suffix directly.
+            let owned_key = format!("{}_{}", base, counter);
+            suffix_counters.insert(base, counter.saturating_add(1));
+            owned_key
         } else {
-            let mut n = 2u64;
-            loop {
-                let candidate = format!("{}_{}", base, n);
-                if !map.contains_key(&candidate) {
-                    break candidate;
-                }
-                n = n.saturating_add(1);
-            }
+            // First occurrence of this base name; use it as-is and set next suffix to 2.
+            suffix_counters.insert(base, 2);
+            base.to_string()
         };
         map.insert(key, column_to_json(row, i, col, warnings));
     }
@@ -418,8 +420,9 @@ fn column_to_json(
         };
     }
     warnings.push(format!(
-        "Column '{}' could not be decoded as text or binary, returning NULL",
-        col.name()
+        "Column '{}' (type '{}') could not be decoded as text or binary, returning NULL",
+        col.name(),
+        type_name
     ));
     Value::Null
 }
