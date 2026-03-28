@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 
 use super::fetch;
 use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
@@ -68,62 +68,62 @@ where
     }
 
     // Check if there's already an in-flight request for this key (stampede protection).
-    // Use a retry loop to handle races for the pending slot.
-    let result = 'retry: loop {
+    let result = {
         let mut pending_guard = pending.lock().await;
         if let Some(receiver) = pending_guard.remove(&cache_key) {
             // Another request is in-flight, we stole its receiver. Wait for it.
             drop(pending_guard);
-            break 'retry receiver
-                .await
-                .map_err(|_| anyhow::anyhow!("in-flight request cancelled"))?;
-        }
-
-        // No in-flight request, we need to start one.
-        // Create a oneshot channel. We store the receiver in pending so other waiters
-        // can steal it, and we keep the sender to fulfill it after fetching.
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        pending_guard.insert(cache_key.clone(), rx);
-        drop(pending_guard);
-
-        // Fetch new data (lock released so we don't block readers during I/O)
-        let result = fetch_fn().await;
-
-        // Fulfill the oneshot. If the channel is closed (all waiters dropped), that's ok.
-        // Manually construct the result to send since anyhow::Error doesn't implement Clone.
-        let to_send = match &result {
-            Ok(data) => Ok(data.clone()),
-            Err(e) => Err(anyhow::anyhow!("{e}")),
-        };
-        let _ = tx.send(to_send);
-
-        // Remove ourselves from pending (receiver is gone, just clean up the entry if still there)
-        let mut pending_guard = pending.lock().await;
-        pending_guard.remove(&cache_key);
-        drop(pending_guard);
-
-        // Store in cache if caching is enabled.
-        if cache_ttl > Duration::ZERO {
-            if let Ok(ref data) = result {
-                let mut guard = cache.lock().await;
-                // Re-check under the write lock: if another caller already refreshed the
-                // entry while we were fetching, return their result to avoid stampede.
-                if let Some(entry) = guard.get(&cache_key) {
-                    if entry.fetched_at.elapsed() < cache_ttl {
-                        break 'retry Ok(entry.data.clone());
-                    }
-                }
-                guard.insert(
-                    cache_key,
-                    CacheEntry {
-                        data: data.clone(),
-                        fetched_at: Instant::now(),
-                    },
-                );
+            match receiver.await {
+                Ok(r) => r,
+                Err(_) => return Err(anyhow::anyhow!("in-flight request cancelled")),
             }
-        }
+        } else {
+            // No in-flight request, we need to start one.
+            // Create a oneshot channel. We store the receiver in pending so other waiters
+            // can steal it, and we keep the sender to fulfill it after fetching.
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            pending_guard.insert(cache_key.clone(), rx);
+            drop(pending_guard);
 
-        break 'retry result;
+            // Fetch new data (lock released so we don't block readers during I/O)
+            let result = fetch_fn().await;
+
+            // Fulfill the oneshot. If the channel is closed (all waiters dropped), that's ok.
+            // Manually construct the result to send since anyhow::Error doesn't implement Clone.
+            let to_send = match &result {
+                Ok(data) => Ok(data.clone()),
+                Err(e) => Err(anyhow::anyhow!("{e}")),
+            };
+            let _ = tx.send(to_send);
+
+            // Remove ourselves from pending (receiver is gone, just clean up the entry if still there)
+            let mut pending_guard = pending.lock().await;
+            pending_guard.remove(&cache_key);
+            drop(pending_guard);
+
+            // Store in cache if caching is enabled.
+            if cache_ttl > Duration::ZERO {
+                if let Ok(ref data) = result {
+                    let mut guard = cache.lock().await;
+                    // Re-check under the write lock: if another caller already refreshed the
+                    // entry while we were fetching, return their result to avoid stampede.
+                    if let Some(entry) = guard.get(&cache_key) {
+                        if entry.fetched_at.elapsed() < cache_ttl {
+                            return Ok(entry.data.clone());
+                        }
+                    }
+                    guard.insert(
+                        cache_key,
+                        CacheEntry {
+                            data: data.clone(),
+                            fetched_at: Instant::now(),
+                        },
+                    );
+                }
+            }
+
+            result
+        }
     };
 
     result
