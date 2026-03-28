@@ -58,6 +58,9 @@ pub struct QueryResult {
     /// `max_rows` and was truncated post-fetch. SHOW statements don't support
     /// LIMIT/OFFSET, so the hint in the handler must differ from SELECT queries.
     pub show_capped: bool,
+    /// Total rows available before truncation when a SHOW query is capped.
+    /// None if the result was not truncated.
+    pub total_rows_available: Option<usize>,
     pub parse_warnings: Vec<String>,
     pub plan: Option<Value>,
     pub explain_error: Option<String>,
@@ -187,12 +190,17 @@ pub async fn execute_read_query(
     }
 
     // For SHOW statements (which don't support LIMIT), cap post-fetch if needed.
-    let show_capped = matches!(stmt_type, StatementType::Show)
+    let show_original_count = if matches!(stmt_type, StatementType::Show)
         && max_rows > 0
-        && json_rows.len() > max_rows as usize;
-    if show_capped {
+        && json_rows.len() > max_rows as usize
+    {
+        let original = json_rows.len();
         json_rows.truncate(max_rows as usize);
-    }
+        Some(original)
+    } else {
+        None
+    };
+    let show_capped = show_original_count.is_some();
 
     let row_count = json_rows.len();
     // was_capped is true when we hit the injected LIMIT (over_limit), or when we
@@ -243,6 +251,7 @@ pub async fn execute_read_query(
         serialization_time_ms: ser_elapsed,
         capped: was_capped,
         show_capped,
+        total_rows_available: show_original_count,
         parse_warnings: warnings,
         plan,
         explain_error,

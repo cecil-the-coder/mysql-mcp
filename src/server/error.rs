@@ -45,6 +45,7 @@ mod tests {
     use super::*;
 
     fn extract_text(result: &CallToolResult) -> &str {
+        assert!(!result.content.is_empty(), "expected non-empty content");
         result.content[0]
             .raw
             .as_text()
