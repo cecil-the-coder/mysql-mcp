@@ -69,7 +69,7 @@ pub fn is_low_cardinality_type(data_type: &str) -> bool {
         || dt == "boolean"
         || dt.starts_with("enum")
         || dt.starts_with("set")
-        || dt.starts_with("bit(1)")
+        || dt == "bit(1)"
         || dt.starts_with("tinyint(1)")
 }
 
