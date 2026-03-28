@@ -308,10 +308,7 @@ pub async fn spawn_ssh_tunnel(
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         // Check if the child process has already exited (tunnel failed to start)
-        let child = handle
-            .child
-            .as_mut()
-            .expect("child was just created above");
+        let child = handle.child.as_mut().expect("child was just created above");
         match child.try_wait() {
             Ok(Some(status)) => {
                 // Collect any buffered stderr for diagnostics (best effort, 500 ms cap).
