@@ -54,9 +54,16 @@ where
     // Fetch new data (lock released so we don't block readers during I/O)
     let data = fetch_fn().await?;
 
-    // Store in cache if caching is enabled
+    // Store in cache if caching is enabled.
+    // Re-check under the write lock: if another caller already refreshed the
+    // entry while we were fetching, return their result to avoid stampede.
     if cache_ttl > Duration::ZERO {
         let mut guard = cache.lock().await;
+        if let Some(entry) = guard.get(&cache_key) {
+            if entry.fetched_at.elapsed() < cache_ttl {
+                return Ok(entry.data.clone());
+            }
+        }
         guard.insert(
             cache_key,
             CacheEntry {
