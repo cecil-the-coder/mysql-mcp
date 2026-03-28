@@ -97,7 +97,9 @@ pub(crate) async fn validate_host_with_dns(host: &str) -> HostValidation {
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), lookup_future).await;
     match result {
         Ok(Ok(addrs)) => {
+            let mut found_any = false;
             for ip in addrs.map(|a| a.ip()) {
+                found_any = true;
                 if is_blocked_ip(ip, true) {
                     return HostValidation {
                         allowed: false,
@@ -107,6 +109,12 @@ pub(crate) async fn validate_host_with_dns(host: &str) -> HostValidation {
                         )),
                     };
                 }
+            }
+            if !found_any {
+                return HostValidation {
+                    allowed: false,
+                    reason: Some(format!("Hostname '{}' resolved to no addresses", hostname)),
+                };
             }
             HostValidation {
                 allowed: true,

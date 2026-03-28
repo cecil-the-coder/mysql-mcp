@@ -201,9 +201,11 @@ pub async fn execute_read_query(
         };
 
     let (plan, explain_error): (Option<Value>, Option<String>) = if run_explain {
-        // Use effective_sql_ref (which may have an injected LIMIT) so the EXPLAIN
-        // plan reflects the query that was actually executed.
-        match crate::query::explain::run_explain(pool, effective_sql_ref, Some(query_timeout_ms))
+        // Use the original SQL (not effective_sql_ref which may have an injected
+        // LIMIT) so that EXPLAIN reflects the user's query. MySQL's optimizer may
+        // choose a different plan when a LIMIT is present (e.g. early-termination
+        // index scan), producing misleading diagnostics.
+        match crate::query::explain::run_explain(pool, sql, Some(query_timeout_ms))
             .await
         {
             Ok(explain_result) => {
