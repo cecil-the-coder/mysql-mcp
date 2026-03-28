@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use super::fetch;
 use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
@@ -25,16 +25,25 @@ pub(crate) struct SchemaCache {
     pub(crate) columns_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<ColumnInfo>>>>>,
     pub(crate) indexed_columns_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<String>>>>>,
     pub(crate) composite_indexes_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<IndexDef>>>>>,
+    /// In-flight request deduplication to prevent cache stampedes when caching is disabled.
+    /// Uses RwLock for fast reads (check if request exists) and Mutex inside for the channel.
+    pub(crate) pending_tables: Arc<RwLock<HashMap<String, tokio::sync::broadcast::Sender<Result<Vec<TableInfo>>>>>>,
+    pub(crate) pending_columns: Arc<RwLock<HashMap<String, tokio::sync::broadcast::Sender<Result<Vec<ColumnInfo>>>>>>,
+    pub(crate) pending_indexed_columns: Arc<RwLock<HashMap<String, tokio::sync::broadcast::Sender<Result<Vec<String>>>>>>,
+    pub(crate) pending_composite_indexes: Arc<RwLock<HashMap<String, tokio::sync::broadcast::Sender<Result<Vec<IndexDef>>>>>>,
 }
 
 /// Simple TTL cache helper. Returns cached data if fresh, otherwise fetches,
 /// stores, and returns.
-/// When `cache_ttl == Duration::ZERO`, always re-fetches (cache disabled).
+/// When `cache_ttl == Duration::ZERO`, always re-fetches (cache disabled), but
+/// uses in-flight request deduplication to prevent multiple concurrent database
+/// queries for the same key (cache stampede protection).
 pub(crate) async fn get_cached_or_refresh<T, F, Fut>(
     cache: Arc<Mutex<HashMap<String, CacheEntry<T>>>>,
     cache_key: String,
     cache_ttl: Duration,
     fetch_fn: F,
+    pending: Arc<RwLock<HashMap<String, tokio::sync::broadcast::Sender<Result<T>>>>>,
 ) -> Result<T>
 where
     T: Clone + Send + 'static,
@@ -51,29 +60,66 @@ where
         }
     }
 
-    // Fetch new data (lock released so we don't block readers during I/O)
-    let data = fetch_fn().await?;
-
-    // Store in cache if caching is enabled.
-    // Re-check under the write lock: if another caller already refreshed the
-    // entry while we were fetching, return their result to avoid stampede.
-    if cache_ttl > Duration::ZERO {
-        let mut guard = cache.lock().await;
-        if let Some(entry) = guard.get(&cache_key) {
-            if entry.fetched_at.elapsed() < cache_ttl {
-                return Ok(entry.data.clone());
-            }
+    // Check if there's already an in-flight request for this key (stampede protection)
+    {
+        let pending_guard = pending.read().await;
+        if let Some(sender) = pending_guard.get(&cache_key) {
+            // Another request is in-flight, wait for it to complete
+            let mut receiver = sender.subscribe();
+            drop(pending_guard);
+            return receiver.recv().await.map_err(|_| anyhow::anyhow!("in-flight request cancelled"))?;
         }
-        guard.insert(
-            cache_key,
-            CacheEntry {
-                data: data.clone(),
-                fetched_at: Instant::now(),
-            },
-        );
     }
 
-    Ok(data)
+    // No in-flight request, we need to start one. Create a broadcast channel.
+    let (tx, _rx) = tokio::sync::broadcast::channel(1);
+
+    // Register ourselves as the in-flight request
+    {
+        let mut pending_guard = pending.write().await;
+        // Double-check: another request might have started while we were waiting for write lock
+        if let Some(sender) = pending_guard.get(&cache_key) {
+            let mut receiver = sender.subscribe();
+            drop(pending_guard);
+            return receiver.recv().await.map_err(|_| anyhow::anyhow!("in-flight request cancelled"))?;
+        }
+        pending_guard.insert(cache_key.clone(), tx.clone());
+    }
+
+    // Fetch new data (lock released so we don't block readers during I/O)
+    let result = fetch_fn().await;
+
+    // Broadcast the result to any waiting requests
+    let _ = tx.send(result.clone());
+
+    // Remove ourselves from pending
+    {
+        let mut pending_guard = pending.write().await;
+        pending_guard.remove(&cache_key);
+    }
+
+    // Store in cache if caching is enabled.
+    if cache_ttl > Duration::ZERO {
+        if let Ok(ref data) = result {
+            let mut guard = cache.lock().await;
+            // Re-check under the write lock: if another caller already refreshed the
+            // entry while we were fetching, return their result to avoid stampede.
+            if let Some(entry) = guard.get(&cache_key) {
+                if entry.fetched_at.elapsed() < cache_ttl {
+                    return Ok(entry.data.clone());
+                }
+            }
+            guard.insert(
+                cache_key,
+                CacheEntry {
+                    data: data.clone(),
+                    fetched_at: Instant::now(),
+                },
+            );
+        }
+    }
+
+    result
 }
 
 pub struct SchemaIntrospector {
@@ -118,6 +164,10 @@ impl SchemaIntrospector {
                 columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 indexed_columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 composite_indexes_cache: Arc::new(Mutex::new(HashMap::new())),
+                pending_tables: Arc::new(RwLock::new(HashMap::new())),
+                pending_columns: Arc::new(RwLock::new(HashMap::new())),
+                pending_indexed_columns: Arc::new(RwLock::new(HashMap::new())),
+                pending_composite_indexes: Arc::new(RwLock::new(HashMap::new())),
             }),
         }
     }
@@ -135,6 +185,7 @@ impl SchemaIntrospector {
                 let pool = Arc::clone(&pool);
                 async move { fetch::fetch_tables(&pool, owned_database.as_deref()).await }
             },
+            Arc::clone(&self.inner.pending_tables),
         )
         .await
     }
@@ -163,6 +214,7 @@ impl SchemaIntrospector {
                         .await
                 }
             },
+            Arc::clone(&self.inner.pending_indexed_columns),
         )
         .await
     }
@@ -193,6 +245,7 @@ impl SchemaIntrospector {
                         .await
                 }
             },
+            Arc::clone(&self.inner.pending_composite_indexes),
         )
         .await
     }
@@ -217,6 +270,7 @@ impl SchemaIntrospector {
                     fetch::fetch_columns(&pool, &owned_table, owned_database.as_deref()).await
                 }
             },
+            Arc::clone(&self.inner.pending_columns),
         )
         .await
     }

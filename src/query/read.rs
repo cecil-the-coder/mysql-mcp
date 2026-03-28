@@ -28,6 +28,10 @@ use std::time::Instant;
 use super::retry::retry_on_transient_error;
 use super::with_timeout;
 
+/// Maximum reasonable memory limit for query results (16 GB in MB).
+/// Prevents absurd memory limits if max_result_memory_mb is misconfigured to u32::MAX.
+const MAX_RESULT_MEMORY_MB_CLAMP: u32 = 16 * 1024; // 16 GB
+
 /// Binary columns with invalid UTF-8 are hex-encoded. Cap the output at 512 KB
 /// of raw bytes (→ ~1 MB hex string) to prevent OOM on unexpectedly large BLOBs.
 const MAX_BINARY_DISPLAY_BYTES: usize = 512 * 1024;
@@ -142,8 +146,10 @@ pub async fn execute_read_query(
     let ser_start = Instant::now();
     let mut warnings = warnings; // make mutable so row_to_json can push serialization warnings
 
-    // Use saturating_mul to prevent overflow when max_result_memory_mb is large
-    let max_memory_bytes = (max_result_memory_mb as usize)
+    // Clamp max_result_memory_mb to a reasonable maximum to prevent absurd memory limits
+    // when misconfigured (e.g., u32::MAX would result in ~4TB, which is still unreasonable)
+    let clamped_memory_mb = max_result_memory_mb.min(MAX_RESULT_MEMORY_MB_CLAMP);
+    let max_memory_bytes = (clamped_memory_mb as usize)
         .saturating_mul(1024)
         .saturating_mul(1024);
     let mut total_memory_bytes: usize = 0;

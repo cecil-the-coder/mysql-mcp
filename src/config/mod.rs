@@ -247,9 +247,12 @@ impl Config {
                 pool.max_rows
             );
         }
-        if pool.max_result_memory_mb == 0 || pool.max_result_memory_mb > 16384 {
+        if pool.max_result_memory_mb == 0 {
+            anyhow::bail!("pool.max_result_memory_mb must be >= 1");
+        }
+        if pool.max_result_memory_mb > 16384 {
             anyhow::bail!(
-                "pool.max_result_memory_mb must be between 1 and 16384 (got: {})",
+                "pool.max_result_memory_mb must be <= 16384 (got: {})",
                 pool.max_result_memory_mb
             );
         }
@@ -343,6 +346,12 @@ impl Config {
                     if !parent.exists() {
                         anyhow::bail!(
                             "ssh.known_hosts_file parent directory does not exist: {}",
+                            parent.display()
+                        );
+                    }
+                    if !parent.is_dir() {
+                        anyhow::bail!(
+                            "ssh.known_hosts_file parent path is not a directory: {}",
                             parent.display()
                         );
                     }
