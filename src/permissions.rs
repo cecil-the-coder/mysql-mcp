@@ -452,6 +452,7 @@ mod tests {
             where_columns: vec![],
             has_leading_wildcard_like: false,
             warnings: vec![],
+            serialized_sql: String::new(),
         }
     }
 

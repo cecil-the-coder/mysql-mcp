@@ -42,7 +42,7 @@ fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
         }
         IpAddr::V6(v6) => {
             // Check IPv4-mapped addresses
-            if let Some(v4) = v6.to_ipv4_mapped() {
+            if let Some(v4) = v6.to_ipv4() {
                 let loopback_blocked = !allow_loopback && v4.is_loopback();
                 return loopback_blocked
                     || v4.is_link_local()
