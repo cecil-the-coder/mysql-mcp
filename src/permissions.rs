@@ -150,11 +150,7 @@ pub fn check_all_permissions(
 }
 
 /// Check a write operation permission.
-fn check_write_op(
-    allowed: bool,
-    op: &str,
-    env_var: &str,
-) -> Result<()> {
+fn check_write_op(allowed: bool, op: &str, env_var: &str) -> Result<()> {
     if !allowed {
         bail!(
             "{} operations are not allowed. Set {}=true to enable",

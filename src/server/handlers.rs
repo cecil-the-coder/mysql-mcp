@@ -377,12 +377,7 @@ impl SessionStore {
                 .target_schema
                 .as_deref()
                 .unwrap_or("(default database)");
-            return tool_error!(
-                "{} operation denied on '{}': {}",
-                perm_type,
-                schema_hint,
-                e
-            );
+            return tool_error!("{} operation denied on '{}': {}", perm_type, schema_hint, e);
         }
 
         if parsed.statement_type.is_read_only() {
