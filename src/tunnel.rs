@@ -267,13 +267,15 @@ pub async fn spawn_ssh_tunnel(
     // Use tokio's async TCP listener with a timeout to avoid blocking indefinitely
     // on local port allocation issues.
     let local_port = {
-        let listener = tokio::time::timeout(
-            Duration::from_secs(5),
-            TcpListener::bind("127.0.0.1:0"),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("SSH tunnel: timed out waiting for local port allocation"))?
-        .map_err(|e| anyhow::anyhow!("Failed to allocate local port for SSH tunnel: {}", e))?;
+        let listener =
+            tokio::time::timeout(Duration::from_secs(5), TcpListener::bind("127.0.0.1:0"))
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("SSH tunnel: timed out waiting for local port allocation")
+                })?
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to allocate local port for SSH tunnel: {}", e)
+                })?;
         let port = listener.local_addr()?.port();
         drop(listener);
         port
