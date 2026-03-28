@@ -3,14 +3,9 @@ use sqlx::MySqlPool;
 
 use super::with_timeout;
 
-/// Read MYSQL_QUERY_TIMEOUT from environment, returning the value in milliseconds.
-/// Returns 0 (no timeout) if not set or if parsing fails.
-fn query_timeout_from_env() -> u64 {
-    std::env::var("MYSQL_QUERY_TIMEOUT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0)
-}
+/// Default timeout (30 s) used when no explicit timeout is available.
+#[cfg(test)]
+const DEFAULT_EXPLAIN_TIMEOUT_MS: u64 = 30_000;
 
 /// Query performance tier derived from EXPLAIN output.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -35,18 +30,14 @@ pub struct ExplainResult {
 /// # Arguments
 /// * `pool` - MySQL connection pool
 /// * `sql` - The SQL query to explain
-/// * `query_timeout_ms` - Optional timeout in milliseconds. When None, falls back to
-///   the MYSQL_QUERY_TIMEOUT environment variable for backward compatibility.
-///
-/// # Note
-/// Prefer passing the timeout from config (pool.query_timeout_ms) for consistency
-/// with other query operations rather than relying on the environment variable fallback.
+/// * `query_timeout_ms` - Timeout in milliseconds for the EXPLAIN query.
+///   Use [`DEFAULT_EXPLAIN_TIMEOUT_MS`] when no config value is available.
 pub async fn run_explain(
     pool: &MySqlPool,
     sql: &str,
-    query_timeout_ms: Option<u64>,
+    query_timeout_ms: u64,
 ) -> Result<ExplainResult> {
-    let timeout_ms = query_timeout_ms.unwrap_or_else(query_timeout_from_env);
+    let timeout_ms = query_timeout_ms;
     let explain_sql = format!("EXPLAIN FORMAT=JSON {}", sql);
     let explain_fut = async {
         sqlx::query(&explain_sql)
@@ -95,7 +86,7 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT table_name FROM information_schema.tables LIMIT 5",
-            None,
+            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -136,7 +127,7 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_fts WHERE val = 'hello'",
-            None,
+            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -180,7 +171,7 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_idx WHERE val = 'hello'",
-            None,
+            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -231,7 +222,7 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT a.name, b.score FROM explain_join_a a JOIN explain_join_b b ON a.id = b.a_id",
-            None,
+            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -278,7 +269,7 @@ mod tests {
         let er = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_fts WHERE val = 'hello'",
-            None,
+            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await
         .unwrap();
@@ -314,7 +305,7 @@ mod tests {
         let er = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_idx WHERE val = 'hello'",
-            None,
+            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await
         .unwrap();
@@ -358,7 +349,7 @@ mod tests {
         let er = run_explain(
             &test_db.pool,
             "SELECT a.name, b.score FROM explain_join_a a JOIN explain_join_b b ON a.id = b.a_id",
-            None,
+            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await
         .unwrap();
@@ -390,7 +381,7 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_sort ORDER BY name",
-            None,
+            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
