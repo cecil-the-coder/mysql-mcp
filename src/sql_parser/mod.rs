@@ -237,28 +237,37 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
 /// Handles escaped quotes (`''`) inside literals correctly.
 fn strip_single_quoted_literals(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\'' {
-            // Skip past the entire single-quoted literal.
-            loop {
-                match chars.next() {
-                    Some('\'') => {
-                        // Check if this is '' (escaped quote) or a closing quote.
-                        if chars.peek() == Some(&'\'') {
-                            chars.next(); // consume the second ' of the escaped pair
-                        } else {
-                            break; // closing quote
-                        }
+    let mut i = 0;
+    let bytes = s.as_bytes();
+
+    while i < bytes.len() {
+        if bytes[i] == b'\'' {
+            // Skip past the entire single-quoted literal
+            i += 1; // skip opening quote
+            while i < bytes.len() {
+                if bytes[i] == b'\'' {
+                    // Check if this is '' (escaped quote) or a closing quote
+                    if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+                        i += 2; // skip the escaped pair ''
+                    } else {
+                        i += 1; // skip closing quote and exit the literal
+                        break;
                     }
-                    Some(_) => {}
-                    None => break,
+                } else {
+                    i += 1;
                 }
             }
         } else {
-            result.push(c);
+            // Copy non-quote characters directly
+            let start = i;
+            while i < bytes.len() && bytes[i] != b'\'' {
+                i += 1;
+            }
+            // SAFETY: start and i are valid byte positions derived from UTF-8 string
+            result.push_str(unsafe { std::str::from_utf8_unchecked(&bytes[start..i]) });
         }
     }
+
     result
 }
 

@@ -78,23 +78,14 @@ pub async fn build_session_pool(
     ssl_ca: Option<&str>,
     connect_timeout_ms: u64,
 ) -> Result<MySqlPool> {
-    let mut opts = MySqlConnectOptions::new()
+    let ssl_mode = determine_ssl_mode(ssl, ssl_accept_invalid_certs, ssl_ca.is_some());
+    let opts = MySqlConnectOptions::new()
         .host(host)
         .port(port)
         .username(user)
         .password(password)
-        .ssl_mode(determine_ssl_mode(
-            ssl,
-            ssl_accept_invalid_certs,
-            ssl_ca.is_some(),
-        ))
         .statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
-    if let Some(db) = database {
-        opts = opts.database(db);
-    }
-    if let Some(ca_path) = ssl_ca {
-        opts = opts.ssl_ca(ca_path);
-    }
+    let opts = apply_ssl_and_db_options(opts, ssl_mode, ssl_ca, database);
     create_pool(opts, 5, connect_timeout_ms).await
 }
 
@@ -131,6 +122,26 @@ fn determine_ssl_mode(ssl: bool, accept_invalid: bool, has_ca: bool) -> MySqlSsl
     }
 }
 
+/// Apply SSL mode, optional database, and optional CA certificate to MySqlConnectOptions.
+///
+/// This helper centralizes the common logic for configuring SSL and database options
+/// across all connection pool builders to eliminate code duplication.
+fn apply_ssl_and_db_options(
+    opts: MySqlConnectOptions,
+    ssl_mode: MySqlSslMode,
+    ssl_ca: Option<&str>,
+    database: Option<&str>,
+) -> MySqlConnectOptions {
+    let mut opts = opts.ssl_mode(ssl_mode);
+    if let Some(db) = database {
+        opts = opts.database(db);
+    }
+    if let Some(ca_path) = ssl_ca {
+        opts = opts.ssl_ca(ca_path);
+    }
+    opts
+}
+
 /// Downgrade `VerifyIdentity` to `Required` for connections through an SSH tunnel.
 ///
 /// Through a tunnel sqlx connects to `127.0.0.1`, so the server certificate's
@@ -160,19 +171,18 @@ async fn build_pool_tunneled(
         config.security.ssl_accept_invalid_certs,
         config.security.ssl_ca.is_some(),
     ));
-    let mut opts = MySqlConnectOptions::new()
+    let opts = MySqlConnectOptions::new()
         .host("127.0.0.1")
         .port(tunnel.local_port)
         .username(&config.connection.user)
         .password(&config.connection.password)
-        .ssl_mode(ssl_mode)
         .statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
-    if let Some(ref db) = config.connection.database {
-        opts = opts.database(db);
-    }
-    if let Some(ref ca_path) = config.security.ssl_ca {
-        opts = opts.ssl_ca(ca_path);
-    }
+    let opts = apply_ssl_and_db_options(
+        opts,
+        ssl_mode,
+        config.security.ssl_ca.as_deref(),
+        config.connection.database.as_deref(),
+    );
     create_pool(opts, config.pool.size, config.pool.connect_timeout_ms).await
 }
 
@@ -213,19 +223,13 @@ pub async fn build_session_pool_with_tunnel(
         ssl_accept_invalid_certs,
         ssl_ca.is_some(),
     ));
-    let mut opts = MySqlConnectOptions::new()
+    let opts = MySqlConnectOptions::new()
         .host("127.0.0.1")
         .port(tunnel.local_port)
         .username(user)
         .password(password)
-        .ssl_mode(ssl_mode)
         .statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
-    if let Some(db) = database {
-        opts = opts.database(db);
-    }
-    if let Some(ca_path) = ssl_ca {
-        opts = opts.ssl_ca(ca_path);
-    }
+    let opts = apply_ssl_and_db_options(opts, ssl_mode, ssl_ca, database);
     let pool = create_pool(opts, 5, connect_timeout_ms).await?;
     Ok((pool, tunnel))
 }
@@ -283,18 +287,17 @@ pub fn build_connect_options(config: &Config) -> Result<MySqlConnectOptions> {
         config.security.ssl_accept_invalid_certs,
         config.security.ssl_ca.is_some(),
     );
-    let mut opts = MySqlConnectOptions::new()
+    let opts = MySqlConnectOptions::new()
         .host(&conn.host)
         .port(conn.port)
         .username(&conn.user)
-        .password(&conn.password)
-        .ssl_mode(ssl_mode);
-    if let Some(db) = &conn.database {
-        opts = opts.database(db);
-    }
-    if let Some(ca_path) = &config.security.ssl_ca {
-        opts = opts.ssl_ca(ca_path);
-    }
+        .password(&conn.password);
+    let opts = apply_ssl_and_db_options(
+        opts,
+        ssl_mode,
+        config.security.ssl_ca.as_deref(),
+        conn.database.as_deref(),
+    );
     Ok(opts)
 }
 

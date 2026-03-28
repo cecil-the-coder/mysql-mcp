@@ -156,12 +156,8 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.indexed_columns_cache),
             cache_key,
             self.inner.cache_ttl,
-            move || {
-                let pool = Arc::clone(&pool);
-                async move {
-                    fetch::fetch_indexed_columns(&pool, &owned_table, owned_database.as_deref())
-                        .await
-                }
+            move || async move {
+                fetch::fetch_indexed_columns(&pool, &owned_table, owned_database.as_deref()).await
             },
         )
         .await
@@ -186,12 +182,8 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.composite_indexes_cache),
             cache_key,
             self.inner.cache_ttl,
-            move || {
-                let pool = Arc::clone(&pool);
-                async move {
-                    fetch::fetch_composite_indexes(&pool, &owned_table, owned_database.as_deref())
-                        .await
-                }
+            move || async move {
+                fetch::fetch_composite_indexes(&pool, &owned_table, owned_database.as_deref()).await
             },
         )
         .await
@@ -211,11 +203,8 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.columns_cache),
             cache_key,
             self.inner.cache_ttl,
-            move || {
-                let pool = Arc::clone(&pool);
-                async move {
-                    fetch::fetch_columns(&pool, &owned_table, owned_database.as_deref()).await
-                }
+            move || async move {
+                fetch::fetch_columns(&pool, &owned_table, owned_database.as_deref()).await
             },
         )
         .await
