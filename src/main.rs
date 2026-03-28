@@ -71,20 +71,28 @@ async fn main() -> Result<()> {
                 {
                     Ok(Ok(conn)) => {
                         drop(conn);
-                        tracing::debug!("Pool warmup complete (1 connection) on attempt {}", attempt);
+                        tracing::debug!(
+                            "Pool warmup complete (1 connection) on attempt {}",
+                            attempt
+                        );
                         return;
                     }
                     Ok(Err(e)) => {
                         if attempt < max_attempts {
                             tracing::warn!(
                                 "Pool warmup attempt {}/{} failed: {}. Retrying in {:?}...",
-                                attempt, max_attempts, e, retry_delay
+                                attempt,
+                                max_attempts,
+                                e,
+                                retry_delay
                             );
                             tokio::time::sleep(retry_delay).await;
                         } else {
                             tracing::warn!(
                                 "Pool warmup attempt {}/{} failed: {}. Giving up.",
-                                attempt, max_attempts, e
+                                attempt,
+                                max_attempts,
+                                e
                             );
                         }
                     }
@@ -98,7 +106,9 @@ async fn main() -> Result<()> {
                         } else {
                             tracing::warn!(
                                 "Pool warmup attempt {}/{} timed out after {}ms. Giving up.",
-                                attempt, max_attempts, acquire_timeout_ms
+                                attempt,
+                                max_attempts,
+                                acquire_timeout_ms
                             );
                         }
                     }
