@@ -9,18 +9,28 @@ use super::fetch;
 use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
 
 // ---------------------------------------------------------------------------
+// Cache configuration
+// ---------------------------------------------------------------------------
+
+/// Default maximum number of entries in each schema cache.
+const DEFAULT_CACHE_MAX_SIZE: usize = 1000;
+
+// ---------------------------------------------------------------------------
 // Cache internals
 // ---------------------------------------------------------------------------
 
 pub(crate) struct CacheEntry<T> {
     pub(crate) data: T,
     pub(crate) fetched_at: Instant,
+    /// Last access time for LRU eviction tracking.
+    pub(crate) accessed_at: Instant,
 }
 
 /// Shared cache state for SchemaIntrospector.
 pub(crate) struct SchemaCache {
     pub(crate) pool: Arc<sqlx::MySqlPool>,
     pub(crate) cache_ttl: Duration,
+    pub(crate) cache_max_size: usize,
     pub(crate) tables_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<TableInfo>>>>>,
     pub(crate) columns_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<ColumnInfo>>>>>,
     pub(crate) indexed_columns_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<String>>>>>,
@@ -30,10 +40,12 @@ pub(crate) struct SchemaCache {
 /// Simple TTL cache helper. Returns cached data if fresh, otherwise fetches,
 /// stores, and returns.
 /// When `cache_ttl == Duration::ZERO`, always re-fetches (cache disabled).
+/// Implements LRU eviction when the cache exceeds `max_size`.
 pub(crate) async fn get_cached_or_refresh<T, F, Fut>(
     cache: Arc<Mutex<HashMap<String, CacheEntry<T>>>>,
     cache_key: String,
     cache_ttl: Duration,
+    max_size: usize,
     fetch_fn: F,
 ) -> Result<T>
 where
@@ -43,9 +55,11 @@ where
 {
     // Check cache under lock, return if fresh
     {
-        let guard = cache.lock().await;
-        if let Some(entry) = guard.get(&cache_key) {
+        let mut guard = cache.lock().await;
+        if let Some(entry) = guard.get_mut(&cache_key) {
             if cache_ttl > Duration::ZERO && entry.fetched_at.elapsed() < cache_ttl {
+                // Update access time for LRU tracking
+                entry.accessed_at = Instant::now();
                 return Ok(entry.data.clone());
             }
         }
@@ -59,21 +73,51 @@ where
     // entry while we were fetching, return their result to avoid stampede.
     if cache_ttl > Duration::ZERO {
         let mut guard = cache.lock().await;
-        if let Some(entry) = guard.get(&cache_key) {
+        if let Some(entry) = guard.get_mut(&cache_key) {
             if entry.fetched_at.elapsed() < cache_ttl {
+                entry.accessed_at = Instant::now();
                 return Ok(entry.data.clone());
             }
         }
+
+        // Evict oldest entries if we're at capacity (LRU eviction)
+        if max_size > 0 && guard.len() >= max_size {
+            evict_oldest_entries(&mut guard, max_size);
+        }
+
+        let now = Instant::now();
         guard.insert(
             cache_key,
             CacheEntry {
                 data: data.clone(),
-                fetched_at: Instant::now(),
+                fetched_at: now,
+                accessed_at: now,
             },
         );
     }
 
     Ok(data)
+}
+
+/// Evict the oldest entries from the cache to bring it under the max size.
+/// Uses LRU policy based on `accessed_at` time.
+fn evict_oldest_entries<T>(cache: &mut HashMap<String, CacheEntry<T>>, target_size: usize) {
+    let evict_count = cache.len().saturating_sub(target_size.saturating_sub(1));
+    if evict_count == 0 {
+        return;
+    }
+
+    // Find the keys with oldest access times
+    let mut entries: Vec<(&String, Instant)> = cache
+        .iter()
+        .map(|(k, v)| (k, v.accessed_at))
+        .collect();
+    entries.sort_by(|a, b| a.1.cmp(&b.1));
+
+    // Remove the oldest entries
+    for (key, _) in entries.into_iter().take(evict_count) {
+        cache.remove(key);
+    }
 }
 
 pub struct SchemaIntrospector {
@@ -109,11 +153,24 @@ fn key_matches_table_and_db(key: &str, table: &str, database: Option<&str>) -> b
 }
 
 impl SchemaIntrospector {
+    /// Create a new SchemaIntrospector with the given pool and cache TTL.
+    /// Cache size is limited to prevent unbounded memory growth.
     pub fn new(pool: Arc<sqlx::MySqlPool>, cache_ttl_secs: u64) -> Self {
+        Self::new_with_config(pool, cache_ttl_secs, DEFAULT_CACHE_MAX_SIZE)
+    }
+
+    /// Create a new SchemaIntrospector with custom cache configuration.
+    ///
+    /// # Arguments
+    /// * `pool` - MySQL connection pool
+    /// * `cache_ttl_secs` - Cache TTL in seconds (0 to disable caching)
+    /// * `cache_max_size` - Maximum number of entries per cache (LRU eviction when exceeded)
+    pub fn new_with_config(pool: Arc<sqlx::MySqlPool>, cache_ttl_secs: u64, cache_max_size: usize) -> Self {
         Self {
             inner: Arc::new(SchemaCache {
                 pool,
                 cache_ttl: Duration::from_secs(cache_ttl_secs),
+                cache_max_size,
                 tables_cache: Arc::new(Mutex::new(HashMap::new())),
                 columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 indexed_columns_cache: Arc::new(Mutex::new(HashMap::new())),

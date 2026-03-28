@@ -290,7 +290,7 @@ impl Config {
         }
         // Warn if pool.size leaves no room for named sessions (each uses 5 connections)
         const NAMED_SESSION_POOL_SIZE: u32 = 5;
-        if pool.size + NAMED_SESSION_POOL_SIZE > sec.max_total_connections {
+        if pool.size.saturating_add(NAMED_SESSION_POOL_SIZE) > sec.max_total_connections {
             warn!(
                 "pool.size ({}) leaves no room for named sessions: each named session requires {} connections. \
                  Consider increasing max_total_connections (currently {}) or reducing pool.size to at least {}",

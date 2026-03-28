@@ -97,6 +97,24 @@ pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToo
 /// Timeout for SSH tunnel close operations. A hung SSH server should not block cleanup.
 const TUNNEL_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Timeout for pool close operations. Stuck connections should not block cleanup.
+const POOL_CLOSE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Close a connection pool with a timeout. Logs a warning on error or timeout, never blocks
+/// cleanup indefinitely.
+pub(crate) async fn close_pool_with_timeout(pool: sqlx::MySqlPool, context: &str) {
+    match tokio::time::timeout(POOL_CLOSE_TIMEOUT, pool.close()).await {
+        Ok(()) => {}
+        Err(_) => {
+            tracing::warn!(
+                "Pool close timed out after {}s {}",
+                POOL_CLOSE_TIMEOUT.as_secs(),
+                context
+            );
+        }
+    }
+}
+
 /// Close an SSH tunnel with a timeout. Logs a warning on error or timeout, never blocks
 /// cleanup indefinitely.
 pub(crate) async fn close_tunnel_with_timeout(tunnel: crate::tunnel::TunnelHandle, context: &str) {
@@ -471,7 +489,7 @@ impl SessionStore {
             if let Some(t) = session.tunnel {
                 close_tunnel_with_timeout(t, "on session limit rejection").await;
             }
-            session.pool.close().await;
+            close_pool_with_timeout(session.pool, "on session limit rejection").await;
             self.total_connections
                 .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
             return tool_error!(
@@ -488,7 +506,7 @@ impl SessionStore {
                 if let Some(t) = session.tunnel {
                     close_tunnel_with_timeout(t, "on duplicate session rejection").await;
                 }
-                session.pool.close().await;
+                close_pool_with_timeout(session.pool, "on duplicate session rejection").await;
                 self.total_connections
                     .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
                 return tool_error!(
@@ -541,7 +559,7 @@ impl SessionStore {
             }
             // Explicitly close the pool so server-side connections are released
             // immediately rather than waiting for sqlx's Drop impl to handle them.
-            session.pool.close().await;
+            close_pool_with_timeout(session.pool, "on disconnect").await;
             Ok(serialize_response(&json!({
                 "success": true,
                 "message": format!("Session '{}' closed", name)

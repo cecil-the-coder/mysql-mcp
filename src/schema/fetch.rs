@@ -14,7 +14,7 @@ pub(crate) fn is_col_str(row: &sqlx::mysql::MySqlRow, col: &str) -> String {
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
         })
         .unwrap_or_else(|e| {
-            tracing::warn!("Failed to extract column '{}' from row: {}", col, e);
+            tracing::error!("Failed to extract column '{}' from row: {}", col, e);
             String::new()
         })
 }
@@ -37,6 +37,26 @@ pub(crate) fn is_col_str_opt(row: &sqlx::mysql::MySqlRow, col: &str) -> Option<S
     } else {
         Some(trimmed.to_string())
     }
+}
+
+/// Validate that an escaped MySQL identifier contains only expected characters.
+/// Returns an error if null bytes or other unexpected characters are found.
+pub(crate) fn validate_escaped_identifier(escaped: &str) -> Result<()> {
+    if escaped.contains('\0') {
+        anyhow::bail!("Identifier contains null bytes");
+    }
+    // After escaping, backticks should only appear in pairs (``)
+    // Single backticks indicate incomplete escaping
+    let mut chars = escaped.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '`' {
+            if chars.peek() != Some(&'`') {
+                anyhow::bail!("Identifier contains unescaped backtick");
+            }
+            chars.next(); // consume the second backtick
+        }
+    }
+    Ok(())
 }
 
 /// Escape a MySQL identifier for use in backtick-quoted contexts.
@@ -184,8 +204,11 @@ pub(crate) async fn fetch_indexed_columns(
         ),
         None => format!("`{}`", escape_mysql_identifier(table)),
     };
-    // SHOW INDEX FROM does not support bound parameters in MySQL; identifiers
-    // must be escaped and interpolated directly (see escape_mysql_identifier).
+    // Security: SHOW INDEX FROM does not support bound parameters in MySQL.
+    // Identifiers must be escaped and interpolated directly. We validate that
+    // the escaped identifiers contain no unexpected characters (null bytes,
+    // unescaped backticks) before executing the query to mitigate injection risks.
+    validate_escaped_identifier(&qualified)?;
     let sql = format!("SHOW INDEX FROM {}", qualified);
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
