@@ -121,20 +121,18 @@ pub async fn execute_read_query(
 
     // DB phase with retry logic for transient network errors
     let db_start = Instant::now();
+    let pool_clone = pool.clone();
+    let effective_sql_owned = effective_sql_ref.to_string();
 
-    let db_result = {
-        use std::sync::Arc;
-        let sql_arc: Arc<str> = effective_sql_ref.into();
-        retry_on_transient_error(
-            || {
-                let pool = pool.clone();
-                let sql = Arc::clone(&sql_arc);
-                async move { Ok(sqlx::query(&sql).fetch_all(&pool).await?) }
-            },
-            retry_attempts,
-            "read_query",
-        )
-    };
+    let db_result = retry_on_transient_error(
+        || {
+            let pool = pool_clone.clone();
+            let sql = effective_sql_owned.clone();
+            async move { Ok(sqlx::query(&sql).fetch_all(&pool).await?) }
+        },
+        retry_attempts,
+        "read_query",
+    );
 
     let rows: Vec<sqlx::mysql::MySqlRow> =
         with_timeout(query_timeout_ms, "Query", db_result).await?;
@@ -144,13 +142,8 @@ pub async fn execute_read_query(
     let ser_start = Instant::now();
     let mut warnings = warnings; // make mutable so row_to_json can push serialization warnings
 
-    // Validate max_result_memory_mb is within sensible bounds (<= 16 GB) to prevent
-    // unexpected behavior in memory tracking logic with extremely large values.
-    const MAX_ALLOWED_MEMORY_MB: u32 = 16384; // 16 GB
-    let bounded_max_memory_mb = max_result_memory_mb.min(MAX_ALLOWED_MEMORY_MB);
-
     // Use saturating_mul to prevent overflow when max_result_memory_mb is large
-    let max_memory_bytes = (bounded_max_memory_mb as usize)
+    let max_memory_bytes = (max_result_memory_mb as usize)
         .saturating_mul(1024)
         .saturating_mul(1024);
     let mut total_memory_bytes: usize = 0;
@@ -176,7 +169,7 @@ pub async fn execute_read_query(
         if max_memory_bytes > 0 && total_memory_bytes.saturating_add(row_total) > max_memory_bytes {
             warnings.push(format!(
                 "Result truncated at {} rows due to memory limit ({} MB). Add a more specific WHERE clause or reduce selected columns.",
-                json_rows.len(), bounded_max_memory_mb
+                json_rows.len(), max_result_memory_mb
             ));
             break;
         }
