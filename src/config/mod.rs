@@ -259,6 +259,17 @@ impl Config {
                 pool.retry_attempts
             );
         }
+        if pool.query_timeout_ms == 0 {
+            warn!(
+                "pool.query_timeout_ms is 0 — query timeouts are disabled; a runaway query can block the server indefinitely"
+            );
+        }
+        if pool.slow_query_threshold_ms > 3_600_000 {
+            warn!(
+                "pool.slow_query_threshold_ms is very high ({}ms > 3,600,000ms / 1 hour); slow query logging may not trigger for most queries",
+                pool.slow_query_threshold_ms
+            );
+        }
         if !matches!(pool.performance_hints.as_str(), "none" | "auto" | "always") {
             anyhow::bail!(
                 "MYSQL_PERFORMANCE_HINTS must be one of: none, auto, always (got: '{}')",
