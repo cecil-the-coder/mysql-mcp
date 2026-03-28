@@ -218,7 +218,8 @@ pub fn build_connect_options(config: &Config) -> Result<MySqlConnectOptions> {
     // Reject unrecognized schemes rather than silently falling through to TCP.
     if let Some(cs) = &conn.connection_string {
         if cs.starts_with("mysql://") || cs.starts_with("mysql+ssl://") {
-            let opts = MySqlConnectOptions::from_str(cs)?;
+            let opts = MySqlConnectOptions::from_str(cs)?
+                .statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
             return Ok(opts);
         } else {
             // Find where to truncate the preview. If "://" is present, include it;
@@ -244,7 +245,8 @@ pub fn build_connect_options(config: &Config) -> Result<MySqlConnectOptions> {
         let mut opts = MySqlConnectOptions::new()
             .socket(socket)
             .username(&conn.user)
-            .password(&conn.password);
+            .password(&conn.password)
+            .statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
         if let Some(db) = &conn.database {
             opts = opts.database(db);
         }
