@@ -126,8 +126,13 @@ impl TunnelHandle {
     /// Prefer this over relying on Drop when you want clean teardown.
     pub async fn close(mut self) -> Result<()> {
         if let Some(mut child) = self.child.take() {
-            child.kill().await?;
-            // Wait for the child to be fully reaped so no zombie process is left behind.
+            // Best-effort kill — the process may have already exited, which is fine.
+            if let Err(e) = child.kill().await {
+                tracing::debug!("Failed to kill SSH process in close(): {}", e);
+                // Do NOT return early: we still need to wait() to reap the child
+                // and prevent a zombie process.
+            }
+            // Always wait for the child to be fully reaped so no zombie process is left behind.
             if let Err(e) = child.wait().await {
                 tracing::debug!("Failed to wait for SSH process: {}", e);
             }
