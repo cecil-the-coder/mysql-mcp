@@ -141,6 +141,12 @@ A `.env` file in the working directory is loaded automatically if present.
 
 ## Configuration Reference
 
+### General
+
+| Environment variable | Type | Default | Description |
+|---|---|---|---|
+| `MCP_CONFIG_FILE` | string | `mysql-mcp.toml` | Path to the TOML configuration file |
+
 ### Connection
 
 | TOML key | Environment variable | Type | Default | Description |
@@ -160,7 +166,7 @@ A `.env` file in the working directory is loaded automatically if present.
 | `pool.size` | `MYSQL_POOL_SIZE` | u32 | `20` | Maximum number of pooled connections |
 | `pool.query_timeout_ms` | `MYSQL_QUERY_TIMEOUT` | u64 | `30000` | Per-query timeout in milliseconds |
 | `pool.connect_timeout_ms` | `MYSQL_CONNECT_TIMEOUT` | u64 | `10000` | Connection establishment timeout in milliseconds; also serves as the acquire timeout |
-| `pool.performance_hints` | `MYSQL_PERFORMANCE_HINTS` | string | `none` | When to run EXPLAIN: `none`, `auto` (only when query exceeds `slow_query_threshold_ms`), or `always` |
+| `pool.performance_hints` | `MYSQL_PERFORMANCE_HINTS` | string | `none` | When to run EXPLAIN: `none`, `auto` (see below), or `always` |
 | `pool.slow_query_threshold_ms` | `MYSQL_SLOW_QUERY_THRESHOLD_MS` | u64 | `500` | Threshold used by `performance_hints=auto` |
 | `pool.max_rows` | `MYSQL_MAX_ROWS` | u32 | `1000` | Cap on rows returned per query; `LIMIT {max_rows}` is appended when the query has no LIMIT. `0` disables the cap |
 | `pool.cache_ttl_secs` | `MYSQL_CACHE_TTL` | u64 | `60` | Schema introspection cache TTL in seconds (`0` disables caching) |
@@ -191,6 +197,7 @@ A `.env` file in the working directory is loaded automatically if present.
 | `ssh.port` | `MYSQL_SSH_PORT` | u16 | `22` | SSH server port |
 | `ssh.user` | `MYSQL_SSH_USER` | string | — | SSH username |
 | `ssh.private_key` | `MYSQL_SSH_PRIVATE_KEY` | string | — | Path to PEM private key file |
+| `ssh.use_agent` | `MYSQL_SSH_USE_AGENT` | bool | `false` | Use SSH agent for authentication (alternative to private_key) |
 | `ssh.known_hosts_check` | `MYSQL_SSH_KNOWN_HOSTS_CHECK` | string | `strict` | Host key verification: `strict`, `accept-new`, or `insecure` |
 | `ssh.known_hosts_file` | `MYSQL_SSH_KNOWN_HOSTS_FILE` | string | — | Override path to known_hosts file |
 
@@ -431,8 +438,29 @@ No parameters.
 | Value | Behaviour |
 |---|---|
 | `none` (default) | No EXPLAIN is run. Fastest for queries known to be efficient. |
-| `auto` | EXPLAIN runs only when the query exceeds `slow_query_threshold_ms` (default 500 ms). Good for production: zero overhead on fast queries. |
+| `auto` | EXPLAIN runs only when query execution exceeds `slow_query_threshold_ms`. Good for production: zero overhead on fast queries. |
 | `always` | EXPLAIN runs after every SELECT. Useful during development or debugging. |
+
+**Important: Using `auto` mode effectively**
+
+When `performance_hints = "auto"`, EXPLAIN only runs when **both** conditions are met:
+1. The query execution time exceeds `slow_query_threshold_ms`
+2. The query is a SELECT statement
+
+The default `slow_query_threshold_ms` is **500 ms**. To customize this, set:
+
+```toml
+[pool]
+performance_hints = "auto"
+slow_query_threshold_ms = 1000  # Only EXPLAIN queries slower than 1 second
+```
+
+Or via environment variable:
+
+```bash
+MYSQL_PERFORMANCE_HINTS=auto
+MYSQL_SLOW_QUERY_THRESHOLD_MS=1000
+```
 
 You can also override per-call by passing `"explain": true` to `mysql_query` or by using `mysql_explain_plan` before executing.
 

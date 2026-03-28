@@ -1,3 +1,36 @@
+//! MCP protocol server implementation.
+//!
+//! This module implements the Model Context Protocol (MCP) server that exposes
+//! MySQL databases to MCP clients. It handles tool discovery, request routing,
+//! and session lifecycle management.
+//!
+//! # Submodules
+//!
+//! - `handlers` — Tool request handlers (query execution, schema info, etc.)
+//! - `sessions` — Named session management and connection pooling
+//! - `tool_schemas` — JSON schema definitions for MCP tools
+//! - `error` — Error types and conversions for MCP responses
+//!
+//! # Key Types
+//!
+//! - [`McpServer`] — Main server struct implementing the MCP protocol handler
+//! - [`HostValidation`] — Result of validating host strings against blocked IP ranges
+//!
+//! # Session Lifecycle
+//!
+//! The server maintains a default session (from configuration) and supports
+//! dynamic named sessions via `mysql_connect`. Named sessions:
+//! - Are created on demand with custom connection parameters
+//! - Have isolated connection pools (5 connections each)
+//! - Are automatically reaped after 10 minutes of idle time
+//! - Can be explicitly closed via `mysql_disconnect`
+//!
+//! # Security
+//!
+//! Host validation prevents connections to loopback, link-local, multicast,
+//! and other blocked IP ranges. DNS resolution is performed for hostnames
+//! to ensure all resolved IPs are permitted.
+
 use anyhow::Result;
 use rmcp::{
     model::{
