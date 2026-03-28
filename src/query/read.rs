@@ -205,9 +205,7 @@ pub async fn execute_read_query(
         // LIMIT) so that EXPLAIN reflects the user's query. MySQL's optimizer may
         // choose a different plan when a LIMIT is present (e.g. early-termination
         // index scan), producing misleading diagnostics.
-        match crate::query::explain::run_explain(pool, sql, Some(query_timeout_ms))
-            .await
-        {
+        match crate::query::explain::run_explain(pool, sql, Some(query_timeout_ms)).await {
             Ok(explain_result) => {
                 // Tier is computed inside parse_v2 based on full_table_scan and
                 // rows_examined_estimate — not wall-clock time, which includes
