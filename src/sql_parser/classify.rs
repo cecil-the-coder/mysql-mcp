@@ -279,6 +279,8 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
 
         Statement::Explain { .. } => (StatementType::Explain, None, None),
 
+        Statement::Describe { .. } => (StatementType::Explain, None, None),
+
         Statement::SetVariable { .. }
         | Statement::SetNames { .. }
         | Statement::SetNamesDefault { .. }
@@ -315,7 +317,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
             // Debug format, which can change between sqlparser releases without
             // warning.  Variants already handled by earlier arms (Query, Insert,
             // Update, Delete, CreateTable, CreateDatabase, CreateIndex, AlterTable,
-            // Drop, Truncate, Use, Show*, Set*, Explain, StartTransaction, Commit,
+            // Drop, Truncate, Use, Show*, Set*, Explain, Describe, StartTransaction, Commit,
             // Rollback, Grant, Revoke) are omitted — they never reach this point.
             let name = match &other {
                 // DML
