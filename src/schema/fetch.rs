@@ -40,21 +40,10 @@ pub(crate) fn is_col_str_opt(row: &sqlx::mysql::MySqlRow, col: &str) -> Option<S
 }
 
 /// Validate that an escaped MySQL identifier contains only expected characters.
-/// Returns an error if null bytes or other unexpected characters are found.
+/// Returns an error if null bytes are found, which could indicate tampering.
 pub(crate) fn validate_escaped_identifier(escaped: &str) -> Result<()> {
     if escaped.contains('\0') {
         anyhow::bail!("Identifier contains null bytes");
-    }
-    // After escaping, backticks should only appear in pairs (``)
-    // Single backticks indicate incomplete escaping
-    let mut chars = escaped.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '`' {
-            if chars.peek() != Some(&'`') {
-                anyhow::bail!("Identifier contains unescaped backtick");
-            }
-            chars.next(); // consume the second backtick
-        }
     }
     Ok(())
 }

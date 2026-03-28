@@ -102,7 +102,7 @@ where
 /// Evict the oldest entries from the cache to bring it under the max size.
 /// Uses LRU policy based on `accessed_at` time.
 fn evict_oldest_entries<T>(cache: &mut HashMap<String, CacheEntry<T>>, target_size: usize) {
-    let evict_count = cache.len().saturating_sub(target_size.saturating_sub(1));
+    let evict_count = cache.len().saturating_sub(target_size);
     if evict_count == 0 {
         return;
     }
