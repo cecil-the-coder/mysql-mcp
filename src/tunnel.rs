@@ -192,6 +192,23 @@ impl Drop for TunnelHandle {
     }
 }
 
+/// Validate that the SSH host contains only valid hostname characters.
+/// Valid characters are alphanumeric (a-z, A-Z, 0-9), hyphen (-), and dot (.).
+fn validate_ssh_host(host: &str) -> Result<()> {
+    if host.is_empty() {
+        return Err(anyhow::anyhow!("SSH host cannot be empty"));
+    }
+    for c in host.chars() {
+        if !c.is_ascii_alphanumeric() && c != '-' && c != '.' {
+            return Err(anyhow::anyhow!(
+                "SSH host contains invalid character '{}'. Host may only contain alphanumeric characters, hyphens, and dots",
+                c
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Build the argument list for the `ssh` subprocess.
 /// Extracted as a pure function so it can be unit-tested without spawning a real process.
 pub(crate) fn build_ssh_args(
@@ -199,7 +216,9 @@ pub(crate) fn build_ssh_args(
     db_host: &str,
     db_port: u16,
     local_port: u16,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
+    // Validate the SSH host to prevent potential command injection
+    validate_ssh_host(&ssh.host)?;
     // Known hosts check: "strict" -> "yes", "accept-new" -> "accept-new", "insecure" -> "no"
     let shk = match ssh.known_hosts_check.as_str() {
         "accept-new" => "accept-new",
@@ -248,7 +267,7 @@ pub(crate) fn build_ssh_args(
     // user@host — always last
     args.push(format!("{}@{}", ssh.user, ssh.host));
 
-    args
+    Ok(args)
 }
 
 /// Spawn an SSH tunnel and wait until the local forwarding port is accepting connections.
@@ -281,7 +300,7 @@ pub async fn spawn_ssh_tunnel(
         port
     };
 
-    let args = build_ssh_args(ssh, db_host, db_port, local_port);
+    let args = build_ssh_args(ssh, db_host, db_port, local_port)?;
 
     tracing::debug!(
         bastion = %ssh.host,
@@ -416,7 +435,7 @@ mod tests {
     #[test]
     fn test_args_basic_structure() {
         let ssh = base_ssh();
-        let args = build_ssh_args(&ssh, "db.internal", 3306, 54321);
+        let args = build_ssh_args(&ssh, "db.internal", 3306, 54321).unwrap();
 
         // Must include -N flag
         assert!(args.contains(&"-N".to_string()), "must include -N");
@@ -441,7 +460,7 @@ mod tests {
     #[test]
     fn test_args_strict_maps_to_yes() {
         let ssh = base_ssh(); // known_hosts_check = "strict"
-        let args = build_ssh_args(&ssh, "db", 3306, 12345);
+        let args = build_ssh_args(&ssh, "db", 3306, 12345).unwrap();
         assert!(args
             .windows(2)
             .any(|w| w[0] == "-o" && w[1] == "StrictHostKeyChecking=yes"));
@@ -451,7 +470,7 @@ mod tests {
     fn test_args_accept_new() {
         let mut ssh = base_ssh();
         ssh.known_hosts_check = "accept-new".to_string();
-        let args = build_ssh_args(&ssh, "db", 3306, 12345);
+        let args = build_ssh_args(&ssh, "db", 3306, 12345).unwrap();
         assert!(args
             .windows(2)
             .any(|w| w[0] == "-o" && w[1] == "StrictHostKeyChecking=accept-new"));
@@ -461,7 +480,7 @@ mod tests {
     fn test_args_insecure_maps_to_no() {
         let mut ssh = base_ssh();
         ssh.known_hosts_check = "insecure".to_string();
-        let args = build_ssh_args(&ssh, "db", 3306, 12345);
+        let args = build_ssh_args(&ssh, "db", 3306, 12345).unwrap();
         assert!(args
             .windows(2)
             .any(|w| w[0] == "-o" && w[1] == "StrictHostKeyChecking=no"));
@@ -471,7 +490,7 @@ mod tests {
     fn test_args_with_private_key() {
         let mut ssh = base_ssh();
         ssh.private_key = Some("/home/user/.ssh/id_rsa".to_string());
-        let args = build_ssh_args(&ssh, "db", 3306, 12345);
+        let args = build_ssh_args(&ssh, "db", 3306, 12345).unwrap();
         let i_idx = args
             .iter()
             .position(|a| a == "-i")
@@ -482,7 +501,7 @@ mod tests {
     #[test]
     fn test_args_without_private_key_has_no_dash_i() {
         let ssh = base_ssh(); // no private_key
-        let args = build_ssh_args(&ssh, "db", 3306, 12345);
+        let args = build_ssh_args(&ssh, "db", 3306, 12345).unwrap();
         assert!(
             !args.contains(&"-i".to_string()),
             "-i must NOT be present when no private_key"
@@ -493,7 +512,7 @@ mod tests {
     fn test_args_custom_ssh_port() {
         let mut ssh = base_ssh();
         ssh.port = 2222;
-        let args = build_ssh_args(&ssh, "db", 3306, 12345);
+        let args = build_ssh_args(&ssh, "db", 3306, 12345).unwrap();
         let p_idx = args
             .iter()
             .position(|a| a == "-p")
@@ -505,7 +524,7 @@ mod tests {
     fn test_args_known_hosts_file() {
         let mut ssh = base_ssh();
         ssh.known_hosts_file = Some("/etc/ssh/known_hosts".to_string());
-        let args = build_ssh_args(&ssh, "db", 3306, 12345);
+        let args = build_ssh_args(&ssh, "db", 3306, 12345).unwrap();
         assert!(
             args.windows(2)
                 .any(|w| { w[0] == "-o" && w[1] == "UserKnownHostsFile=/etc/ssh/known_hosts" }),
