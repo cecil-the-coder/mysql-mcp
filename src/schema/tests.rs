@@ -385,7 +385,7 @@ fn test_is_low_cardinality_type() {
     );
     assert!(is_low_cardinality_type("enum"), "enum is low cardinality");
     assert!(is_low_cardinality_type("set"), "set is low cardinality");
-    // Bare "bit" is not low cardinality - only bit(1) with a single bit is
+    // Bare "bit" is not low cardinality - only bit(N) with N<=4 is
     assert!(
         !is_low_cardinality_type("bit"),
         "bare bit is NOT low cardinality (may be bit(64) etc)"
@@ -430,13 +430,26 @@ fn test_is_low_cardinality_type() {
         is_low_cardinality_type("set('a','b','c')"),
         "set('a','b','c') is low cardinality"
     );
+    // BIT(N) with N<=4 is low cardinality (at most 16 values)
     assert!(
         is_low_cardinality_type("bit(1)"),
         "bit(1) is low cardinality"
     );
     assert!(
-        !is_low_cardinality_type("bit(2)"),
-        "bit(2) is NOT low cardinality (4 values)"
+        is_low_cardinality_type("bit(2)"),
+        "bit(2) is low cardinality (4 values)"
+    );
+    assert!(
+        is_low_cardinality_type("bit(3)"),
+        "bit(3) is low cardinality (8 values)"
+    );
+    assert!(
+        is_low_cardinality_type("bit(4)"),
+        "bit(4) is low cardinality (16 values)"
+    );
+    assert!(
+        !is_low_cardinality_type("bit(5)"),
+        "bit(5) is NOT low cardinality (32 values)"
     );
     assert!(
         !is_low_cardinality_type("bit(8)"),
@@ -447,6 +460,7 @@ fn test_is_low_cardinality_type() {
         "bit(64) is NOT low cardinality (2^64 values)"
     );
     assert!(is_low_cardinality_type("BIT(1)"), "BIT(1) case-insensitive");
+    assert!(is_low_cardinality_type("BIT(3)"), "BIT(3) case-insensitive");
     assert!(
         is_low_cardinality_type("tinyint(1) unsigned"),
         "tinyint(1) unsigned is low cardinality"
