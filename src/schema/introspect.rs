@@ -108,15 +108,16 @@ fn evict_oldest_entries<T>(cache: &mut HashMap<String, CacheEntry<T>>, target_si
     }
 
     // Find the keys with oldest access times
-    let mut entries: Vec<(&String, Instant)> = cache
+    let entries: Vec<(String, Instant)> = cache
         .iter()
-        .map(|(k, v)| (k, v.accessed_at))
+        .map(|(k, v)| (k.clone(), v.accessed_at))
         .collect();
+    let mut entries: Vec<(String, Instant)> = entries;
     entries.sort_by(|a, b| a.1.cmp(&b.1));
 
     // Remove the oldest entries
     for (key, _) in entries.into_iter().take(evict_count) {
-        cache.remove(key);
+        cache.remove(&key);
     }
 }
 
@@ -165,7 +166,11 @@ impl SchemaIntrospector {
     /// * `pool` - MySQL connection pool
     /// * `cache_ttl_secs` - Cache TTL in seconds (0 to disable caching)
     /// * `cache_max_size` - Maximum number of entries per cache (LRU eviction when exceeded)
-    pub fn new_with_config(pool: Arc<sqlx::MySqlPool>, cache_ttl_secs: u64, cache_max_size: usize) -> Self {
+    pub fn new_with_config(
+        pool: Arc<sqlx::MySqlPool>,
+        cache_ttl_secs: u64,
+        cache_max_size: usize,
+    ) -> Self {
         Self {
             inner: Arc::new(SchemaCache {
                 pool,
@@ -188,6 +193,7 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.tables_cache),
             cache_key,
             self.inner.cache_ttl,
+            self.inner.cache_max_size,
             move || {
                 let pool = Arc::clone(&pool);
                 async move { fetch::fetch_tables(&pool, owned_database.as_deref()).await }
@@ -213,6 +219,7 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.indexed_columns_cache),
             cache_key,
             self.inner.cache_ttl,
+            self.inner.cache_max_size,
             move || {
                 let pool = Arc::clone(&pool);
                 async move {
@@ -243,6 +250,7 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.composite_indexes_cache),
             cache_key,
             self.inner.cache_ttl,
+            self.inner.cache_max_size,
             move || {
                 let pool = Arc::clone(&pool);
                 async move {
@@ -268,6 +276,7 @@ impl SchemaIntrospector {
             Arc::clone(&self.inner.columns_cache),
             cache_key,
             self.inner.cache_ttl,
+            self.inner.cache_max_size,
             move || {
                 let pool = Arc::clone(&pool);
                 async move {
