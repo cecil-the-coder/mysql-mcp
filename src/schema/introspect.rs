@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 use super::fetch;
 use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
@@ -26,11 +26,12 @@ pub(crate) struct SchemaCache {
     pub(crate) indexed_columns_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<String>>>>>,
     pub(crate) composite_indexes_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<IndexDef>>>>>,
     /// In-flight request deduplication to prevent cache stampedes when caching is disabled.
-    /// Uses RwLock for fast reads (check if request exists) and Mutex inside for the channel.
-    pub(crate) pending_tables: Arc<RwLock<HashMap<String, tokio::sync::broadcast::Sender<Result<Vec<TableInfo>>>>>>,
-    pub(crate) pending_columns: Arc<RwLock<HashMap<String, tokio::sync::broadcast::Sender<Result<Vec<ColumnInfo>>>>>>,
-    pub(crate) pending_indexed_columns: Arc<RwLock<HashMap<String, tokio::sync::broadcast::Sender<Result<Vec<String>>>>>>,
-    pub(crate) pending_composite_indexes: Arc<RwLock<HashMap<String, tokio::sync::broadcast::Sender<Result<Vec<IndexDef>>>>>>,
+    /// Uses a Mutex-wrapped Option containing a oneshot receiver for each in-flight key.
+    /// The oneshot pattern ensures each waiter gets exactly one result without race conditions.
+    pub(crate) pending_tables: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<TableInfo>>>>>>,
+    pub(crate) pending_columns: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<ColumnInfo>>>>>>,
+    pub(crate) pending_indexed_columns: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<String>>>>>>,
+    pub(crate) pending_composite_indexes: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<IndexDef>>>>>>,
 }
 
 /// Simple TTL cache helper. Returns cached data if fresh, otherwise fetches,
@@ -43,7 +44,7 @@ pub(crate) async fn get_cached_or_refresh<T, F, Fut>(
     cache_key: String,
     cache_ttl: Duration,
     fetch_fn: F,
-    pending: Arc<RwLock<HashMap<String, tokio::sync::broadcast::Sender<Result<T>>>>>,
+    pending: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<T>>>>>,
 ) -> Result<T>
 where
     T: Clone + Send + 'static,
@@ -60,66 +61,57 @@ where
         }
     }
 
-    // Check if there's already an in-flight request for this key (stampede protection)
-    {
-        let pending_guard = pending.read().await;
-        if let Some(sender) = pending_guard.get(&cache_key) {
-            // Another request is in-flight, wait for it to complete
-            let mut receiver = sender.subscribe();
+    // Check if there's already an in-flight request for this key (stampede protection).
+    // Use a loop to handle races for the pending slot.
+    loop {
+        let mut pending_guard = pending.lock().await;
+        if let Some(receiver) = pending_guard.remove(&cache_key) {
+            // Another request is in-flight, we stole its receiver. Wait for it.
             drop(pending_guard);
-            return receiver.recv().await.map_err(|_| anyhow::anyhow!("in-flight request cancelled"))?;
+            return receiver.await.map_err(|_| anyhow::anyhow!("in-flight request cancelled"))?;
         }
-    }
 
-    // No in-flight request, we need to start one. Create a broadcast channel.
-    let (tx, _rx) = tokio::sync::broadcast::channel(1);
+        // No in-flight request, we need to start one.
+        // Create a oneshot channel. We store the receiver in pending so other waiters
+        // can steal it, and we keep the sender to fulfill it after fetching.
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        pending_guard.insert(cache_key.clone(), rx);
+        drop(pending_guard);
 
-    // Register ourselves as the in-flight request
-    {
-        let mut pending_guard = pending.write().await;
-        // Double-check: another request might have started while we were waiting for write lock
-        if let Some(sender) = pending_guard.get(&cache_key) {
-            let mut receiver = sender.subscribe();
-            drop(pending_guard);
-            return receiver.recv().await.map_err(|_| anyhow::anyhow!("in-flight request cancelled"))?;
-        }
-        pending_guard.insert(cache_key.clone(), tx.clone());
-    }
+        // Fetch new data (lock released so we don't block readers during I/O)
+        let result = fetch_fn().await;
 
-    // Fetch new data (lock released so we don't block readers during I/O)
-    let result = fetch_fn().await;
+        // Fulfill the oneshot. If the channel is closed (all waiters dropped), that's ok.
+        let _ = tx.send(result.clone());
 
-    // Broadcast the result to any waiting requests
-    let _ = tx.send(result.clone());
-
-    // Remove ourselves from pending
-    {
-        let mut pending_guard = pending.write().await;
+        // Remove ourselves from pending (receiver is gone, just clean up the entry if still there)
+        let mut pending_guard = pending.lock().await;
         pending_guard.remove(&cache_key);
-    }
+        drop(pending_guard);
 
-    // Store in cache if caching is enabled.
-    if cache_ttl > Duration::ZERO {
-        if let Ok(ref data) = result {
-            let mut guard = cache.lock().await;
-            // Re-check under the write lock: if another caller already refreshed the
-            // entry while we were fetching, return their result to avoid stampede.
-            if let Some(entry) = guard.get(&cache_key) {
-                if entry.fetched_at.elapsed() < cache_ttl {
-                    return Ok(entry.data.clone());
+        // Store in cache if caching is enabled.
+        if cache_ttl > Duration::ZERO {
+            if let Ok(ref data) = result {
+                let mut guard = cache.lock().await;
+                // Re-check under the write lock: if another caller already refreshed the
+                // entry while we were fetching, return their result to avoid stampede.
+                if let Some(entry) = guard.get(&cache_key) {
+                    if entry.fetched_at.elapsed() < cache_ttl {
+                        return Ok(entry.data.clone());
+                    }
                 }
+                guard.insert(
+                    cache_key,
+                    CacheEntry {
+                        data: data.clone(),
+                        fetched_at: Instant::now(),
+                    },
+                );
             }
-            guard.insert(
-                cache_key,
-                CacheEntry {
-                    data: data.clone(),
-                    fetched_at: Instant::now(),
-                },
-            );
         }
-    }
 
-    result
+        return result;
+    }
 }
 
 pub struct SchemaIntrospector {
@@ -164,10 +156,10 @@ impl SchemaIntrospector {
                 columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 indexed_columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 composite_indexes_cache: Arc::new(Mutex::new(HashMap::new())),
-                pending_tables: Arc::new(RwLock::new(HashMap::new())),
-                pending_columns: Arc::new(RwLock::new(HashMap::new())),
-                pending_indexed_columns: Arc::new(RwLock::new(HashMap::new())),
-                pending_composite_indexes: Arc::new(RwLock::new(HashMap::new())),
+                pending_tables: Arc::new(Mutex::new(HashMap::new())),
+                pending_columns: Arc::new(Mutex::new(HashMap::new())),
+                pending_indexed_columns: Arc::new(Mutex::new(HashMap::new())),
+                pending_composite_indexes: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
     }
