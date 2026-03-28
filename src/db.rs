@@ -87,7 +87,8 @@ pub async fn build_session_pool(
             ssl,
             ssl_accept_invalid_certs,
             ssl_ca.is_some(),
-        ));
+        ))
+        .statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
     if let Some(db) = database {
         opts = opts.database(db);
     }
@@ -198,7 +199,8 @@ pub async fn build_session_pool_with_tunnel(
             ssl,
             ssl_accept_invalid_certs,
             ssl_ca.is_some(),
-        ));
+        ))
+        .statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
     if let Some(db) = database {
         opts = opts.database(db);
     }
