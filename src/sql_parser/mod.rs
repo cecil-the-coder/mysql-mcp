@@ -263,8 +263,9 @@ fn strip_single_quoted_literals(s: &str) -> String {
             while i < bytes.len() && bytes[i] != b'\'' {
                 i += 1;
             }
-            // Since input is valid UTF-8 and we slice at ASCII boundaries, this is safe
-            result.push_str(std::str::from_utf8(&bytes[start..i]).unwrap());
+            // Since input is valid UTF-8 and we slice at ASCII boundaries, this is safe.
+            // Using from_utf8_lossy as a defensive measure against future refactoring.
+            result.push_str(&String::from_utf8_lossy(&bytes[start..i]));
         }
     }
 

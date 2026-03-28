@@ -53,26 +53,56 @@ async fn main() -> Result<()> {
         (Arc::new(pool), None)
     };
 
-    // Warm up one connection so the pool is ready for the first query
+    // Warm up one connection so the pool is ready for the first query.
+    // Retry up to 3 attempts to improve reliability on slow startup scenarios
+    // (e.g., SSH tunnels that may need time to establish).
     {
         let warmup_pool = (*db).clone();
         let acquire_timeout_ms = config.pool.connect_timeout_ms;
         tokio::spawn(async move {
-            match tokio::time::timeout(
-                std::time::Duration::from_millis(acquire_timeout_ms),
-                warmup_pool.acquire(),
-            )
-            .await
-            {
-                Ok(Ok(conn)) => {
-                    drop(conn);
-                    tracing::debug!("Pool warmup complete (1 connection)");
+            let max_attempts: u32 = 3;
+            let retry_delay = std::time::Duration::from_millis(500);
+            for attempt in 1..=max_attempts {
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(acquire_timeout_ms),
+                    warmup_pool.acquire(),
+                )
+                .await
+                {
+                    Ok(Ok(conn)) => {
+                        drop(conn);
+                        tracing::debug!("Pool warmup complete (1 connection) on attempt {}", attempt);
+                        return;
+                    }
+                    Ok(Err(e)) => {
+                        if attempt < max_attempts {
+                            tracing::warn!(
+                                "Pool warmup attempt {}/{} failed: {}. Retrying in {:?}...",
+                                attempt, max_attempts, e, retry_delay
+                            );
+                            tokio::time::sleep(retry_delay).await;
+                        } else {
+                            tracing::warn!(
+                                "Pool warmup attempt {}/{} failed: {}. Giving up.",
+                                attempt, max_attempts, e
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        if attempt < max_attempts {
+                            tracing::warn!(
+                                "Pool warmup attempt {}/{} timed out after {}ms. Retrying in {:?}...",
+                                attempt, max_attempts, acquire_timeout_ms, retry_delay
+                            );
+                            tokio::time::sleep(retry_delay).await;
+                        } else {
+                            tracing::warn!(
+                                "Pool warmup attempt {}/{} timed out after {}ms. Giving up.",
+                                attempt, max_attempts, acquire_timeout_ms
+                            );
+                        }
+                    }
                 }
-                Ok(Err(e)) => tracing::warn!("Pool warmup connection failed: {}", e),
-                Err(_) => tracing::warn!(
-                    "Pool warmup connection timed out after {}ms",
-                    acquire_timeout_ms
-                ),
             }
         });
     }
