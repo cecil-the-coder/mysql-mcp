@@ -142,6 +142,19 @@ async fn build_pool_tunneled(
         config.security.ssl_accept_invalid_certs,
         config.security.ssl_ca.is_some(),
     );
+    // Through an SSH tunnel sqlx connects to 127.0.0.1, so the server
+    // certificate's CN/SAN (which matches the real DB hostname) can never
+    // match the loopback address.  Downgrade to Required to keep encryption
+    // while skipping the impossible hostname check.
+    let ssl_mode = if matches!(ssl_mode, MySqlSslMode::VerifyIdentity) {
+        tracing::warn!(
+            "SSL mode VerifyIdentity downgraded to Required: hostname verification \
+             is not meaningful through an SSH tunnel (connecting to 127.0.0.1)"
+        );
+        MySqlSslMode::Required
+    } else {
+        ssl_mode
+    };
     let mut opts = MySqlConnectOptions::new()
         .host("127.0.0.1")
         .port(tunnel.local_port)
@@ -190,16 +203,26 @@ pub async fn build_session_pool_with_tunnel(
     ssh: &crate::config::SshConfig,
 ) -> Result<(MySqlPool, crate::tunnel::TunnelHandle)> {
     let tunnel = crate::tunnel::spawn_ssh_tunnel(ssh, host, port).await?;
+    let ssl_mode = determine_ssl_mode(ssl, ssl_accept_invalid_certs, ssl_ca.is_some());
+    // Through an SSH tunnel sqlx connects to 127.0.0.1, so the server
+    // certificate's CN/SAN (which matches the real DB hostname) can never
+    // match the loopback address.  Downgrade to Required to keep encryption
+    // while skipping the impossible hostname check.
+    let ssl_mode = if matches!(ssl_mode, MySqlSslMode::VerifyIdentity) {
+        tracing::warn!(
+            "SSL mode VerifyIdentity downgraded to Required: hostname verification \
+             is not meaningful through an SSH tunnel (connecting to 127.0.0.1)"
+        );
+        MySqlSslMode::Required
+    } else {
+        ssl_mode
+    };
     let mut opts = MySqlConnectOptions::new()
         .host("127.0.0.1")
         .port(tunnel.local_port)
         .username(user)
         .password(password)
-        .ssl_mode(determine_ssl_mode(
-            ssl,
-            ssl_accept_invalid_certs,
-            ssl_ca.is_some(),
-        ))
+        .ssl_mode(ssl_mode)
         .statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
     if let Some(db) = database {
         opts = opts.database(db);
