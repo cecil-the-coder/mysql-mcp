@@ -28,10 +28,14 @@ pub(crate) struct SchemaCache {
     /// In-flight request deduplication to prevent cache stampedes when caching is disabled.
     /// Uses a Mutex-wrapped Option containing a oneshot receiver for each in-flight key.
     /// The oneshot pattern ensures each waiter gets exactly one result without race conditions.
-    pub(crate) pending_tables: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<TableInfo>>>>>>,
-    pub(crate) pending_columns: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<ColumnInfo>>>>>>,
-    pub(crate) pending_indexed_columns: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<String>>>>>>,
-    pub(crate) pending_composite_indexes: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<IndexDef>>>>>>,
+    pub(crate) pending_tables:
+        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<TableInfo>>>>>>,
+    pub(crate) pending_columns:
+        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<ColumnInfo>>>>>>,
+    pub(crate) pending_indexed_columns:
+        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<String>>>>>>,
+    pub(crate) pending_composite_indexes:
+        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<IndexDef>>>>>>,
 }
 
 /// Simple TTL cache helper. Returns cached data if fresh, otherwise fetches,
@@ -68,7 +72,9 @@ where
         if let Some(receiver) = pending_guard.remove(&cache_key) {
             // Another request is in-flight, we stole its receiver. Wait for it.
             drop(pending_guard);
-            return receiver.await.map_err(|_| anyhow::anyhow!("in-flight request cancelled"))?;
+            return receiver
+                .await
+                .map_err(|_| anyhow::anyhow!("in-flight request cancelled"))?;
         }
 
         // No in-flight request, we need to start one.
@@ -82,7 +88,12 @@ where
         let result = fetch_fn().await;
 
         // Fulfill the oneshot. If the channel is closed (all waiters dropped), that's ok.
-        let _ = tx.send(result.clone());
+        // Manually construct the result to send since anyhow::Error doesn't implement Clone.
+        let to_send = match &result {
+            Ok(data) => Ok(data.clone()),
+            Err(e) => Err(anyhow::anyhow!("{e}")),
+        };
+        let _ = tx.send(to_send);
 
         // Remove ourselves from pending (receiver is gone, just clean up the entry if still there)
         let mut pending_guard = pending.lock().await;
