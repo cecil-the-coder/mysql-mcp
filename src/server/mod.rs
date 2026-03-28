@@ -41,8 +41,11 @@ fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
                 || v4.is_multicast()
         }
         IpAddr::V6(v6) => {
-            // Check IPv4-mapped addresses
-            if let Some(v4) = v6.to_ipv4() {
+            // Check IPv4-mapped addresses (::ffff:a.b.c.d)
+            // Use to_ipv4_mapped() — NOT to_ipv4() — because to_ipv4()
+            // also converts "IPv4-compatible" addresses like ::1 into
+            // Some(0.0.0.1), which would bypass the IPv6 loopback check.
+            if let Some(v4) = v6.to_ipv4_mapped() {
                 let loopback_blocked = !allow_loopback && v4.is_loopback();
                 return loopback_blocked
                     || v4.is_link_local()

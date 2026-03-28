@@ -4,6 +4,7 @@ use sqlx::MySqlPool;
 use super::with_timeout;
 
 /// Default timeout (30 s) used when no explicit timeout is available.
+#[cfg(test)]
 const DEFAULT_EXPLAIN_TIMEOUT_MS: u64 = 30_000;
 
 /// Query performance tier derived from EXPLAIN output.
