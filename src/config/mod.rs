@@ -329,6 +329,7 @@ impl Config {
                 if !std::path::Path::new(key_path).exists() {
                     anyhow::bail!("ssh.private_key path does not exist: {}", key_path);
                 }
+                check_private_key_permissions(key_path)?;
             }
             if let Some(ref khf) = ssh.known_hosts_file {
                 let khf_path = std::path::Path::new(khf);
@@ -352,6 +353,42 @@ impl Config {
 
         Ok(())
     }
+}
+
+/// Check that an SSH private key file has restrictive permissions (mode 0o600 or 0o400).
+/// On Unix systems, this verifies the file is not world-readable or writable by group/others.
+pub(crate) fn check_private_key_permissions(path: &str) -> anyhow::Result<()> {
+    let metadata = std::fs::metadata(path)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = metadata.permissions().mode() & 0o777;
+        // Allow 0o600 (owner read/write) or 0o400 (owner read-only)
+        // and 0o300/0o500 (owner write/owner read) in case user is root
+        if mode & 0o77 != 0 {
+            anyhow::bail!(
+                "ssh.private_key {} has overly permissive permissions: {:o}. \
+                 SSH private keys must not be readable by group or others. \
+                 Run: chmod 600 {}",
+                path,
+                mode,
+                path
+            );
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        // On non-Unix systems, just check that the file is readable
+        // and issue a warning since permissions cannot be validated
+        tracing::warn!(
+            "ssh.private_key {} permissions cannot be validated on this platform",
+            path
+        );
+    }
+
+    Ok(())
 }
 
 /// Load config from a TOML file path. Returns default config if file doesn't exist.
