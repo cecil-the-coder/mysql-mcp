@@ -527,4 +527,42 @@ private_key = "/tmp/key.pem"
             "ssh should remain None when no MYSQL_SSH_* vars set"
         );
     }
+
+    // Test: schema permissions parsed case-insensitively from env vars
+    #[test]
+    fn test_schema_permissions_case_insensitive_env() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        use crate::config::env_config::load_env_config;
+
+        std::env::set_var("MYSQL_SCHEMA_casedb_PERMISSIONS", "Insert,UPDATE,Delete");
+        let env = load_env_config();
+        std::env::remove_var("MYSQL_SCHEMA_casedb_PERMISSIONS");
+
+        let config = env.apply_to(Config::default());
+        let perms = config
+            .security
+            .schema_permissions
+            .get("casedb")
+            .expect("schema 'casedb' should be present (lowercased from env key)");
+
+        assert_eq!(
+            perms.allow_insert,
+            Some(true),
+            "Insert should match case-insensitively"
+        );
+        assert_eq!(
+            perms.allow_update,
+            Some(true),
+            "UPDATE should match case-insensitively"
+        );
+        assert_eq!(
+            perms.allow_delete,
+            Some(true),
+            "Delete should match case-insensitively"
+        );
+        assert_eq!(
+            perms.allow_ddl, None,
+            "ddl was not listed so it should remain None"
+        );
+    }
 }

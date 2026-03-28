@@ -147,9 +147,9 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
                 );
                 continue;
             }
-            let ops: Vec<&str> = val
+            let ops: Vec<String> = val
                 .split(',')
-                .map(|s| s.trim())
+                .map(|s| s.trim().to_lowercase())
                 .filter(|s| !s.is_empty())
                 .collect();
             if ops.is_empty() {
@@ -161,18 +161,21 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
                 continue;
             }
             for op in &ops {
-                if !op.is_empty() && !matches!(*op, "insert" | "update" | "delete" | "ddl") {
+                if !op.is_empty() && !matches!(op.as_str(), "insert" | "update" | "delete" | "ddl")
+                {
                     eprintln!(
                         "Warning: unrecognized permission '{}' in {}; valid values: insert, update, delete, ddl",
                         op, key
                     );
                 }
             }
+            // Only set permissions that are explicitly listed; unlisted ops remain
+            // None so they don't override values from TOML or defaults.
             let perms = SchemaPermissions {
-                allow_insert: Some(ops.contains(&"insert")),
-                allow_update: Some(ops.contains(&"update")),
-                allow_delete: Some(ops.contains(&"delete")),
-                allow_ddl: Some(ops.contains(&"ddl")),
+                allow_insert: ops.iter().any(|s| s == "insert").then_some(true),
+                allow_update: ops.iter().any(|s| s == "update").then_some(true),
+                allow_delete: ops.iter().any(|s| s == "delete").then_some(true),
+                allow_ddl: ops.iter().any(|s| s == "ddl").then_some(true),
             };
             map.insert(schema_name, perms);
         }

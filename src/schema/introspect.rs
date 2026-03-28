@@ -246,31 +246,31 @@ impl SchemaIntrospector {
             return vec![];
         }
 
-        let indexed_cols = self
-            .list_indexed_columns(table, database)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    "index suggestions: failed to list indexed columns for {}: {}",
-                    table,
-                    e
-                );
-                Vec::new()
-            });
-        let composite_indexes = self
-            .list_composite_indexes(table, database)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    "index suggestions: failed to list composite indexes for {}: {}",
-                    table,
-                    e
-                );
-                Vec::new()
-            });
-        let col_info: std::collections::HashMap<String, ColumnInfo> = self
-            .get_columns(table, database)
-            .await
+        // Run all three independent DB lookups concurrently to avoid sequential
+        // round-trip latency when the cache is cold.
+        let (indexed_cols_res, composite_indexes_res, col_info_res) = tokio::join!(
+            self.list_indexed_columns(table, database),
+            self.list_composite_indexes(table, database),
+            self.get_columns(table, database),
+        );
+
+        let indexed_cols = indexed_cols_res.unwrap_or_else(|e| {
+            tracing::warn!(
+                "index suggestions: failed to list indexed columns for {}: {}",
+                table,
+                e
+            );
+            Vec::new()
+        });
+        let composite_indexes = composite_indexes_res.unwrap_or_else(|e| {
+            tracing::warn!(
+                "index suggestions: failed to list composite indexes for {}: {}",
+                table,
+                e
+            );
+            Vec::new()
+        });
+        let col_info: std::collections::HashMap<String, ColumnInfo> = col_info_res
             .unwrap_or_else(|e| {
                 tracing::warn!(
                     "index suggestions: failed to get columns for {}: {}",
