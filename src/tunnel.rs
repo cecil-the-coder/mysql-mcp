@@ -537,14 +537,14 @@ mod tests {
     #[test]
     fn test_args_no_known_hosts_file_by_default() {
         let ssh = base_ssh();
-        let args = build_ssh_args(&ssh, "db", 3306, 12345);
+        let args = build_ssh_args(&ssh, "db", 3306, 12345).unwrap();
         assert!(!args.iter().any(|a| a.starts_with("UserKnownHostsFile=")));
     }
 
     #[test]
     fn test_args_user_at_host_is_last() {
         let ssh = base_ssh();
-        let args = build_ssh_args(&ssh, "db", 3306, 12345);
+        let args = build_ssh_args(&ssh, "db", 3306, 12345).unwrap();
         assert_eq!(
             args.last().unwrap(),
             "ubuntu@bastion.example.com",
@@ -555,7 +555,7 @@ mod tests {
     #[test]
     fn test_args_db_host_and_port_in_forwarding() {
         let ssh = base_ssh();
-        let args = build_ssh_args(&ssh, "10.0.0.5", 5432, 44444);
+        let args = build_ssh_args(&ssh, "10.0.0.5", 5432, 44444).unwrap();
         let l_idx = args.iter().position(|a| a == "-L").unwrap();
         assert_eq!(args[l_idx + 1], "127.0.0.1:44444:10.0.0.5:5432");
     }
