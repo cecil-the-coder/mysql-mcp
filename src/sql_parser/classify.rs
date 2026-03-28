@@ -382,6 +382,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
                         where_columns: Vec::new(),
                         has_leading_wildcard_like: false,
                         warnings: Vec::new(),
+                        serialized_sql: String::new(),
                     });
                 }
             };
@@ -425,6 +426,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         where_columns,
         has_leading_wildcard_like,
         warnings,
+        serialized_sql: String::new(),
     })
 }
 
@@ -660,6 +662,9 @@ pub(super) fn collect_where_info(
             collect_where_info(pattern, cols, seen, has_leading_wildcard);
         }
         Expr::InList { expr, .. } => {
+            collect_where_info(expr, cols, seen, has_leading_wildcard);
+        }
+        Expr::InSubquery { expr, .. } => {
             collect_where_info(expr, cols, seen, has_leading_wildcard);
         }
         Expr::Function(func) => {
