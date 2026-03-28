@@ -733,7 +733,12 @@ mod tests {
 
     fn err_message(result: Result<(), CallToolResult>) -> String {
         let err = result.unwrap_err();
-        err.content[0].raw.as_text().expect("expected text content").text.clone()
+        err.content[0]
+            .raw
+            .as_text()
+            .expect("expected text content")
+            .text
+            .clone()
     }
 
     #[test]
