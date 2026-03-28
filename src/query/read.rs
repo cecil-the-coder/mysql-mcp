@@ -54,6 +54,10 @@ pub struct QueryResult {
     pub execution_time_ms: u64,
     pub serialization_time_ms: u64,
     pub capped: bool,
+    /// True when `capped` is set specifically because a SHOW statement exceeded
+    /// `max_rows` and was truncated post-fetch. SHOW statements don't support
+    /// LIMIT/OFFSET, so the hint in the handler must differ from SELECT queries.
+    pub show_capped: bool,
     pub parse_warnings: Vec<String>,
     pub plan: Option<Value>,
     pub explain_error: Option<String>,
@@ -234,6 +238,7 @@ pub async fn execute_read_query(
         execution_time_ms: db_elapsed,
         serialization_time_ms: ser_elapsed,
         capped: was_capped,
+        show_capped,
         parse_warnings: warnings,
         plan,
         explain_error,

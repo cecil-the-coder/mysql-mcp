@@ -378,11 +378,10 @@ impl SessionStore {
                 .as_deref()
                 .unwrap_or("(default database)");
             return tool_error!(
-                "{} operation denied on '{}': {}. Set MYSQL_ALLOW_{} env var to enable.",
+                "{} operation denied on '{}': {}",
                 perm_type,
                 schema_hint,
-                e,
-                perm_type
+                e
             );
         }
 
@@ -433,11 +432,20 @@ impl SessionStore {
                     });
                     if result.capped {
                         output["capped"] = json!(true);
-                        output["next_offset"] = json!(result.row_count);
-                        output["capped_hint"] = json!(format!(
-                            "Result truncated to {} rows. Add 'LIMIT {} OFFSET {}' to your query to fetch the next page.",
-                            result.row_count, result.row_count, result.row_count
-                        ));
+                        if result.show_capped {
+                            output["capped_hint"] = json!(format!(
+                                "Result truncated to {} rows. SHOW statements do not support LIMIT/OFFSET. \
+                                 Use a more specific SHOW filter (e.g. SHOW TABLES LIKE 'prefix%%') \
+                                 or query information_schema directly with a SELECT + LIMIT.",
+                                result.row_count
+                            ));
+                        } else {
+                            output["next_offset"] = json!(result.row_count);
+                            output["capped_hint"] = json!(format!(
+                                "Result truncated to {} rows. Add 'LIMIT {} OFFSET {}' to your query to fetch the next page.",
+                                result.row_count, result.row_count, result.row_count
+                            ));
+                        }
                     }
                     if !result.parse_warnings.is_empty() {
                         output["parse_warnings"] = json!(result.parse_warnings);

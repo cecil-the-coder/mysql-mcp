@@ -107,7 +107,7 @@ pub fn check_permission(
         )),
         _ => None,
     } {
-        return check_write_op(allowed, &label, env_var, config, target_schema);
+        return check_write_op(allowed, &label, env_var);
     }
 
     // Unsupported statement types — provide targeted hints where possible.
@@ -154,8 +154,6 @@ fn check_write_op(
     allowed: bool,
     op: &str,
     env_var: &str,
-    _config: &Config,
-    _target_schema: Option<&str>,
 ) -> Result<()> {
     if !allowed {
         bail!(
