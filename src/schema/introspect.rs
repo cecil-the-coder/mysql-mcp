@@ -8,10 +8,6 @@ use tokio::sync::Mutex;
 use super::fetch;
 use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
 
-// Maximum reasonable cache TTL: 1 year in seconds (365 days).
-// This prevents overflow issues when converting to Duration.
-const MAX_CACHE_TTL_SECS: u64 = 365 * 24 * 60 * 60; // 31,536,000 seconds
-
 // ---------------------------------------------------------------------------
 // Cache internals
 // ---------------------------------------------------------------------------
@@ -114,13 +110,10 @@ fn key_matches_table_and_db(key: &str, table: &str, database: Option<&str>) -> b
 
 impl SchemaIntrospector {
     pub fn new(pool: Arc<sqlx::MySqlPool>, cache_ttl_secs: u64) -> Self {
-        // Clamp cache_ttl_secs to a reasonable maximum to prevent overflow
-        // or unexpected behavior from misconfiguration.
-        let clamped_ttl = cache_ttl_secs.min(MAX_CACHE_TTL_SECS);
         Self {
             inner: Arc::new(SchemaCache {
                 pool,
-                cache_ttl: Duration::from_secs(clamped_ttl),
+                cache_ttl: Duration::from_secs(cache_ttl_secs),
                 tables_cache: Arc::new(Mutex::new(HashMap::new())),
                 columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 indexed_columns_cache: Arc::new(Mutex::new(HashMap::new())),
