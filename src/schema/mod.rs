@@ -54,23 +54,30 @@ pub struct IndexDef {
 
 /// Returns true if the given MySQL data type has inherently low cardinality,
 /// meaning it can take only a small number of distinct values (e.g. boolean,
-/// enum, set, or bit(1)). An index on such a column alone often has poor
-/// selectivity and the optimizer may choose a full table scan instead.
+/// enum, set, or bit(N) with N≤4). An index on such a column alone often has
+/// poor selectivity and the optimizer may choose a full table scan instead.
 pub fn is_low_cardinality_type(data_type: &str) -> bool {
     let dt = data_type.to_lowercase();
     // TINYINT(1) is used as BOOLEAN in MySQL; BOOL/BOOLEAN are aliases.
     // ENUM and SET have a fixed, typically small value domain.
-    // BIT(1) is a single-bit flag (2 possible values). Multi-bit columns like BIT(64)
-    // are NOT low cardinality since they can represent 2^n distinct values.
-    // bool/boolean are exact aliases; enum/set/bit(1)/tinyint(1) use prefix matching so that
+    // BIT(N) with N≤4 has at most 16 possible values (2^N) — too few for good
+    // index selectivity. Larger bit widths (e.g. BIT(64)) are NOT low cardinality.
+    // bool/boolean are exact aliases; enum/set/tinyint(1) use prefix matching so that
     // MySQL's full column_type strings like `enum('Y','N')`, `set('a','b')`,
-    // and `bit(1)` are all recognised.
+    // and `tinyint(1) unsigned` are all recognised.
     dt == "bool"
         || dt == "boolean"
         || dt.starts_with("enum")
         || dt.starts_with("set")
-        || dt.starts_with("bit(1)")
         || dt.starts_with("tinyint(1)")
+        || {
+            if dt.starts_with("bit(") {
+                let n: String = dt[4..].chars().take_while(|c| c.is_ascii_digit()).collect();
+                n.parse::<u32>().map_or(false, |n| n <= 4)
+            } else {
+                false
+            }
+        }
 }
 
 // --------------------------------------------------------------------------
