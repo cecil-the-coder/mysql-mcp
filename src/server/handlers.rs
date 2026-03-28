@@ -583,7 +583,11 @@ mod tests {
         assert_eq!(err.is_error, Some(true));
         // Verify error message contains expected text
         let text = err.content[0].raw.as_text();
-        assert!(text.is_some(), "expected text content in error response, got: {:?}", err.content[0].raw);
+        assert!(
+            text.is_some(),
+            "expected text content in error response, got: {:?}",
+            err.content[0].raw
+        );
         let text = text.unwrap();
         assert!(text.text.contains("SQL cannot be empty"));
     }
@@ -598,7 +602,11 @@ mod tests {
         assert_eq!(err.is_error, Some(true));
         // Verify error message mentions size limit
         let text = err.content[0].raw.as_text();
-        assert!(text.is_some(), "expected text content in error response, got: {:?}", err.content[0].raw);
+        assert!(
+            text.is_some(),
+            "expected text content in error response, got: {:?}",
+            err.content[0].raw
+        );
         let text = text.unwrap();
         assert!(text.text.contains("exceeds maximum size"));
         assert!(text.text.contains("1 MB"));
