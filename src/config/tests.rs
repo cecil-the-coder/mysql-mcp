@@ -546,15 +546,18 @@ private_key = "/tmp/key.pem"
             .expect("schema 'casedb' should be present (lowercased from env key)");
 
         assert_eq!(
-            perms.allow_insert, Some(true),
+            perms.allow_insert,
+            Some(true),
             "Insert should match case-insensitively"
         );
         assert_eq!(
-            perms.allow_update, Some(true),
+            perms.allow_update,
+            Some(true),
             "UPDATE should match case-insensitively"
         );
         assert_eq!(
-            perms.allow_delete, Some(true),
+            perms.allow_delete,
+            Some(true),
             "Delete should match case-insensitively"
         );
         assert_eq!(
