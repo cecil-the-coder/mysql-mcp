@@ -94,6 +94,62 @@ pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToo
     Ok(())
 }
 
+/// Validate a file path for SSH-related parameters to prevent path traversal attacks.
+///
+/// Rejects paths containing `..` components (which could escape intended directories)
+/// and ensures the path is absolute and resides within an allowed directory prefix
+/// (home directory, `/etc/ssh/`, or `/tmp/`).
+///
+/// Returns `Err(CallToolResult)` with an error message on validation failure.
+fn validate_ssh_file_path(path: &str, param_name: &str) -> Result<(), CallToolResult> {
+    use std::path::Component;
+
+    let parsed = std::path::Path::new(path);
+
+    // Reject paths with .. components to prevent path traversal
+    for component in parsed.components() {
+        if matches!(component, Component::ParentDir) {
+            return Err(crate::server::error::error_response(format!(
+                "{} must not contain '..' path traversal components",
+                param_name
+            )));
+        }
+    }
+
+    // Require absolute paths to avoid ambiguity
+    if !parsed.is_absolute() {
+        return Err(crate::server::error::error_response(format!(
+            "{} must be an absolute path",
+            param_name
+        )));
+    }
+
+    // Restrict to expected directories: home, /etc/ssh, /tmp
+    let allowed = |p: &std::path::Path| -> bool {
+        // Canonicalize is not used here since the file may not exist yet;
+        // instead we check the prefix literally (no '..' already verified above).
+        if p.starts_with("/etc/ssh") || p.starts_with("/tmp") {
+            return true;
+        }
+        // Check home directory prefix
+        if let Ok(home) = std::env::var("HOME") {
+            if p.starts_with(&home) {
+                return true;
+            }
+        }
+        false
+    };
+
+    if !allowed(parsed) {
+        return Err(crate::server::error::error_response(format!(
+            "{} must reside within the home directory, /etc/ssh/, or /tmp/",
+            param_name
+        )));
+    }
+
+    Ok(())
+}
+
 /// Timeout for SSH tunnel close operations. A hung SSH server should not block cleanup.
 const TUNNEL_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -245,6 +301,9 @@ impl SessionStore {
                      Set ssl=true to use certificate validation, or remove ssl_ca."
                 );
             }
+            if let Err(e) = validate_ssh_file_path(ca_path, "ssl_ca") {
+                return Ok(e);
+            }
             if let Err(e) = std::fs::File::open(ca_path) {
                 return tool_error!("SSL CA file not readable: {}: {}", ca_path, e);
             }
@@ -311,11 +370,17 @@ impl SessionStore {
             );
         }
         if let Some(ref key_path) = ssh_private_key {
+            if let Err(e) = validate_ssh_file_path(key_path, "ssh_private_key") {
+                return Ok(e);
+            }
             if !std::path::Path::new(key_path).exists() {
                 return tool_error!("SSH private key file not found: {}", key_path);
             }
         }
         if let Some(ref khf) = ssh_known_hosts_file {
+            if let Err(e) = validate_ssh_file_path(khf, "ssh_known_hosts_file") {
+                return Ok(e);
+            }
             let khf_path = std::path::Path::new(khf);
             if ssh_known_hosts_check == "strict" {
                 if !khf_path.exists() {
@@ -660,5 +725,69 @@ mod tests {
 
         let result = validate_identifier("mixed_name-with-hyphens", "Identifier");
         assert!(result.is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // Tests for validate_ssh_file_path
+    // ------------------------------------------------------------------
+
+    fn err_message(result: Result<(), CallToolResult>) -> String {
+        let err = result.unwrap_err();
+        err.content[0].raw.as_text().expect("expected text content").text.clone()
+    }
+
+    #[test]
+    fn test_validate_ssh_file_path_rejects_parent_dir() {
+        let result = validate_ssh_file_path("/home/user/../etc/passwd", "ssh_private_key");
+        assert!(result.is_err());
+        assert!(err_message(result).contains("'..'"));
+    }
+
+    #[test]
+    fn test_validate_ssh_file_path_rejects_parent_dir_leading() {
+        let result = validate_ssh_file_path("../../etc/passwd", "ssh_known_hosts_file");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_ssh_file_path_rejects_relative_path() {
+        let result = validate_ssh_file_path("ssh/id_rsa", "ssh_private_key");
+        assert!(result.is_err());
+        assert!(err_message(result).contains("absolute path"));
+    }
+
+    #[test]
+    fn test_validate_ssh_file_path_rejects_disallowed_directory() {
+        let result = validate_ssh_file_path("/etc/passwd", "ssh_private_key");
+        assert!(result.is_err());
+        assert!(err_message(result).contains("home directory"));
+    }
+
+    #[test]
+    fn test_validate_ssh_file_path_allows_etc_ssh() {
+        let result = validate_ssh_file_path("/etc/ssh/ssh_config", "ssh_known_hosts_file");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_ssh_file_path_allows_tmp() {
+        let result = validate_ssh_file_path("/tmp/known_hosts", "ssh_known_hosts_file");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_ssh_file_path_allows_home_directory() {
+        // This test assumes $HOME is set (standard in most test environments)
+        let home = std::env::var("HOME").unwrap_or("/root".to_string());
+        let path = format!("{}/.ssh/id_rsa", home);
+        let result = validate_ssh_file_path(&path, "ssh_private_key");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_ssh_file_path_rejects_traversal_mid_path() {
+        let result = validate_ssh_file_path("/tmp/foo/../../etc/shadow", "ssh_private_key");
+        assert!(result.is_err());
+        assert!(err_message(result).contains("'..'"));
     }
 }

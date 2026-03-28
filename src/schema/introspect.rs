@@ -17,6 +17,11 @@ pub(crate) struct CacheEntry<T> {
     pub(crate) fetched_at: Instant,
 }
 
+/// Per-key lock map used to deduplicate concurrent fetches for the same cache key.
+/// Each key maps to a lightweight mutex; only the holder of the lock performs the
+/// actual fetch, while other waiters block and then read the populated cache.
+type PendingLocks = Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>;
+
 /// Shared cache state for SchemaIntrospector.
 pub(crate) struct SchemaCache {
     pub(crate) pool: Arc<sqlx::MySqlPool>,
@@ -25,13 +30,25 @@ pub(crate) struct SchemaCache {
     pub(crate) columns_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<ColumnInfo>>>>>,
     pub(crate) indexed_columns_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<String>>>>>,
     pub(crate) composite_indexes_cache: Arc<Mutex<HashMap<String, CacheEntry<Vec<IndexDef>>>>>,
+    // Per-key deduplication locks — one set per cache to prevent stampede.
+    pub(crate) tables_pending: PendingLocks,
+    pub(crate) columns_pending: PendingLocks,
+    pub(crate) indexed_columns_pending: PendingLocks,
+    pub(crate) composite_indexes_pending: PendingLocks,
 }
 
-/// Simple TTL cache helper. Returns cached data if fresh, otherwise fetches,
-/// stores, and returns.
-/// When `cache_ttl == Duration::ZERO`, always re-fetches (cache disabled).
+/// Simple TTL cache helper with per-key deduplication. Returns cached data if
+/// fresh, otherwise fetches, stores, and returns.
+///
+/// When `cache_ttl == Duration::ZERO`, always re-fetches (cache disabled) and
+/// skips deduplication since there is no cached result for waiters to reuse.
+///
+/// The `pending` map provides per-key locks so that concurrent requests for the
+/// same uncached key share a single in-flight fetch rather than each executing
+/// the query independently (cache stampede prevention).
 pub(crate) async fn get_cached_or_refresh<T, F, Fut>(
     cache: Arc<Mutex<HashMap<String, CacheEntry<T>>>>,
+    pending: PendingLocks,
     cache_key: String,
     cache_ttl: Duration,
     fetch_fn: F,
@@ -41,7 +58,7 @@ where
     F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = Result<T>> + Send + 'static,
 {
-    // Check cache under lock, return if fresh
+    // Fast path: check cache under lock, return if fresh
     {
         let guard = cache.lock().await;
         if let Some(entry) = guard.get(&cache_key) {
@@ -51,19 +68,40 @@ where
         }
     }
 
-    // Fetch new data (lock released so we don't block readers during I/O)
-    let data = fetch_fn().await?;
+    // When caching is disabled, just fetch directly — no deduplication needed
+    // since there is no shared result for waiters to consume.
+    if cache_ttl == Duration::ZERO {
+        return fetch_fn().await;
+    }
 
-    // Store in cache if caching is enabled.
-    // Re-check under the write lock: if another caller already refreshed the
-    // entry while we were fetching, return their result to avoid stampede.
-    if cache_ttl > Duration::ZERO {
-        let mut guard = cache.lock().await;
+    // Acquire per-key deduplication lock so only one caller fetches per key.
+    let key_lock = {
+        let mut pending_guard = pending.lock().await;
+        Arc::clone(
+            pending_guard
+                .entry(cache_key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
+    };
+    let _key_guard = key_lock.lock().await;
+
+    // Double-check cache: another caller may have already refreshed while we
+    // waited for the per-key lock.
+    {
+        let guard = cache.lock().await;
         if let Some(entry) = guard.get(&cache_key) {
             if entry.fetched_at.elapsed() < cache_ttl {
                 return Ok(entry.data.clone());
             }
         }
+    }
+
+    // We hold the per-key lock and the cache is still stale — perform the fetch.
+    let data = fetch_fn().await?;
+
+    // Store in cache.
+    {
+        let mut guard = cache.lock().await;
         guard.insert(
             cache_key,
             CacheEntry {
@@ -118,6 +156,10 @@ impl SchemaIntrospector {
                 columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 indexed_columns_cache: Arc::new(Mutex::new(HashMap::new())),
                 composite_indexes_cache: Arc::new(Mutex::new(HashMap::new())),
+                tables_pending: Arc::new(Mutex::new(HashMap::new())),
+                columns_pending: Arc::new(Mutex::new(HashMap::new())),
+                indexed_columns_pending: Arc::new(Mutex::new(HashMap::new())),
+                composite_indexes_pending: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
     }
@@ -129,6 +171,7 @@ impl SchemaIntrospector {
 
         get_cached_or_refresh(
             Arc::clone(&self.inner.tables_cache),
+            Arc::clone(&self.inner.tables_pending),
             cache_key,
             self.inner.cache_ttl,
             move || {
@@ -154,6 +197,7 @@ impl SchemaIntrospector {
 
         get_cached_or_refresh(
             Arc::clone(&self.inner.indexed_columns_cache),
+            Arc::clone(&self.inner.indexed_columns_pending),
             cache_key,
             self.inner.cache_ttl,
             move || {
@@ -184,6 +228,7 @@ impl SchemaIntrospector {
 
         get_cached_or_refresh(
             Arc::clone(&self.inner.composite_indexes_cache),
+            Arc::clone(&self.inner.composite_indexes_pending),
             cache_key,
             self.inner.cache_ttl,
             move || {
@@ -209,6 +254,7 @@ impl SchemaIntrospector {
 
         get_cached_or_refresh(
             Arc::clone(&self.inner.columns_cache),
+            Arc::clone(&self.inner.columns_pending),
             cache_key,
             self.inner.cache_ttl,
             move || {
