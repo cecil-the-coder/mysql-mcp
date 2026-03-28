@@ -3,10 +3,16 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, oneshot};
 
 use super::fetch;
 use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
+
+// ---------------------------------------------------------------------------
+// Type aliases for pending request maps (to avoid clippy::type_complexity)
+// ---------------------------------------------------------------------------
+
+pub(crate) type PendingMap<T> = Arc<Mutex<HashMap<String, oneshot::Receiver<Result<T>>>>>;
 
 // ---------------------------------------------------------------------------
 // Cache internals
@@ -28,14 +34,10 @@ pub(crate) struct SchemaCache {
     /// In-flight request deduplication to prevent cache stampedes when caching is disabled.
     /// Uses a Mutex-wrapped Option containing a oneshot receiver for each in-flight key.
     /// The oneshot pattern ensures each waiter gets exactly one result without race conditions.
-    pub(crate) pending_tables:
-        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<TableInfo>>>>>>,
-    pub(crate) pending_columns:
-        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<ColumnInfo>>>>>>,
-    pub(crate) pending_indexed_columns:
-        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<String>>>>>>,
-    pub(crate) pending_composite_indexes:
-        Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<Vec<IndexDef>>>>>>,
+    pub(crate) pending_tables: PendingMap<Vec<TableInfo>>,
+    pub(crate) pending_columns: PendingMap<Vec<ColumnInfo>>,
+    pub(crate) pending_indexed_columns: PendingMap<Vec<String>>,
+    pub(crate) pending_composite_indexes: PendingMap<Vec<IndexDef>>,
 }
 
 /// Simple TTL cache helper. Returns cached data if fresh, otherwise fetches,
@@ -48,7 +50,7 @@ pub(crate) async fn get_cached_or_refresh<T, F, Fut>(
     cache_key: String,
     cache_ttl: Duration,
     fetch_fn: F,
-    pending: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Receiver<Result<T>>>>>,
+    pending: PendingMap<T>,
 ) -> Result<T>
 where
     T: Clone + Send + 'static,
@@ -66,13 +68,13 @@ where
     }
 
     // Check if there's already an in-flight request for this key (stampede protection).
-    // Use a loop to handle races for the pending slot.
-    loop {
+    // Use a retry loop to handle races for the pending slot.
+    let result = 'retry: loop {
         let mut pending_guard = pending.lock().await;
         if let Some(receiver) = pending_guard.remove(&cache_key) {
             // Another request is in-flight, we stole its receiver. Wait for it.
             drop(pending_guard);
-            return receiver
+            break 'retry receiver
                 .await
                 .map_err(|_| anyhow::anyhow!("in-flight request cancelled"))?;
         }
@@ -108,7 +110,7 @@ where
                 // entry while we were fetching, return their result to avoid stampede.
                 if let Some(entry) = guard.get(&cache_key) {
                     if entry.fetched_at.elapsed() < cache_ttl {
-                        return Ok(entry.data.clone());
+                        break 'retry Ok(entry.data.clone());
                     }
                 }
                 guard.insert(
@@ -121,8 +123,10 @@ where
             }
         }
 
-        return result;
-    }
+        break 'retry result;
+    };
+
+    result
 }
 
 pub struct SchemaIntrospector {
