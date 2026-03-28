@@ -12,6 +12,13 @@ use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
 // Cache internals
 // ---------------------------------------------------------------------------
 
+/// Construct a cache key from database name (optional) and table name.
+/// The format is "{database}\t{table}" where database may be empty.
+/// Tab is used as separator because it is not a valid MySQL identifier character.
+fn make_cache_key(database: Option<&str>, table: &str) -> String {
+    format!("{}\t{}", database.unwrap_or(""), table)
+}
+
 pub(crate) struct CacheEntry<T> {
     pub(crate) data: T,
     pub(crate) fetched_at: Instant,
@@ -147,7 +154,7 @@ impl SchemaIntrospector {
         table: &str,
         database: Option<&str>,
     ) -> Result<Vec<String>> {
-        let cache_key = format!("{}\t{}", database.unwrap_or(""), table);
+        let cache_key = make_cache_key(database, table);
         let pool = Arc::clone(&self.inner.pool);
         let owned_table = table.to_owned();
         let owned_database = database.map(|s| s.to_owned());
@@ -173,7 +180,7 @@ impl SchemaIntrospector {
         table: &str,
         database: Option<&str>,
     ) -> Result<Vec<IndexDef>> {
-        let cache_key = format!("{}\t{}", database.unwrap_or(""), table);
+        let cache_key = make_cache_key(database, table);
         let pool = Arc::clone(&self.inner.pool);
         let owned_table = table.to_owned();
         let owned_database = database.map(|s| s.to_owned());
@@ -194,7 +201,7 @@ impl SchemaIntrospector {
         table_name: &str,
         database: Option<&str>,
     ) -> Result<Vec<ColumnInfo>> {
-        let cache_key = format!("{}\t{}", database.unwrap_or(""), table_name);
+        let cache_key = make_cache_key(database, table_name);
         let pool = Arc::clone(&self.inner.pool);
         let owned_table = table_name.to_owned();
         let owned_database = database.map(|s| s.to_owned());
