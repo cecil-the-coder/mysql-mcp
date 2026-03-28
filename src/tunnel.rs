@@ -200,45 +200,48 @@ pub(crate) fn build_ssh_args(
     db_port: u16,
     local_port: u16,
 ) -> Vec<String> {
-    let mut args: Vec<String> = Vec::new();
-
-    // -N: do not execute a remote command (tunnel only)
-    args.push("-N".to_string());
-
-    // Local port forwarding: 127.0.0.1:local_port -> db_host:db_port
-    args.push("-L".to_string());
-    args.push(format!("127.0.0.1:{}:{}:{}", local_port, db_host, db_port));
-
-    // SSH server port
-    args.push("-p".to_string());
-    args.push(ssh.port.to_string());
-
-    // Prevent any interactive prompts — essential for a headless server
-    args.push("-o".to_string());
-    args.push("BatchMode=yes".to_string());
-
-    // Connection timeout for the SSH handshake itself
-    args.push("-o".to_string());
-    args.push("ConnectTimeout=10".to_string());
-
     // Known hosts check: "strict" -> "yes", "accept-new" -> "accept-new", "insecure" -> "no"
     let shk = match ssh.known_hosts_check.as_str() {
         "accept-new" => "accept-new",
         "insecure" => "no",
         _ => "yes", // "strict" and any unknown value -> safest default
     };
-    args.push("-o".to_string());
+
+    // Build final Vec<String> directly, using String::from for static literals
+    let mut args = Vec::new();
+
+    // -N: do not execute a remote command (tunnel only)
+    args.push(String::from("-N"));
+
+    // Local port forwarding: 127.0.0.1:local_port -> db_host:db_port
+    args.push(String::from("-L"));
+    args.push(format!("127.0.0.1:{}:{}:{}", local_port, db_host, db_port));
+
+    // SSH server port
+    args.push(String::from("-p"));
+    args.push(ssh.port.to_string());
+
+    // Prevent any interactive prompts — essential for a headless server
+    args.push(String::from("-o"));
+    args.push(String::from("BatchMode=yes"));
+
+    // Connection timeout for the SSH handshake itself
+    args.push(String::from("-o"));
+    args.push(String::from("ConnectTimeout=10"));
+
+    // StrictHostKeyChecking option
+    args.push(String::from("-o"));
     args.push(format!("StrictHostKeyChecking={}", shk));
 
     // Custom known_hosts file (e.g. for Docker/CI environments)
     if let Some(ref kh_file) = ssh.known_hosts_file {
-        args.push("-o".to_string());
+        args.push(String::from("-o"));
         args.push(format!("UserKnownHostsFile={}", kh_file));
     }
 
     // Private key file (if provided; otherwise relies on SSH agent or default ~/.ssh/id_*)
     if let Some(ref key_path) = ssh.private_key {
-        args.push("-i".to_string());
+        args.push(String::from("-i"));
         args.push(key_path.clone());
     }
 
@@ -308,7 +311,11 @@ pub async fn spawn_ssh_tunnel(
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         // Check if the child process has already exited (tunnel failed to start)
-        let child = handle.child.as_mut().unwrap(); // safe: we just created it
+        let Some(child) = handle.child.as_mut() else {
+            return Err(anyhow::anyhow!(
+                "SSH tunnel: child process is not available (unexpected state)"
+            ));
+        };
         match child.try_wait() {
             Ok(Some(status)) => {
                 // Collect any buffered stderr for diagnostics (best effort, 500 ms cap).
