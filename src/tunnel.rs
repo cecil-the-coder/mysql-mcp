@@ -194,14 +194,16 @@ impl Drop for TunnelHandle {
 
 /// Validate that the SSH host contains only valid hostname characters.
 /// Valid characters are alphanumeric (a-z, A-Z, 0-9), hyphen (-), and dot (.).
+/// IPv6 addresses are allowed, including those enclosed in brackets (e.g., [::1]).
 fn validate_ssh_host(host: &str) -> Result<()> {
     if host.is_empty() {
         return Err(anyhow::anyhow!("SSH host cannot be empty"));
     }
     for c in host.chars() {
-        if !c.is_ascii_alphanumeric() && c != '-' && c != '.' {
+        // Allow alphanumeric, hyphen, dot, and IPv6-related characters ([, ], :)
+        if !c.is_ascii_alphanumeric() && c != '-' && c != '.' && c != ':' && c != '[' && c != ']' {
             return Err(anyhow::anyhow!(
-                "SSH host contains invalid character '{}'. Host may only contain alphanumeric characters, hyphens, and dots",
+                "SSH host contains invalid character '{}'. Host may only contain alphanumeric characters, hyphens, dots, and IPv6 notation",
                 c
             ));
         }
