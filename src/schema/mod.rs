@@ -71,9 +71,9 @@ pub fn is_low_cardinality_type(data_type: &str) -> bool {
         || dt.starts_with("set")
         || dt.starts_with("tinyint(1)")
         || {
-            if dt.starts_with("bit(") {
-                let n: String = dt[4..].chars().take_while(|c| c.is_ascii_digit()).collect();
-                n.parse::<u32>().map_or(false, |n| n <= 4)
+            if let Some(rest) = dt.strip_prefix("bit(") {
+                let n: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                n.parse::<u32>().is_ok_and(|n| n <= 4)
             } else {
                 false
             }
