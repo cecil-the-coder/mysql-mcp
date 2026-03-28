@@ -357,7 +357,7 @@ impl Config {
 
 /// Check that an SSH private key file has restrictive permissions (mode 0o600 or 0o400).
 /// On Unix systems, this verifies the file is not world-readable or writable by group/others.
-fn check_private_key_permissions(path: &str) -> anyhow::Result<()> {
+pub(crate) fn check_private_key_permissions(path: &str) -> anyhow::Result<()> {
     let metadata = std::fs::metadata(path)?;
     
     #[cfg(unix)]
@@ -379,7 +379,7 @@ fn check_private_key_permissions(path: &str) -> anyhow::Result<()> {
     #[cfg(not(unix))]
     {
         // On non-Unix systems, just check that the file is readable
-        // and issue a warning via trace log
+        // and issue a warning since permissions cannot be validated
         tracing::warn!("ssh.private_key {} permissions cannot be validated on this platform", path);
     }
     

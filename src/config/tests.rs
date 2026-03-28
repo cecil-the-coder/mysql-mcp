@@ -565,4 +565,101 @@ private_key = "/tmp/key.pem"
             "ddl was not listed so it should remain None"
         );
     }
+
+    // Test: SSH private key with 0o600 permissions passes validation
+    #[test]
+    fn test_ssh_private_key_valid_permissions() {
+        use crate::config::check_private_key_permissions;
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        temp_file.write_all(b"test-key-data").unwrap();
+        let path = temp_file.path().to_str().unwrap();
+
+        // Set permissions to 0o600 (owner read/write only)
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(path, perms).unwrap();
+
+        assert!(
+            check_private_key_permissions(path).is_ok(),
+            "0o600 permissions should be valid"
+        );
+    }
+
+    // Test: SSH private key with 0o400 permissions passes validation (read-only)
+    #[test]
+    fn test_ssh_private_key_readonly_permissions() {
+        use crate::config::check_private_key_permissions;
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        temp_file.write_all(b"test-key-data").unwrap();
+        let path = temp_file.path().to_str().unwrap();
+
+        // Set permissions to 0o400 (owner read only)
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o400);
+        std::fs::set_permissions(path, perms).unwrap();
+
+        assert!(
+            check_private_key_permissions(path).is_ok(),
+            "0o400 permissions should be valid"
+        );
+    }
+
+    // Test: SSH private key with overly permissive permissions fails validation
+    #[test]
+    fn test_ssh_private_key_overly_permissive_permissions() {
+        use crate::config::check_private_key_permissions;
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        temp_file.write_all(b"test-key-data").unwrap();
+        let path = temp_file.path().to_str().unwrap();
+
+        // Set permissions to 0o644 (world readable - bad for SSH keys)
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o644);
+        std::fs::set_permissions(path, perms).unwrap();
+
+        let result = check_private_key_permissions(path);
+        assert!(result.is_err(), "0o644 permissions should be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("overly permissive permissions"),
+            "error should mention overly permissive permissions: {}",
+            err
+        );
+        assert!(
+            err.contains("chmod 600"),
+            "error should suggest chmod 600: {}",
+            err
+        );
+    }
+
+    // Test: SSH private key with group-writable permissions fails validation
+    #[test]
+    fn test_ssh_private_key_group_writable_permissions() {
+        use crate::config::check_private_key_permissions;
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        temp_file.write_all(b"test-key-data").unwrap();
+        let path = temp_file.path().to_str().unwrap();
+
+        // Set permissions to 0o620 (group writable - bad for SSH keys)
+        let mut perms = std::fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o620);
+        std::fs::set_permissions(path, perms).unwrap();
+
+        assert!(
+            check_private_key_permissions(path).is_err(),
+            "0o620 (group writable) permissions should be rejected"
+        );
+    }
 }
