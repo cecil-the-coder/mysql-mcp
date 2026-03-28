@@ -169,10 +169,10 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
                 }
             }
             let perms = SchemaPermissions {
-                allow_insert: Some(ops.contains(&"insert".to_string())),
-                allow_update: Some(ops.contains(&"update".to_string())),
-                allow_delete: Some(ops.contains(&"delete".to_string())),
-                allow_ddl: Some(ops.contains(&"ddl".to_string())),
+                allow_insert: Some(ops.iter().any(|s| s == "insert")),
+                allow_update: Some(ops.iter().any(|s| s == "update")),
+                allow_delete: Some(ops.iter().any(|s| s == "delete")),
+                allow_ddl: Some(ops.iter().any(|s| s == "ddl")),
             };
             map.insert(schema_name, perms);
         }

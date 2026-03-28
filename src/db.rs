@@ -131,22 +131,14 @@ fn determine_ssl_mode(ssl: bool, accept_invalid: bool, has_ca: bool) -> MySqlSsl
     }
 }
 
-/// Build a pool that connects through an already-established SSH tunnel.
-/// Connects sqlx to `127.0.0.1:{tunnel.local_port}` rather than the real DB host/port.
-async fn build_pool_tunneled(
-    config: &Config,
-    tunnel: &crate::tunnel::TunnelHandle,
-) -> Result<MySqlPool> {
-    let ssl_mode = determine_ssl_mode(
-        config.security.ssl,
-        config.security.ssl_accept_invalid_certs,
-        config.security.ssl_ca.is_some(),
-    );
-    // Through an SSH tunnel sqlx connects to 127.0.0.1, so the server
-    // certificate's CN/SAN (which matches the real DB hostname) can never
-    // match the loopback address.  Downgrade to Required to keep encryption
-    // while skipping the impossible hostname check.
-    let ssl_mode = if matches!(ssl_mode, MySqlSslMode::VerifyIdentity) {
+/// Downgrade `VerifyIdentity` to `Required` for connections through an SSH tunnel.
+///
+/// Through a tunnel sqlx connects to `127.0.0.1`, so the server certificate's
+/// CN/SAN (which matches the real DB hostname) can never match the loopback
+/// address.  This keeps encryption intact while skipping the impossible hostname
+/// check.
+fn adjust_ssl_mode_for_tunnel(ssl_mode: MySqlSslMode) -> MySqlSslMode {
+    if matches!(ssl_mode, MySqlSslMode::VerifyIdentity) {
         tracing::warn!(
             "SSL mode VerifyIdentity downgraded to Required: hostname verification \
              is not meaningful through an SSH tunnel (connecting to 127.0.0.1)"
@@ -154,7 +146,20 @@ async fn build_pool_tunneled(
         MySqlSslMode::Required
     } else {
         ssl_mode
-    };
+    }
+}
+
+/// Build a pool that connects through an already-established SSH tunnel.
+/// Connects sqlx to `127.0.0.1:{tunnel.local_port}` rather than the real DB host/port.
+async fn build_pool_tunneled(
+    config: &Config,
+    tunnel: &crate::tunnel::TunnelHandle,
+) -> Result<MySqlPool> {
+    let ssl_mode = adjust_ssl_mode_for_tunnel(determine_ssl_mode(
+        config.security.ssl,
+        config.security.ssl_accept_invalid_certs,
+        config.security.ssl_ca.is_some(),
+    ));
     let mut opts = MySqlConnectOptions::new()
         .host("127.0.0.1")
         .port(tunnel.local_port)
@@ -203,20 +208,11 @@ pub async fn build_session_pool_with_tunnel(
     ssh: &crate::config::SshConfig,
 ) -> Result<(MySqlPool, crate::tunnel::TunnelHandle)> {
     let tunnel = crate::tunnel::spawn_ssh_tunnel(ssh, host, port).await?;
-    let ssl_mode = determine_ssl_mode(ssl, ssl_accept_invalid_certs, ssl_ca.is_some());
-    // Through an SSH tunnel sqlx connects to 127.0.0.1, so the server
-    // certificate's CN/SAN (which matches the real DB hostname) can never
-    // match the loopback address.  Downgrade to Required to keep encryption
-    // while skipping the impossible hostname check.
-    let ssl_mode = if matches!(ssl_mode, MySqlSslMode::VerifyIdentity) {
-        tracing::warn!(
-            "SSL mode VerifyIdentity downgraded to Required: hostname verification \
-             is not meaningful through an SSH tunnel (connecting to 127.0.0.1)"
-        );
-        MySqlSslMode::Required
-    } else {
-        ssl_mode
-    };
+    let ssl_mode = adjust_ssl_mode_for_tunnel(determine_ssl_mode(
+        ssl,
+        ssl_accept_invalid_certs,
+        ssl_ca.is_some(),
+    ));
     let mut opts = MySqlConnectOptions::new()
         .host("127.0.0.1")
         .port(tunnel.local_port)
@@ -361,5 +357,32 @@ mod tests {
             ssl_mode_is(determine_ssl_mode(true, false, false), "VerifyIdentity"),
             "ssl=true, accept_invalid=false, has_ca=false should be VerifyIdentity"
         );
+    }
+
+    #[test]
+    fn test_adjust_ssl_mode_for_tunnel_downgrades_verify_identity() {
+        // VerifyIdentity should be downgraded to Required for SSH tunnels
+        assert!(
+            ssl_mode_is(
+                adjust_ssl_mode_for_tunnel(MySqlSslMode::VerifyIdentity),
+                "Required"
+            ),
+            "VerifyIdentity should be downgraded to Required through tunnel"
+        );
+    }
+
+    #[test]
+    fn test_adjust_ssl_mode_for_tunnel_preserves_other_modes() {
+        // All other modes should pass through unchanged
+        for (mode, name) in [
+            (MySqlSslMode::Disabled, "Disabled"),
+            (MySqlSslMode::Required, "Required"),
+            (MySqlSslMode::VerifyCa, "VerifyCa"),
+        ] {
+            assert!(
+                ssl_mode_is(adjust_ssl_mode_for_tunnel(mode), name),
+                "{name} should pass through unchanged"
+            );
+        }
     }
 }
