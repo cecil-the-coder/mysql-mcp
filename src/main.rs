@@ -56,13 +56,23 @@ async fn main() -> Result<()> {
     // Warm up one connection so the pool is ready for the first query
     {
         let warmup_pool = (*db).clone();
+        let acquire_timeout_ms = config.pool.connect_timeout_ms;
         tokio::spawn(async move {
-            match warmup_pool.acquire().await {
-                Ok(conn) => {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(acquire_timeout_ms),
+                warmup_pool.acquire(),
+            )
+            .await
+            {
+                Ok(Ok(conn)) => {
                     drop(conn);
                     tracing::debug!("Pool warmup complete (1 connection)");
                 }
-                Err(e) => tracing::warn!("Pool warmup connection failed: {}", e),
+                Ok(Err(e)) => tracing::warn!("Pool warmup connection failed: {}", e),
+                Err(_) => tracing::warn!(
+                    "Pool warmup connection timed out after {}ms",
+                    acquire_timeout_ms
+                ),
             }
         });
     }

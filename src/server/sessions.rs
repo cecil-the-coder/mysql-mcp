@@ -94,7 +94,38 @@ pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToo
     Ok(())
 }
 
-/// Timeout for SSH tunnel close operations. A hung SSH server should not block cleanup.
+/// Guard that decrements total_connections on drop unless dismissed.
+/// Used in handle_connect to ensure the connection counter is always
+/// decremented exactly once on any failure path.
+pub(crate) struct ConnectionReservationGuard {
+    total_connections: Arc<AtomicU32>,
+    dismissed: bool,
+}
+
+impl ConnectionReservationGuard {
+    fn new(total_connections: Arc<AtomicU32>) -> Self {
+        Self {
+            total_connections,
+            dismissed: false,
+        }
+    }
+
+    /// Dismiss the guard so it won't decrement on drop.
+    /// Call this once the session is successfully inserted.
+    fn dismiss(mut self) {
+        self.dismissed = true;
+    }
+}
+
+impl Drop for ConnectionReservationGuard {
+    fn drop(&mut self) {
+        if !self.dismissed {
+            self.total_connections
+                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
+        }
+    }
+}
+
 const TUNNEL_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Close an SSH tunnel with a timeout. Logs a warning on error or timeout, never blocks
@@ -367,8 +398,8 @@ impl SessionStore {
         let reserve_result =
             self.total_connections
                 .fetch_update(Ordering::Release, Ordering::Relaxed, |current| {
-                    if current + NAMED_SESSION_POOL_SIZE <= max_total {
-                        Some(current + NAMED_SESSION_POOL_SIZE)
+                    if current.saturating_add(NAMED_SESSION_POOL_SIZE) <= max_total {
+                        Some(current.saturating_add(NAMED_SESSION_POOL_SIZE))
                     } else {
                         None
                     }
@@ -379,6 +410,8 @@ impl SessionStore {
                 max_total, current_total, NAMED_SESSION_POOL_SIZE
             );
         }
+        // Guard ensures counter is decremented if we exit before dismissing it.
+        let reservation_guard = ConnectionReservationGuard::new(self.total_connections.clone());
 
         let (pool, tunnel) = if let Some(ref ssh_host_str) = ssh_host {
             // Validate SSH user is present
@@ -410,8 +443,6 @@ impl SessionStore {
             {
                 Ok((p, t)) => (p, Some(t)),
                 Err(e) => {
-                    self.total_connections
-                        .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
                     return tool_error!("SSH tunnel or connection failed: {}", e);
                 }
             }
@@ -431,8 +462,6 @@ impl SessionStore {
             {
                 Ok(p) => (p, None),
                 Err(e) => {
-                    self.total_connections
-                        .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
                     return tool_error!("Connection failed: {}", e);
                 }
             }
@@ -472,8 +501,6 @@ impl SessionStore {
                 close_tunnel_with_timeout(t, "on session limit rejection").await;
             }
             session.pool.close().await;
-            self.total_connections
-                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
             return tool_error!(
                 "Maximum session limit ({}) reached. Disconnect an existing session first.",
                 self.config.security.max_sessions
@@ -489,8 +516,6 @@ impl SessionStore {
                     close_tunnel_with_timeout(t, "on duplicate session rejection").await;
                 }
                 session.pool.close().await;
-                self.total_connections
-                    .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
                 return tool_error!(
                     "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
                     name
@@ -501,6 +526,9 @@ impl SessionStore {
                 // Connection slots were already reserved atomically at the start of handle_connect
             }
         }
+
+        // Success: dismiss the guard so it won't decrement the counter.
+        reservation_guard.dismiss();
 
         // Add security warnings if any
         let mut response = info;

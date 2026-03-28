@@ -3,6 +3,7 @@ use super::with_timeout;
 use crate::sql_parser::ParsedStatement;
 use anyhow::Result;
 use sqlx::MySqlPool;
+use std::sync::Arc;
 use std::time::Instant;
 
 pub struct WriteResult {
@@ -48,12 +49,12 @@ pub async fn execute_write_query(
     let start = Instant::now();
 
     let pool_clone = pool.clone();
-    let sql_owned = sql.to_string();
+    let sql_arc = Arc::<str>::from(sql);
 
     let write_fut = retry_on_transient_error(
         move || {
             let pool = pool_clone.clone();
-            let sql = sql_owned.clone();
+            let sql = sql_arc.clone();
             async move {
                 let mut tx = pool.begin().await?;
                 let result = sqlx::query(&sql).execute(&mut *tx).await?;
@@ -92,13 +93,13 @@ pub async fn execute_ddl_query(
     let start = Instant::now();
 
     let pool_clone = pool.clone();
-    let sql_owned = sql.to_string();
+    let sql_arc = Arc::<str>::from(sql);
 
     // DDL auto-commits; just execute directly
     let ddl_fut = retry_on_transient_error(
         move || {
             let pool = pool_clone.clone();
-            let sql = sql_owned.clone();
+            let sql = sql_arc.clone();
             async move { sqlx::query(&sql).execute(&pool).await.map_err(Into::into) }
         },
         retry_attempts,
