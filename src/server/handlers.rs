@@ -26,7 +26,7 @@ fn check_sql_length(sql: &str) -> Result<(), CallToolResult> {
     }
     if sql.len() > MAX_SQL_LEN {
         Err(crate::server::error::error_response(format!(
-            "SQL too large: {} bytes (max {} bytes / 1 MB)",
+            "SQL statement exceeds maximum size: {} bytes (limit: {} bytes / 1 MB)",
             sql.len(),
             MAX_SQL_LEN
         )))
@@ -596,7 +596,7 @@ mod tests {
         assert_eq!(err.is_error, Some(true));
         // Verify error message mentions size limit
         let text = err.content[0].raw.as_text().expect("expected text content");
-        assert!(text.text.contains("SQL too large"));
+        assert!(text.text.contains("exceeds maximum size"));
         assert!(text.text.contains("1 MB"));
     }
 

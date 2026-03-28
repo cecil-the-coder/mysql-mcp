@@ -31,10 +31,10 @@
 
 use crate::config::SshConfig;
 use anyhow::Result;
-use std::net::TcpListener;
 use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::Duration;
+use tokio::net::TcpListener;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
@@ -264,12 +264,21 @@ pub async fn spawn_ssh_tunnel(
     db_port: u16,
 ) -> Result<TunnelHandle> {
     // Allocate a free local port by binding briefly and releasing.
-    // The tiny TOCTOU window between drop and ssh bind is acceptable in practice.
+    // Use tokio's async TCP listener with a timeout to avoid blocking indefinitely
+    // on local port allocation issues.
     let local_port = {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .map_err(|e| anyhow::anyhow!("Failed to allocate local port for SSH tunnel: {}", e))?;
-        listener.local_addr()?.port()
-        // listener dropped here, releases the port
+        let listener =
+            tokio::time::timeout(Duration::from_secs(5), TcpListener::bind("127.0.0.1:0"))
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("SSH tunnel: timed out waiting for local port allocation")
+                })?
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to allocate local port for SSH tunnel: {}", e)
+                })?;
+        let port = listener.local_addr()?.port();
+        drop(listener);
+        port
     };
 
     let args = build_ssh_args(ssh, db_host, db_port, local_port);
