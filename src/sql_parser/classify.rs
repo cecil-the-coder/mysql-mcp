@@ -279,8 +279,6 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
 
         Statement::Explain { .. } => (StatementType::Explain, None, None),
 
-        Statement::Describe { .. } => (StatementType::Explain, None, None),
-
         Statement::SetVariable { .. }
         | Statement::SetNames { .. }
         | Statement::SetNamesDefault { .. }

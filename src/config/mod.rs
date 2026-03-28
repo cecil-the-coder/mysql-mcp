@@ -359,7 +359,7 @@ impl Config {
 /// On Unix systems, this verifies the file is not world-readable or writable by group/others.
 pub(crate) fn check_private_key_permissions(path: &str) -> anyhow::Result<()> {
     let metadata = std::fs::metadata(path)?;
-    
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -371,18 +371,23 @@ pub(crate) fn check_private_key_permissions(path: &str) -> anyhow::Result<()> {
                 "ssh.private_key {} has overly permissive permissions: {:o}. \
                  SSH private keys must not be readable by group or others. \
                  Run: chmod 600 {}",
-                path, mode, path
+                path,
+                mode,
+                path
             );
         }
     }
-    
+
     #[cfg(not(unix))]
     {
         // On non-Unix systems, just check that the file is readable
         // and issue a warning since permissions cannot be validated
-        tracing::warn!("ssh.private_key {} permissions cannot be validated on this platform", path);
+        tracing::warn!(
+            "ssh.private_key {} permissions cannot be validated on this platform",
+            path
+        );
     }
-    
+
     Ok(())
 }
 
