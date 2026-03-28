@@ -155,17 +155,32 @@ impl Drop for TunnelHandle {
                     ZombieReaper::get().register_child(child).await;
                 });
             } else {
-                // No tokio runtime available; spawn a thread that creates a minimal runtime
+                // No tokio runtime available; directly reap the child in a
+                // background thread. We cannot use ZombieReaper here because
+                // its background reaper task would be spawned on a temporary
+                // runtime that is dropped immediately, leaving children
+                // un-reaped. Instead, do a direct best-effort try_wait().
                 std::thread::spawn(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .ok();
-                    if let Some(rt) = rt {
-                        rt.block_on(async {
-                            ZombieReaper::get().register_child(child).await;
-                        });
+                    // Give the child a brief moment to exit after start_kill()
+                    std::thread::sleep(Duration::from_millis(100));
+                    match child.try_wait() {
+                        Ok(Some(_)) => {
+                            tracing::trace!("Reaped zombie SSH process in fallback path");
+                        }
+                        Ok(None) => {
+                            // Child still running after kill; best effort.
+                            tracing::trace!(
+                                "SSH process still running after kill in fallback path"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::trace!(
+                                "Error checking SSH process status in fallback path: {}",
+                                e
+                            );
+                        }
                     }
+                    // Child is dropped here; if still running, Drop sends SIGKILL (Unix)
                 });
             }
         }
