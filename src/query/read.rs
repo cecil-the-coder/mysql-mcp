@@ -113,7 +113,7 @@ pub async fn execute_read_query(
         // Use serialized_sql (re-serialized from the AST, which strips comments) instead
         // of the raw sql string so that trailing line comments (`-- ...` or `# ...`) do
         // not cause the injected LIMIT to be swallowed as part of the comment.
-        effective_sql = format!("{} LIMIT {}", parsed.serialized_sql, max_rows as u64 + 1);
+        effective_sql = format!("{} LIMIT {}", parsed.serialized_sql, (max_rows as u64).saturating_add(1));
         effective_sql.as_str()
     } else {
         sql
