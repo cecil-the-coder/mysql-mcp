@@ -521,8 +521,11 @@ impl SessionStore {
         let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
             return tool_error!("Missing required argument: name");
         };
-        if name.trim().is_empty() {
-            return tool_error!("Session name cannot be empty");
+        // Validate session name format: max 64 chars, alphanumeric + underscore only.
+        // This provides clear validation errors instead of a generic "not found" message
+        // when names contain special characters (e.g., "my-session").
+        if let Err(e) = validate_identifier(name, "Session name") {
+            return Ok(e);
         }
         if name == "default" {
             return tool_error!("The default session cannot be closed");

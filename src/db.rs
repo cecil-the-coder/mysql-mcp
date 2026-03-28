@@ -130,13 +130,26 @@ fn determine_ssl_mode(ssl: bool, accept_invalid: bool, has_ca: bool) -> MySqlSsl
     }
 }
 
+/// Map the three SSL flags to a `MySqlSslMode` for SSH-tunneled connections.
+///
+/// Same as [`determine_ssl_mode`] except that `VerifyIdentity` is downgraded to
+/// `Required`. Tunneled connections are made to `127.0.0.1`, so hostname
+/// verification against the real server certificate will always fail. The SSH
+/// tunnel itself already provides server authentication.
+fn determine_ssl_mode_tunneled(ssl: bool, accept_invalid: bool, has_ca: bool) -> MySqlSslMode {
+    match determine_ssl_mode(ssl, accept_invalid, has_ca) {
+        MySqlSslMode::VerifyIdentity => MySqlSslMode::Required,
+        other => other,
+    }
+}
+
 /// Build a pool that connects through an already-established SSH tunnel.
 /// Connects sqlx to `127.0.0.1:{tunnel.local_port}` rather than the real DB host/port.
 async fn build_pool_tunneled(
     config: &Config,
     tunnel: &crate::tunnel::TunnelHandle,
 ) -> Result<MySqlPool> {
-    let ssl_mode = determine_ssl_mode(
+    let ssl_mode = determine_ssl_mode_tunneled(
         config.security.ssl,
         config.security.ssl_accept_invalid_certs,
         config.security.ssl_ca.is_some(),
@@ -194,7 +207,7 @@ pub async fn build_session_pool_with_tunnel(
         .port(tunnel.local_port)
         .username(user)
         .password(password)
-        .ssl_mode(determine_ssl_mode(
+        .ssl_mode(determine_ssl_mode_tunneled(
             ssl,
             ssl_accept_invalid_certs,
             ssl_ca.is_some(),
@@ -333,6 +346,32 @@ mod tests {
         assert!(
             ssl_mode_is(determine_ssl_mode(true, false, false), "VerifyIdentity"),
             "ssl=true, accept_invalid=false, has_ca=false should be VerifyIdentity"
+        );
+    }
+
+    #[test]
+    fn test_determine_ssl_mode_tunneled_downgrades_verify_identity() {
+        // VerifyIdentity should be downgraded to Required for tunneled connections
+        assert!(
+            ssl_mode_is(determine_ssl_mode_tunneled(true, false, false), "Required"),
+            "tunneled: ssl=true, accept_invalid=false, has_ca=false should be Required (downgraded from VerifyIdentity)"
+        );
+    }
+
+    #[test]
+    fn test_determine_ssl_mode_tunneled_preserves_other_modes() {
+        // Other modes should remain unchanged for tunneled connections
+        assert!(
+            ssl_mode_is(determine_ssl_mode_tunneled(false, false, false), "Disabled"),
+            "tunneled: ssl=false should remain Disabled"
+        );
+        assert!(
+            ssl_mode_is(determine_ssl_mode_tunneled(true, true, false), "Required"),
+            "tunneled: accept_invalid=true should remain Required"
+        );
+        assert!(
+            ssl_mode_is(determine_ssl_mode_tunneled(true, false, true), "VerifyCa"),
+            "tunneled: has_ca=true should remain VerifyCa"
         );
     }
 }

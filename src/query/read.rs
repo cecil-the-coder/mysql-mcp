@@ -105,7 +105,8 @@ pub async fn execute_read_query(
         // was actually truncated. If MySQL returns more than max_rows rows, there are
         // additional rows beyond the cap and we discard the probe row before returning.
         // Without the +1, a table with exactly max_rows rows would falsely show capped=true.
-        effective_sql = format!("{} LIMIT {}", sql, max_rows as u64 + 1);
+        let trimmed = sql.trim_end_matches(|c| c == ';' || c.is_whitespace());
+        effective_sql = format!("{} LIMIT {}", trimmed, max_rows as u64 + 1);
         effective_sql.as_str()
     } else {
         sql
