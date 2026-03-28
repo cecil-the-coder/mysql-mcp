@@ -382,6 +382,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
                         where_columns: Vec::new(),
                         has_leading_wildcard_like: false,
                         warnings: Vec::new(),
+                        serialized_sql: String::new(),
                     });
                 }
             };
@@ -425,6 +426,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
         where_columns,
         has_leading_wildcard_like,
         warnings,
+        serialized_sql: String::new(),
     })
 }
 

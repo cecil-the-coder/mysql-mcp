@@ -158,6 +158,10 @@ pub struct ParsedStatement {
     pub has_leading_wildcard_like: bool,
     /// Performance/safety warnings pre-computed during parse_sql().
     pub warnings: Vec<String>,
+    /// The SQL statement re-serialized from the AST via `format!("{stmt}")`. This
+    /// strips SQL comments, ensuring that injected clauses (e.g. LIMIT) are not
+    /// swallowed by trailing line comments (`-- ...` or `# ...`).
+    pub serialized_sql: String,
 }
 
 /// Parse a SQL string and return the statement type and target schema.
@@ -176,7 +180,13 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
     }
 
     let stmt = &statements[0];
-    let parsed = classify::classify_statement(stmt)?;
+    let mut parsed = classify::classify_statement(stmt)?;
+
+    // Re-serialize the AST to a canonical SQL string (strips comments). This is used
+    // for LIMIT injection so that trailing line comments cannot swallow the LIMIT,
+    // and for safety checks below.
+    let serialized = format!("{stmt}");
+    parsed.serialized_sql = serialized.clone();
 
     // Post-parse safety check: SELECT INTO OUTFILE/DUMPFILE writes to the server
     // filesystem and must be blocked. sqlparser parses these but doesn't expose the
@@ -189,7 +199,6 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
     // FOR UPDATE/SHARE locking reads are detected in classify_statement() via the
     // query.locks AST field — no raw-string scan needed here.
     if parsed.statement_type == StatementType::Select {
-        let serialized = format!("{stmt}");
         // Remove single-quoted literals (sqlparser re-serializes strings with single
         // quotes, using '' for escaped quotes inside). This regex replaces each
         // '...' span with an empty placeholder so literals can't trigger the check.
@@ -206,7 +215,7 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
     // Block SET GLOBAL / SET PERSIST — they affect server-wide settings and could
     // change security-sensitive config. Session-level SET is still allowed.
     if parsed.statement_type == StatementType::Set {
-        let normalized = format!("{stmt}").to_ascii_uppercase();
+        let normalized = serialized.to_ascii_uppercase();
         if normalized.starts_with("SET GLOBAL")
             || normalized.starts_with("SET PERSIST")
             || normalized.contains("@@GLOBAL.")
