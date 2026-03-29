@@ -193,15 +193,18 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
     // INTO OUTFILE target in an accessible AST field, so we scan the re-serialized
     // statement text. Using the AST Display (not raw `sql`) strips SQL comments so
     // that a comment like `-- INTO OUTFILE '/x'` doesn't cause a false rejection.
-    // We strip single-quoted string literals before scanning so that a value like
-    // SELECT 'INTO OUTFILE' FROM t doesn't cause a false positive.
+    // We strip single-quoted and double-quoted string literals before scanning so
+    // that a value like SELECT 'INTO OUTFILE' FROM t or SELECT "INTO OUTFILE" FROM t
+    // doesn't cause a false positive. Double-quoted strings are relevant when MySQL's
+    // ANSI_QUOTES SQL mode is enabled.
     //
     // FOR UPDATE/SHARE locking reads are detected in classify_statement() via the
     // query.locks AST field — no raw-string scan needed here.
     if parsed.statement_type == StatementType::Select {
-        // Remove single-quoted literals (sqlparser re-serializes strings with single
-        // quotes, using '' for escaped quotes inside). This regex replaces each
-        // '...' span with an empty placeholder so literals can't trigger the check.
+        // Remove single-quoted and double-quoted literals (sqlparser re-serializes
+        // strings with single quotes, using '' for escaped quotes inside; double quotes
+        // may appear with ANSI_QUOTES mode). This replaces each '...' or "..." span
+        // with an empty placeholder so literals can't trigger the check.
         let stripped = strip_single_quoted_literals(&serialized);
         let normalized = stripped.to_ascii_uppercase();
         if normalized.contains("INTO OUTFILE") || normalized.contains("INTO DUMPFILE") {
@@ -232,23 +235,30 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
     Ok(parsed)
 }
 
-/// Replace single-quoted string literals with empty strings so that literal values
-/// like `'INTO OUTFILE'` are not mistaken for SQL keywords during safety checks.
-/// Handles escaped quotes (`''`) inside literals correctly.
+/// Replace single-quoted and double-quoted string literals with empty strings so that
+/// literal values like `'INTO OUTFILE'` or `"INTO OUTFILE"` are not mistaken for SQL
+/// keywords during safety checks. Double-quoted strings are relevant when MySQL's
+/// ANSI_QUOTES SQL mode is enabled. Handles escaped quotes via `''`/`""` and
+/// backslash-escaped quotes (`\'`/`\"`) inside literals.
 fn strip_single_quoted_literals(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut i = 0;
     let bytes = s.as_bytes();
 
     while i < bytes.len() {
-        if bytes[i] == b'\'' {
-            // Skip past the entire single-quoted literal
+        if bytes[i] == b'\'' || bytes[i] == b'"' {
+            let quote = bytes[i];
+            // Skip past the entire quoted literal
             i += 1; // skip opening quote
             while i < bytes.len() {
-                if bytes[i] == b'\'' {
-                    // Check if this is '' (escaped quote) or a closing quote
-                    if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
-                        i += 2; // skip the escaped pair ''
+                if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == quote {
+                    // Backslash-escaped quote (e.g. \' or \" inside a string literal).
+                    // Skip both characters so the quote is not mistaken for a closing quote.
+                    i += 2;
+                } else if bytes[i] == quote {
+                    // Check if this is ''/"" (escaped quote) or a closing quote
+                    if i + 1 < bytes.len() && bytes[i + 1] == quote {
+                        i += 2; // skip the escaped pair '' or ""
                     } else {
                         i += 1; // skip closing quote and exit the literal
                         break;
@@ -260,7 +270,7 @@ fn strip_single_quoted_literals(s: &str) -> String {
         } else {
             // Copy non-quote characters directly
             let start = i;
-            while i < bytes.len() && bytes[i] != b'\'' {
+            while i < bytes.len() && bytes[i] != b'\'' && bytes[i] != b'"' {
                 i += 1;
             }
             // Since input is valid UTF-8 and we slice at ASCII boundaries, this is safe.
