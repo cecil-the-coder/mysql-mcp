@@ -270,6 +270,14 @@ impl Config {
                 pool.slow_query_threshold_ms
             );
         }
+        const MAX_CACHE_TTL_SECS: u64 = 31_536_000; // 1 year
+        if pool.cache_ttl_secs > MAX_CACHE_TTL_SECS {
+            anyhow::bail!(
+                "pool.cache_ttl_secs must be <= {} (1 year) (got: {})",
+                MAX_CACHE_TTL_SECS,
+                pool.cache_ttl_secs
+            );
+        }
         if !matches!(pool.performance_hints.as_str(), "none" | "auto" | "always") {
             anyhow::bail!(
                 "MYSQL_PERFORMANCE_HINTS must be one of: none, auto, always (got: '{}')",
