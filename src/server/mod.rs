@@ -173,7 +173,7 @@ impl McpServer {
             Arc::new(Mutex::new(HashMap::new()));
 
         // Total connections counter shared between session store and reaper
-        let total_connections: Arc<AtomicU32> = Arc::new(AtomicU32::new(config.pool.size));
+        let total_connections: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
 
         // Shutdown channel for graceful termination of the session reaper task.
         // When McpServer is dropped, the sender is dropped, causing receivers to get
@@ -209,7 +209,7 @@ impl McpServer {
                         if let Some(session) = map.remove(&name) {
                             // Decrement total connections counter for reaped session
                             reaper_total_connections
-                                .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Release);
+                                .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::AcqRel);
                             reaped.push(session);
                         }
                     }
