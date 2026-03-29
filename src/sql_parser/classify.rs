@@ -51,6 +51,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
                         &mut where_columns,
                         &mut seen,
                         &mut has_leading_wildcard_like,
+                        0,
                     );
                 }
                 has_named_table = select
@@ -595,16 +596,27 @@ fn extract_first_from_table_name(query: &Query) -> Option<String> {
     }
 }
 
+/// Maximum recursion depth for `collect_where_info`.  Prevents excessive CPU usage
+/// on deeply nested WHERE clause ASTs (e.g., adversarial UNION/AND/OR chains).
+const MAX_WHERE_DEPTH: u32 = 100;
+
 /// Recursively walk a WHERE expression tree in a single pass, collecting column name
 /// identifiers into `cols`/`seen` and setting `*has_leading_wildcard` when a LIKE/ILike
 /// pattern starts with '%'.  Replaces the former separate `collect_where_columns` and
 /// `expr_has_leading_wildcard_like` functions.
+///
+/// Bails out silently when `depth` exceeds `MAX_WHERE_DEPTH` to guard against
+/// excessively deep nesting that could cause high CPU usage.
 pub(super) fn collect_where_info(
     expr: &Expr,
     cols: &mut Vec<String>,
     seen: &mut HashSet<String>,
     has_leading_wildcard: &mut bool,
+    depth: u32,
 ) {
+    if depth > MAX_WHERE_DEPTH {
+        return;
+    }
     match expr {
         Expr::Identifier(ident) => {
             if seen.insert(ident.value.to_lowercase()) {
@@ -620,25 +632,25 @@ pub(super) fn collect_where_info(
             }
         }
         Expr::BinaryOp { left, right, .. } => {
-            collect_where_info(left, cols, seen, has_leading_wildcard);
-            collect_where_info(right, cols, seen, has_leading_wildcard);
+            collect_where_info(left, cols, seen, has_leading_wildcard, depth + 1);
+            collect_where_info(right, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::UnaryOp { expr, .. } => {
-            collect_where_info(expr, cols, seen, has_leading_wildcard);
+            collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::IsNull(inner) | Expr::IsNotNull(inner) => {
-            collect_where_info(inner, cols, seen, has_leading_wildcard);
+            collect_where_info(inner, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::IsDistinctFrom(left, right) | Expr::IsNotDistinctFrom(left, right) => {
-            collect_where_info(left, cols, seen, has_leading_wildcard);
-            collect_where_info(right, cols, seen, has_leading_wildcard);
+            collect_where_info(left, cols, seen, has_leading_wildcard, depth + 1);
+            collect_where_info(right, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::Between {
             expr, low, high, ..
         } => {
-            collect_where_info(expr, cols, seen, has_leading_wildcard);
-            collect_where_info(low, cols, seen, has_leading_wildcard);
-            collect_where_info(high, cols, seen, has_leading_wildcard);
+            collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
+            collect_where_info(low, cols, seen, has_leading_wildcard, depth + 1);
+            collect_where_info(high, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::Like {
             expr: like_expr,
@@ -658,14 +670,14 @@ pub(super) fn collect_where_info(
                     *has_leading_wildcard = true;
                 }
             }
-            collect_where_info(like_expr, cols, seen, has_leading_wildcard);
-            collect_where_info(pattern, cols, seen, has_leading_wildcard);
+            collect_where_info(like_expr, cols, seen, has_leading_wildcard, depth + 1);
+            collect_where_info(pattern, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::InList { expr, .. } => {
-            collect_where_info(expr, cols, seen, has_leading_wildcard);
+            collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::InSubquery { expr, .. } => {
-            collect_where_info(expr, cols, seen, has_leading_wildcard);
+            collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::Function(func) => {
             // Recurse into function arguments so columns inside UPPER(col), COALESCE(a, b), etc.
@@ -678,13 +690,13 @@ pub(super) fn collect_where_info(
                         sqlparser::ast::FunctionArg::Unnamed(arg) => arg,
                     };
                     if let sqlparser::ast::FunctionArgExpr::Expr(e) = arg_expr {
-                        collect_where_info(e, cols, seen, has_leading_wildcard);
+                        collect_where_info(e, cols, seen, has_leading_wildcard, depth + 1);
                     }
                 }
             }
         }
         Expr::Cast { expr, .. } => {
-            collect_where_info(expr, cols, seen, has_leading_wildcard);
+            collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::Case {
             operand,
@@ -694,20 +706,20 @@ pub(super) fn collect_where_info(
             ..
         } => {
             if let Some(op) = operand {
-                collect_where_info(op, cols, seen, has_leading_wildcard);
+                collect_where_info(op, cols, seen, has_leading_wildcard, depth + 1);
             }
             for cond in conditions {
-                collect_where_info(cond, cols, seen, has_leading_wildcard);
+                collect_where_info(cond, cols, seen, has_leading_wildcard, depth + 1);
             }
             for result in results {
-                collect_where_info(result, cols, seen, has_leading_wildcard);
+                collect_where_info(result, cols, seen, has_leading_wildcard, depth + 1);
             }
             if let Some(else_expr) = else_result {
-                collect_where_info(else_expr, cols, seen, has_leading_wildcard);
+                collect_where_info(else_expr, cols, seen, has_leading_wildcard, depth + 1);
             }
         }
         Expr::Nested(inner) => {
-            collect_where_info(inner, cols, seen, has_leading_wildcard);
+            collect_where_info(inner, cols, seen, has_leading_wildcard, depth + 1);
         }
         _ => {}
     }

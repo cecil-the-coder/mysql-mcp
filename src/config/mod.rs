@@ -365,6 +365,7 @@ impl Config {
                             khf
                         );
                     }
+                    check_known_hosts_permissions(khf)?;
                 } else if let Some(parent) = khf_path.parent() {
                     if !parent.exists() {
                         anyhow::bail!(
@@ -378,6 +379,42 @@ impl Config {
 
         Ok(())
     }
+}
+
+/// Check that an SSH known_hosts file has safe permissions for strict mode.
+/// On Unix systems, this verifies the file is not writable by group or others.
+/// Unlike private keys, the known_hosts file may be world-readable (e.g., 0o644 is acceptable).
+pub(crate) fn check_known_hosts_permissions(path: &str) -> anyhow::Result<()> {
+    let metadata = std::fs::metadata(path)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = metadata.permissions().mode() & 0o777;
+        // In strict mode, the known_hosts file must not be writable by group or others
+        // to prevent tampering with host key mappings.
+        if mode & 0o022 != 0 {
+            anyhow::bail!(
+                "ssh.known_hosts_file {} has overly permissive permissions: {:o}. \
+                 In strict mode, the known_hosts file must not be writable by group or others. \
+                 Run: chmod 644 {}",
+                path,
+                mode,
+                path
+            );
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = &metadata;
+        tracing::warn!(
+            "ssh.known_hosts_file {} permissions cannot be validated on this platform",
+            path
+        );
+    }
+
+    Ok(())
 }
 
 /// Check that an SSH private key file has restrictive permissions (mode 0o600 or 0o400).
