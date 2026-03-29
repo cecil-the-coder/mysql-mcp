@@ -199,6 +199,15 @@ fn validate_ssh_host(host: &str) -> Result<()> {
     if host.is_empty() {
         return Err(anyhow::anyhow!("SSH host cannot be empty"));
     }
+    // Enforce RFC 1123 maximum hostname length of 255 characters. Very long
+    // hostnames can be silently truncated by downstream systems (DNS resolvers,
+    // SSH client argument buffers, etc.), leading to confusing errors.
+    if host.len() > 255 {
+        return Err(anyhow::anyhow!(
+            "SSH host exceeds maximum length of 255 characters (got {})",
+            host.len()
+        ));
+    }
     // Explicitly reject null bytes and ASCII control characters before the general
     // character loop. These characters can cause subtle issues with subprocess spawning
     // (e.g., null bytes truncating strings, newlines injecting arguments) and deserve
@@ -649,6 +658,26 @@ mod tests {
     #[test]
     fn test_validate_accepts_ipv6_full() {
         assert!(validate_ssh_host("[2001:db8::1]").is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_excessively_long_host() {
+        let long_host = "a".repeat(256);
+        let result = validate_ssh_host(&long_host);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("maximum length of 255"),
+            "error should mention maximum length: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_accepts_255_char_host() {
+        // Exactly 255 characters should be allowed (RFC 1123 limit)
+        let host = "a".repeat(255);
+        assert!(validate_ssh_host(&host).is_ok());
     }
 
     #[test]
