@@ -120,14 +120,13 @@ fn key_matches_table_and_db(key: &str, table: &str, database: Option<&str>) -> b
         }
         None => {
             // Key has no tab separator - shouldn't happen for table-specific caches.
-            // Log a warning to help diagnose cache integrity issues, and don't match
-            // so the caller's retain() will keep the entry (though it should be removed
-            // manually if this occurs).
+            // Return true so the caller's retain(!key_matches_table_and_db(...)) will
+            // remove (evict) the malformed entry instead of keeping it indefinitely.
             tracing::warn!(
-                "malformed cache key '{}' lacks tab separator; cache entry may persist indefinitely",
+                "malformed cache key '{}' lacks tab separator; removing from cache",
                 key
             );
-            false
+            true
         }
     }
 }
