@@ -373,10 +373,40 @@ fn column_to_json(
                 Ok(Some(s)) => return Value::String(s),
                 Ok(None) => return Value::Null,
                 Err(e) => {
-                    tracing::warn!(
-                        "DECIMAL column at index {} failed to decode as string: {}",
-                        idx,
-                        e
+                    // Try to recover the raw bytes and convert to a UTF-8 string as a
+                    // last resort — MySQL transmits DECIMAL as text so the underlying
+                    // bytes are almost always a valid ASCII decimal representation.
+                    if let Ok(Some(bytes)) = row.try_get_unchecked::<Option<Vec<u8>>, _>(idx) {
+                        match String::from_utf8(bytes) {
+                            Ok(s) => {
+                                push_warning(
+                                    warnings,
+                                    format!(
+                                        "DECIMAL column '{}' (type '{}') recovered via raw bytes after primary decode failed: {}",
+                                        col.name(), type_name, e
+                                    ),
+                                );
+                                return Value::String(s);
+                            }
+                            Err(err) => {
+                                let lost = err.into_bytes();
+                                push_warning(
+                                    warnings,
+                                    format!(
+                                        "DECIMAL column '{}' (type '{}') failed to decode; {} bytes of data lost: {}",
+                                        col.name(), type_name, lost.len(), e
+                                    ),
+                                );
+                                return Value::Null;
+                            }
+                        }
+                    }
+                    push_warning(
+                        warnings,
+                        format!(
+                            "DECIMAL column '{}' (type '{}') at index {} could not be decoded: {}",
+                            col.name(), type_name, idx, e
+                        ),
                     );
                     return Value::Null;
                 }

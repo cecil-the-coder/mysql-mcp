@@ -321,6 +321,12 @@ impl Config {
             if ssh.host.is_empty() {
                 anyhow::bail!("ssh.host must not be empty when SSH tunnel is configured");
             }
+            if ssh.host.len() > 255 {
+                anyhow::bail!(
+                    "ssh.host must be <= 255 characters (got: {})",
+                    ssh.host.len()
+                );
+            }
             if ssh.port == 0 {
                 anyhow::bail!("ssh.port must be > 0 (got: 0)");
             }

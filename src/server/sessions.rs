@@ -72,7 +72,9 @@ pub(crate) struct SessionStore {
 }
 
 /// Validate a MySQL identifier (session name or database name): max 64 chars,
-/// alphanumeric/underscore only. Returns `Err(CallToolResult)` on failure.
+/// alphanumeric/underscore only, and explicitly rejects path traversal characters
+/// (`..`, `/`, `\`) as a defense-in-depth measure against security issues if the
+/// identifier is ever used in file paths. Returns `Err(CallToolResult)` on failure.
 pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToolResult> {
     if value.is_empty() {
         return Err(crate::server::error::error_response(format!(
@@ -83,6 +85,28 @@ pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToo
     if value.len() > 64 {
         return Err(crate::server::error::error_response(format!(
             "{} too long (max 64 characters)",
+            kind
+        )));
+    }
+    // Defense-in-depth: explicitly reject path traversal characters even though the
+    // alphanumeric check below would also catch them. These dedicated checks ensure
+    // that if the character allowlist is ever relaxed, path traversal protection
+    // remains in place and produces a clear security-focused error message.
+    if value.contains("..") {
+        return Err(crate::server::error::error_response(format!(
+            "{} must not contain '..' (path traversal rejected)",
+            kind
+        )));
+    }
+    if value.contains('/') || value.contains('\\') {
+        return Err(crate::server::error::error_response(format!(
+            "{} must not contain path separators ('/' or '\\')",
+            kind
+        )));
+    }
+    if value.contains('.') {
+        return Err(crate::server::error::error_response(format!(
+            "{} must not contain '.'",
             kind
         )));
     }
@@ -710,6 +734,56 @@ mod tests {
         assert!(result.is_err());
 
         let result = validate_identifier("mixed_name-with-hyphens", "Identifier");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_identifier_rejects_path_traversal_dotdot() {
+        let result = validate_identifier("..", "Session name");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let text = err.content[0].raw.as_text().expect("expected text content");
+        assert!(text.text.contains("path traversal"));
+
+        let result = validate_identifier("foo..bar", "Session name");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let text = err.content[0].raw.as_text().expect("expected text content");
+        assert!(text.text.contains("path traversal"));
+
+        let result = validate_identifier("../etc/passwd", "Session name");
+        assert!(result.is_err());
+        let text = result.unwrap_err().content[0].raw.as_text().expect("expected text content");
+        assert!(text.text.contains("path traversal"));
+    }
+
+    #[test]
+    fn test_validate_identifier_rejects_slashes() {
+        let result = validate_identifier("foo/bar", "Session name");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let text = err.content[0].raw.as_text().expect("expected text content");
+        assert!(text.text.contains("path separators"));
+
+        let result = validate_identifier("foo\\bar", "Session name");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let text = err.content[0].raw.as_text().expect("expected text content");
+        assert!(text.text.contains("path separators"));
+
+        let result = validate_identifier("/abs/path", "Session name");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_identifier_rejects_dots() {
+        let result = validate_identifier("foo.bar", "Session name");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let text = err.content[0].raw.as_text().expect("expected text content");
+        assert!(text.text.contains("must not contain '.'"));
+
+        let result = validate_identifier(".hidden", "Session name");
         assert!(result.is_err());
     }
 }

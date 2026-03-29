@@ -641,6 +641,47 @@ private_key = "/tmp/key.pem"
         );
     }
 
+    // Test: SSH host exceeding 255 characters fails validation
+    #[test]
+    fn test_ssh_config_validate_host_too_long() {
+        let long_host = "a".repeat(256);
+        let config = Config {
+            ssh: Some(SshConfig {
+                host: long_host,
+                user: "ubuntu".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+        let err = config.validate().unwrap_err().to_string();
+        assert!(
+            err.contains("ssh.host") && err.contains("255"),
+            "error should mention ssh.host and 255, got: {}",
+            err
+        );
+    }
+
+    // Test: SSH host with exactly 255 characters passes length validation
+    #[test]
+    fn test_ssh_config_validate_host_max_length() {
+        let max_host = "a".repeat(255);
+        let config = Config {
+            ssh: Some(SshConfig {
+                host: max_host,
+                user: "ubuntu".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // Should fail on known_hosts/private_key checks (not on host length)
+        let result = config.validate();
+        assert!(
+            !result.as_ref().is_err_and(|e| e.to_string().contains("ssh.host must be <= 255")),
+            "255-char host should pass length check"
+        );
+    }
+
     // Test: SSH private key with group-writable permissions fails validation
     #[test]
     fn test_ssh_private_key_group_writable_permissions() {
