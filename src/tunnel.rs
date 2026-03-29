@@ -199,6 +199,22 @@ fn validate_ssh_host(host: &str) -> Result<()> {
     if host.is_empty() {
         return Err(anyhow::anyhow!("SSH host cannot be empty"));
     }
+    // Explicitly reject null bytes and ASCII control characters before the general
+    // character loop. These characters can cause subtle issues with subprocess spawning
+    // (e.g., null bytes truncating strings, newlines injecting arguments) and deserve
+    // clear, specific error messages.
+    if let Some(pos) = host.find('\0') {
+        return Err(anyhow::anyhow!(
+            "SSH host contains a null byte at position {} — this is not a valid hostname",
+            pos
+        ));
+    }
+    if let Some(c) = host.chars().find(|c| c.is_ascii_control()) {
+        return Err(anyhow::anyhow!(
+            "SSH host contains control character '{:#x}' — hostnames must not contain control characters",
+            c as u32
+        ));
+    }
     for c in host.chars() {
         // Allow alphanumeric, hyphen, dot, and IPv6-related characters ([, ], :)
         if !c.is_ascii_alphanumeric() && c != '-' && c != '.' && c != ':' && c != '[' && c != ']' {
@@ -550,6 +566,89 @@ mod tests {
             "ubuntu@bastion.example.com",
             "user@host must be the last argument"
         );
+    }
+
+    #[test]
+    fn test_validate_rejects_empty_host() {
+        assert!(validate_ssh_host("").is_err());
+        let err = validate_ssh_host("").unwrap_err();
+        assert!(
+            err.to_string().contains("cannot be empty"),
+            "error should mention empty: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_null_byte_in_host() {
+        let host = "evil\0host.com";
+        let result = validate_ssh_host(host);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("null byte"),
+            "error should mention null byte: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_newline_in_host() {
+        let host = "evil\nhost.com";
+        let result = validate_ssh_host(host);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("control character"),
+            "error should mention control character: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_tab_in_host() {
+        let host = "evil\thost.com";
+        let result = validate_ssh_host(host);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("control character"),
+            "error should mention control character: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_carriage_return_in_host() {
+        let host = "evil\rhost.com";
+        let result = validate_ssh_host(host);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("control character"),
+            "error should mention control character: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_accepts_valid_hostname() {
+        assert!(validate_ssh_host("bastion.example.com").is_ok());
+    }
+
+    #[test]
+    fn test_validate_accepts_ipv4() {
+        assert!(validate_ssh_host("10.0.0.1").is_ok());
+    }
+
+    #[test]
+    fn test_validate_accepts_ipv6_bracketed() {
+        assert!(validate_ssh_host("[::1]").is_ok());
+    }
+
+    #[test]
+    fn test_validate_accepts_ipv6_full() {
+        assert!(validate_ssh_host("[2001:db8::1]").is_ok());
     }
 
     #[test]
