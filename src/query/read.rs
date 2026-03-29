@@ -405,7 +405,10 @@ fn column_to_json(
                         warnings,
                         format!(
                             "DECIMAL column '{}' (type '{}') at index {} could not be decoded: {}",
-                            col.name(), type_name, idx, e
+                            col.name(),
+                            type_name,
+                            idx,
+                            e
                         ),
                     );
                     return Value::Null;

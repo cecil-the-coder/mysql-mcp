@@ -677,7 +677,9 @@ private_key = "/tmp/key.pem"
         // Should fail on known_hosts/private_key checks (not on host length)
         let result = config.validate();
         assert!(
-            !result.as_ref().is_err_and(|e| e.to_string().contains("ssh.host must be <= 255")),
+            !result
+                .as_ref()
+                .is_err_and(|e| e.to_string().contains("ssh.host must be <= 255")),
             "255-char host should pass length check"
         );
     }

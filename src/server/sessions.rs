@@ -753,7 +753,11 @@ mod tests {
 
         let result = validate_identifier("../etc/passwd", "Session name");
         assert!(result.is_err());
-        let text = result.unwrap_err().content[0].raw.as_text().expect("expected text content");
+        let err = result.unwrap_err();
+        let text = err.content[0]
+            .raw
+            .as_text()
+            .expect("expected text content");
         assert!(text.text.contains("path traversal"));
     }
 
