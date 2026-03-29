@@ -238,7 +238,7 @@ impl SessionStore {
             );
         }
         let port = match args.get("port").and_then(|v| v.as_u64()) {
-            Some(p) if (1..=65535).contains(&p) => p as u16,
+            Some(p) if (1..=65535).contains(&p) => p.try_into().expect("port range already validated"),
             Some(_) => return tool_error!("Port out of range (1-65535)"),
             None => 3306,
         };
@@ -303,7 +303,7 @@ impl SessionStore {
             }
         }
         let ssh_port = match args.get("ssh_port").and_then(|v| v.as_u64()) {
-            Some(p) if (1..=65535).contains(&p) => p as u16,
+            Some(p) if (1..=65535).contains(&p) => p.try_into().expect("ssh_port range already validated"),
             Some(_) => return tool_error!("ssh_port out of range (1-65535)"),
             None => 22,
         };
@@ -617,7 +617,7 @@ impl SessionStore {
                 "name": name,
                 "host": session.host,
                 "database": session.database,
-                "idle_seconds": session.last_used.elapsed().as_secs(),
+                "idle_seconds": std::time::Instant::now().saturating_duration_since(session.last_used).as_secs(),
                 "ssh_host": session.ssh_host,
             }));
         }
