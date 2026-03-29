@@ -205,7 +205,7 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
         // strings with single quotes, using '' for escaped quotes inside; double quotes
         // may appear with ANSI_QUOTES mode). This replaces each '...' or "..." span
         // with an empty placeholder so literals can't trigger the check.
-        let stripped = strip_single_quoted_literals(&serialized);
+        let stripped = strip_string_literals(&serialized);
         let normalized = stripped.to_ascii_uppercase();
         if normalized.contains("INTO OUTFILE") || normalized.contains("INTO DUMPFILE") {
             bail!(
@@ -238,9 +238,13 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
 /// Replace single-quoted and double-quoted string literals with empty strings so that
 /// literal values like `'INTO OUTFILE'` or `"INTO OUTFILE"` are not mistaken for SQL
 /// keywords during safety checks. Double-quoted strings are relevant when MySQL's
-/// ANSI_QUOTES SQL mode is enabled. Handles escaped quotes via `''`/`""` and
-/// backslash-escaped quotes (`\'`/`\"`) inside literals.
-fn strip_single_quoted_literals(s: &str) -> String {
+/// ANSI_QUOTES SQL mode is enabled. Handles escaped quotes via `''`/`""`.
+/// 
+/// Note: Backslash-escaped quotes (\' or \") are NOT treated as escapes here,
+/// matching MySQL's default behavior with NO_BACKSLASH_ESCAPES mode. This is
+/// conservative for the INTO OUTFILE check — we may strip more than necessary,
+/// but never less, ensuring the security check remains effective.
+fn strip_string_literals(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut i = 0;
     let bytes = s.as_bytes();
@@ -251,11 +255,7 @@ fn strip_single_quoted_literals(s: &str) -> String {
             // Skip past the entire quoted literal
             i += 1; // skip opening quote
             while i < bytes.len() {
-                if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == quote {
-                    // Backslash-escaped quote (e.g. \' or \" inside a string literal).
-                    // Skip both characters so the quote is not mistaken for a closing quote.
-                    i += 2;
-                } else if bytes[i] == quote {
+                if bytes[i] == quote {
                     // Check if this is ''/"" (escaped quote) or a closing quote
                     if i + 1 < bytes.len() && bytes[i + 1] == quote {
                         i += 2; // skip the escaped pair '' or ""

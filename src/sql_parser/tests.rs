@@ -557,22 +557,73 @@ fn test_select_string_literal_into_dumpfile_not_false_positive() {
 }
 
 #[test]
-fn test_strip_single_quoted_literals() {
-    use super::strip_single_quoted_literals;
+fn test_strip_string_literals() {
+    use super::strip_string_literals;
     assert_eq!(
-        strip_single_quoted_literals("no quotes here"),
+        strip_string_literals("no quotes here"),
         "no quotes here"
     );
     assert_eq!(
-        strip_single_quoted_literals("SELECT 'hello' FROM t"),
+        strip_string_literals("SELECT 'hello' FROM t"),
         "SELECT  FROM t"
     );
     assert_eq!(
-        strip_single_quoted_literals("SELECT 'it''s' FROM t"),
+        strip_string_literals("SELECT 'it''s' FROM t"),
         "SELECT  FROM t"
     );
     assert_eq!(
-        strip_single_quoted_literals("SELECT 'INTO OUTFILE' FROM t"),
+        strip_string_literals("SELECT 'INTO OUTFILE' FROM t"),
+        "SELECT  FROM t"
+    );
+}
+
+#[test]
+fn test_strip_string_literals_double_quotes() {
+    use super::strip_string_literals;
+    // Double-quoted strings should be stripped (relevant for ANSI_QUOTES mode)
+    assert_eq!(
+        strip_string_literals("SELECT \"hello\" FROM t"),
+        "SELECT  FROM t"
+    );
+    assert_eq!(
+        strip_string_literals("SELECT \"it\"\"s\" FROM t"),
+        "SELECT  FROM t"
+    );
+    assert_eq!(
+        strip_string_literals("SELECT \"INTO OUTFILE\" FROM t"),
+        "SELECT  FROM t"
+    );
+}
+
+#[test]
+fn test_strip_string_literals_backslash_in_literal() {
+    use super::strip_string_literals;
+    // Backslash is NOT treated as escape (conservative for NO_BACKSLASH_ESCAPES mode)
+    // The backslash and following quote are treated as literal characters
+    assert_eq!(
+        strip_string_literals("SELECT 'it\\'s' FROM t"),
+        "SELECT s' FROM t"
+    );
+    assert_eq!(
+        strip_string_literals("SELECT \"quote\\\"more\" FROM t"),
+        "SELECT more\" FROM t"
+    );
+}
+
+#[test]
+fn test_strip_string_literals_mixed_quotes() {
+    use super::strip_string_literals;
+    // Single and double quotes should not interfere with each other
+    assert_eq!(
+        strip_string_literals("SELECT 'single', \"double\" FROM t"),
+        "SELECT ,  FROM t"
+    );
+    assert_eq!(
+        strip_string_literals("SELECT 'has \"inside\"' FROM t"),
+        "SELECT  FROM t"
+    );
+    assert_eq!(
+        strip_string_literals("SELECT \"has 'inside'\" FROM t"),
         "SELECT  FROM t"
     );
 }
