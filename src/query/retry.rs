@@ -44,6 +44,13 @@ where
     F: Fn() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
+    /// Maximum exponent for backoff: 2^10 = 1024x multiplier (~102.4s at 100ms base).
+    const MAX_BACKOFF_SHIFT: u32 = 10;
+    /// Base delay for exponential backoff in milliseconds.
+    const BASE_BACKOFF_MS: u64 = 100;
+    /// Minimum backoff duration in milliseconds (floor after jitter).
+    const MIN_BACKOFF_MS: u64 = 50;
+
     let mut attempt = 0u32;
     let max_attempts = max_retries + 1; // initial attempt + retries
 
@@ -76,19 +83,20 @@ where
                     return Err(e);
                 }
 
-                // Calculate backoff: 100ms * 2^attempt (100ms, 200ms, 400ms, ...)
-                // with ±25% jitter to prevent thundering herd
-                // Max shift of 10 gives 100 * 1024 = 102,400ms (~102s max backoff)
-                let base_ms = 100u64.saturating_mul(1u64 << (attempt - 1).min(10));
+                // Calculate backoff: BASE_BACKOFF_MS * 2^(attempt-1), capped at MAX_BACKOFF_SHIFT
+                // e.g. attempt=1→100ms, attempt=2→200ms, attempt=3→400ms, ...
+                let shift = attempt.saturating_sub(1).min(MAX_BACKOFF_SHIFT);
+                let base_ms = BASE_BACKOFF_MS.saturating_mul(1u64 << shift);
+
+                // ±25% jitter using integer arithmetic to prevent thundering herd
                 let nanos = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .subsec_nanos();
-                // jitter_pct in 0..=50, mapped to 0.75..=1.25
-                let jitter_pct = (nanos % 51) as f64; // 0..=50
-                let jitter_factor = 0.75 + (jitter_pct / 100.0); // 0.75..=1.25
-                let backoff_ms = ((base_ms as f64) * jitter_factor) as u64;
-                let backoff_ms = backoff_ms.max(50); // never below 50ms
+                let jitter_pct = nanos % 51; // 0..=50
+                let jitter_range = base_ms / 2; // half of base = ±25%
+                let jitter = jitter_range * jitter_pct as u64 / 50;
+                let backoff_ms = (base_ms * 3 / 4 + jitter).max(MIN_BACKOFF_MS);
                 let backoff = Duration::from_millis(backoff_ms);
 
                 tracing::warn!(
