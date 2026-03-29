@@ -341,6 +341,18 @@ impl SessionStore {
                 "ssh_known_hosts_check must be one of: strict, accept-new, insecure"
             );
         }
+
+        // Block dangerous combination: runtime connections + insecure SSH host key checking.
+        // Without host key verification, an attacker can MITM the SSH tunnel and
+        // intercept database credentials supplied at runtime.
+        if ssh_host.is_some() && ssh_known_hosts_check == "insecure" {
+            return tool_error!(
+                "ssh_known_hosts_check='insecure' cannot be used with runtime connections. \
+                 This combination allows SSH tunnels without host key verification, enabling \
+                 man-in-the-middle attacks that could intercept database credentials. \
+                 Use 'strict' or 'accept-new' instead."
+            );
+        }
         if let Some(ref key_path) = ssh_private_key {
             if !std::path::Path::new(key_path).exists() {
                 return tool_error!("SSH private key file not found: {}", key_path);
