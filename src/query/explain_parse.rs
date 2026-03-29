@@ -732,7 +732,11 @@ mod tests {
         }
         let v = make_v2(leaf);
         let result = parse_v2(&v);
-        assert!(result.is_ok(), "deep nesting should not panic, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "deep nesting should not panic, got: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -752,7 +756,11 @@ mod tests {
         }
         let v = make_v1(leaf);
         let result = parse(&v);
-        assert!(result.is_ok(), "deep nesting should not panic, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "deep nesting should not panic, got: {:?}",
+            result
+        );
     }
 
     #[test]

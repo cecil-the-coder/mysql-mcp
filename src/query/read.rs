@@ -351,10 +351,13 @@ fn column_to_json(
                 return serde_json::Number::from_f64(v)
                     .map(Value::Number)
                     .unwrap_or_else(|| {
-                        push_warning(warnings, format!(
-                            "Column '{}' contains NaN/Infinity value converted to NULL",
-                            col.name()
-                        ));
+                        push_warning(
+                            warnings,
+                            format!(
+                                "Column '{}' contains NaN/Infinity value converted to NULL",
+                                col.name()
+                            ),
+                        );
                         Value::Null
                     });
             }
@@ -481,11 +484,14 @@ fn column_to_json(
             }),
         };
     }
-    push_warning(warnings, format!(
-        "Column '{}' (type '{}') could not be decoded as text or binary, returning NULL",
-        col.name(),
-        type_name
-    ));
+    push_warning(
+        warnings,
+        format!(
+            "Column '{}' (type '{}') could not be decoded as text or binary, returning NULL",
+            col.name(),
+            type_name
+        ),
+    );
     Value::Null
 }
 
@@ -652,7 +658,10 @@ mod integration_tests {
         // One more push should add the truncation notice.
         push_warning(&mut warnings, "extra".to_string());
         assert_eq!(warnings.len(), MAX_SERIALIZATION_WARNINGS + 1);
-        assert!(warnings.last().unwrap().contains("further warnings suppressed"));
+        assert!(warnings
+            .last()
+            .unwrap()
+            .contains("further warnings suppressed"));
         // Subsequent pushes should be silently dropped.
         push_warning(&mut warnings, "yet another".to_string());
         assert_eq!(warnings.len(), MAX_SERIALIZATION_WARNINGS + 1);
