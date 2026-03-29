@@ -164,11 +164,16 @@ impl SessionStore {
                     tracing::debug!("Failed to get time_zone: {}", e);
                     String::new()
                 });
-                let read_only_raw: i64 = row.try_get("read_only").unwrap_or_else(|e| {
-                    tracing::debug!("Failed to get read_only: {}", e);
-                    0
-                });
-                let read_only = read_only_raw != 0;
+                let read_only: bool = match row.try_get::<i32, _>("read_only") {
+                    Ok(val) => val != 0,
+                    Err(e) => {
+                        tracing::debug!("Failed to get read_only as integer: {}", e);
+                        // Fallback: try as string for edge cases
+                        row.try_get::<String, _>("read_only")
+                            .map(|s| s.to_uppercase() == "ON" || s == "1")
+                            .unwrap_or(false)
+                    }
+                };
 
                 let mut accessible_features = vec!["SELECT", "SHOW", "EXPLAIN"];
                 let sec = &self.config.security;
