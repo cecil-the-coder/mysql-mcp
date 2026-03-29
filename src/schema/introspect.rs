@@ -12,6 +12,23 @@ use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
 // Cache internals
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Cache lock ordering
+// ---------------------------------------------------------------------------
+//
+// To prevent deadlocks when multiple methods acquire cache locks concurrently,
+// ALL code paths that hold more than one cache lock simultaneously MUST
+// acquire them in the following order (consistent with invalidate_table):
+//
+//   1. columns_cache
+//   2. indexed_columns_cache
+//   3. composite_indexes_cache
+//   4. tables_cache
+//
+// If you add a new cache field, add it at an appropriate position.
+// NEVER acquire locks in a different order, even temporarily.
+// ---------------------------------------------------------------------------
+
 /// Construct a cache key from database name (optional) and table name.
 /// The format is "{database}\t{table}" where database may be empty.
 /// Tab is used as separator because it is not a valid MySQL identifier character.
@@ -389,6 +406,8 @@ impl SchemaIntrospector {
             return;
         }
 
+        // Lock order: columns -> indexed_columns -> composite_indexes -> tables.
+        // This is consistent with invalidate_all to prevent deadlock.
         let mut columns_cache = self.inner.columns_cache.lock().await;
         let mut indexed_columns_cache = self.inner.indexed_columns_cache.lock().await;
         let mut composite_indexes_cache = self.inner.composite_indexes_cache.lock().await;
@@ -408,8 +427,8 @@ impl SchemaIntrospector {
     /// Acquires all cache locks atomically to prevent readers from observing partially
     /// invalidated state.
     pub async fn invalidate_all(&self) {
-        // Lock order: columns -> indexed_columns -> composite_indexes -> tables
-        // (consistent with invalidate_table to prevent deadlock).
+        // Lock order: columns -> indexed_columns -> composite_indexes -> tables.
+        // This is consistent with invalidate_table to prevent deadlock.
         let mut columns_cache = self.inner.columns_cache.lock().await;
         let mut indexed_columns_cache = self.inner.indexed_columns_cache.lock().await;
         let mut composite_indexes_cache = self.inner.composite_indexes_cache.lock().await;
