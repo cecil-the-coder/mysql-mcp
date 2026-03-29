@@ -6,6 +6,10 @@ use super::explain::{ExplainResult, ExplainTier};
 const VERY_SLOW_ROW_THRESHOLD: u64 = 10_000;
 const SLOW_ROW_THRESHOLD: u64 = 1_000;
 
+/// Maximum recursion depth for walking EXPLAIN plan trees.
+/// Prevents stack overflow from pathological or malicious deeply-nested JSON.
+const MAX_PLAN_DEPTH: usize = 100;
+
 #[derive(Default)]
 struct PlanStats {
     has_full_table_scan: bool,
@@ -25,6 +29,18 @@ struct PlanStats {
 ///   - "estimated_rows": f64
 ///   - "index_name": str   (for index nodes)
 fn walk_plan_node(node: &Value, stats: &mut PlanStats) {
+    walk_plan_node_inner(node, stats, 0);
+}
+
+fn walk_plan_node_inner(node: &Value, stats: &mut PlanStats, depth: usize) {
+    if depth > MAX_PLAN_DEPTH {
+        tracing::warn!(
+            depth,
+            max = MAX_PLAN_DEPTH,
+            "EXPLAIN plan tree exceeded max recursion depth; skipping deeper nodes"
+        );
+        return;
+    }
     match node["access_type"].as_str().unwrap_or("") {
         "table" => {
             // Check if this table access uses an index
@@ -75,7 +91,7 @@ fn walk_plan_node(node: &Value, stats: &mut PlanStats) {
 
     if let Some(inputs) = node["inputs"].as_array() {
         for child in inputs {
-            walk_plan_node(child, stats);
+            walk_plan_node_inner(child, stats, depth + 1);
         }
     }
 }
@@ -209,13 +225,25 @@ fn walk_v1_table(table: &Value, stats: &mut PlanStats) {
 
 /// Recursively walk a schema v1 query_block node.
 fn walk_v1_block(node: &Value, stats: &mut PlanStats) {
+    walk_v1_block_inner(node, stats, 0);
+}
+
+fn walk_v1_block_inner(node: &Value, stats: &mut PlanStats, depth: usize) {
+    if depth > MAX_PLAN_DEPTH {
+        tracing::warn!(
+            depth,
+            max = MAX_PLAN_DEPTH,
+            "EXPLAIN v1 plan tree exceeded max recursion depth; skipping deeper nodes"
+        );
+        return;
+    }
     if let Some(table) = node.get("table") {
         walk_v1_table(table, stats);
     }
     // JOIN: nested_loop is an array of per-table wrappers
     if let Some(nl) = node["nested_loop"].as_array() {
         for item in nl {
-            walk_v1_block(item, stats);
+            walk_v1_block_inner(item, stats, depth + 1);
         }
     }
     // ORDER BY (may have using_filesort at the operation level)
@@ -223,21 +251,21 @@ fn walk_v1_block(node: &Value, stats: &mut PlanStats) {
         if ordering["using_filesort"].as_bool().unwrap_or(false) {
             stats.has_sort = true;
         }
-        walk_v1_block(ordering, stats);
+        walk_v1_block_inner(ordering, stats, depth + 1);
     }
     // GROUP BY — using_temporary means a temp table was created for aggregation
     if let Some(grouping) = node.get("grouping_operation") {
         if grouping["using_temporary"].as_bool().unwrap_or(false) {
             stats.has_temporary = true;
         }
-        walk_v1_block(grouping, stats);
+        walk_v1_block_inner(grouping, stats, depth + 1);
     }
     // UNION
     if let Some(union) = node.get("union_result") {
         if let Some(specs) = union["query_specifications"].as_array() {
             for spec in specs {
                 if let Some(qb) = spec.get("query_block") {
-                    walk_v1_block(qb, stats);
+                    walk_v1_block_inner(qb, stats, depth + 1);
                 }
             }
         }
@@ -684,6 +712,54 @@ mod tests {
         assert_eq!(
             result.rows_examined_estimate, 1_000_000,
             "outer derived rows must not be double-counted"
+        );
+    }
+
+    #[test]
+    fn test_v2_deeply_nested_plan_respects_depth_limit() {
+        // Build a tree that exceeds MAX_PLAN_DEPTH to verify it doesn't stack overflow.
+        // Each node wraps the next in "inputs".
+        let mut leaf = json!({
+            "access_type": "table",
+            "table_name": "t",
+            "estimated_rows": 1.0
+        });
+        for _ in 0..(MAX_PLAN_DEPTH + 10) {
+            leaf = json!({
+                "access_type": "filter",
+                "inputs": [leaf]
+            });
+        }
+        let v = make_v2(leaf);
+        let result = parse_v2(&v);
+        assert!(
+            result.is_ok(),
+            "deep nesting should not panic, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_v1_deeply_nested_plan_respects_depth_limit() {
+        // Build a deeply nested nested_loop structure exceeding MAX_PLAN_DEPTH.
+        let mut leaf = json!({
+            "table": {
+                "table_name": "t",
+                "access_type": "ALL",
+                "rows_examined_per_scan": 1
+            }
+        });
+        for _ in 0..(MAX_PLAN_DEPTH + 10) {
+            leaf = json!({
+                "nested_loop": [leaf]
+            });
+        }
+        let v = make_v1(leaf);
+        let result = parse(&v);
+        assert!(
+            result.is_ok(),
+            "deep nesting should not panic, got: {:?}",
+            result
         );
     }
 
