@@ -97,13 +97,13 @@ pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToo
 /// Guard that decrements total_connections on drop unless dismissed.
 /// Used in handle_connect to ensure the connection counter is always
 /// decremented exactly once on any failure path.
-pub(crate) struct ConnectionReservationGuard {
-    total_connections: Arc<AtomicU32>,
+pub(crate) struct ConnectionReservationGuard<'a> {
+    total_connections: &'a AtomicU32,
     dismissed: bool,
 }
 
-impl ConnectionReservationGuard {
-    fn new(total_connections: Arc<AtomicU32>) -> Self {
+impl<'a> ConnectionReservationGuard<'a> {
+    fn new(total_connections: &'a AtomicU32) -> Self {
         Self {
             total_connections,
             dismissed: false,
@@ -117,7 +117,7 @@ impl ConnectionReservationGuard {
     }
 }
 
-impl Drop for ConnectionReservationGuard {
+impl<'a> Drop for ConnectionReservationGuard<'a> {
     fn drop(&mut self) {
         if !self.dismissed {
             self.total_connections
@@ -411,7 +411,7 @@ impl SessionStore {
             );
         }
         // Guard ensures counter is decremented if we exit before dismissing it.
-        let reservation_guard = ConnectionReservationGuard::new(self.total_connections.clone());
+        let reservation_guard = ConnectionReservationGuard::new(self.total_connections.as_ref());
 
         let (pool, tunnel) = if let Some(ref ssh_host_str) = ssh_host {
             // Validate SSH user is present
