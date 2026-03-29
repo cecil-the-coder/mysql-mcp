@@ -3,20 +3,35 @@ use sqlx::MySqlPool;
 
 use super::{ColumnInfo, IndexDef, TableInfo};
 
-// MySQL information_schema columns (TABLE_NAME, DATA_TYPE, COLUMN_KEY, etc.) are
-// sometimes returned as binary blobs by sqlx. These helpers try String first,
-// then fall back to Vec<u8> -> UTF-8 so callers always get a usable value.
-pub(crate) fn is_col_str(row: &sqlx::mysql::MySqlRow, col: &str) -> String {
+/// Extract a string column from a MySQL row, falling back to binary decoding.
+///
+/// Returns an error if neither `String` nor `Vec<u8>` extraction succeeds,
+/// allowing callers to propagate data integrity issues instead of silently
+/// masking them with an empty string.
+pub(crate) fn try_is_col_str(row: &sqlx::mysql::MySqlRow, col: &str) -> Result<String> {
     use sqlx::Row;
     row.try_get::<String, _>(col)
         .or_else(|_| {
             row.try_get::<Vec<u8>, _>(col)
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
         })
-        .unwrap_or_else(|e| {
-            tracing::warn!("Failed to extract column '{}' from row: {}", col, e);
+        .map_err(|e| anyhow::anyhow!("Failed to extract column '{}' from row: {}", col, e))
+}
+
+// MySQL information_schema columns (TABLE_NAME, DATA_TYPE, COLUMN_KEY, etc.) are
+// sometimes returned as binary blobs by sqlx. These helpers try String first,
+// then fall back to Vec<u8> -> UTF-8 so callers always get a usable value.
+//
+// NOTE: This function logs extraction failures and returns an empty string,
+// which can mask data integrity issues. Prefer `try_is_col_str` for new code.
+pub(crate) fn is_col_str(row: &sqlx::mysql::MySqlRow, col: &str) -> String {
+    match try_is_col_str(row, col) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("{}", e);
             String::new()
-        })
+        }
+    }
 }
 
 pub(crate) fn is_col_str_opt(row: &sqlx::mysql::MySqlRow, col: &str) -> Option<String> {
@@ -88,9 +103,9 @@ pub(crate) async fn fetch_tables(
         .iter()
         .map(|row| {
             use sqlx::Row;
-            TableInfo {
-                name: is_col_str(row, "name"),
-                schema: is_col_str(row, "schema"),
+            Ok(TableInfo {
+                name: try_is_col_str(row, "name")?,
+                schema: try_is_col_str(row, "schema")?,
                 row_count: row.try_get("row_count").ok(),
                 data_size_bytes: row.try_get("data_size_bytes").ok(),
                 create_time: row
@@ -103,9 +118,9 @@ pub(crate) async fn fetch_tables(
                     .ok()
                     .flatten()
                     .map(|d| d.to_string()),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(tables)
 }
@@ -155,18 +170,18 @@ pub(crate) async fn fetch_columns(
     let columns = rows
         .iter()
         .map(|row| {
-            let nullable_str = is_col_str(row, "is_nullable");
-            ColumnInfo {
-                name: is_col_str(row, "name"),
-                data_type: is_col_str(row, "data_type"),
-                column_type: is_col_str(row, "column_type"),
+            let nullable_str = try_is_col_str(row, "is_nullable")?;
+            Ok(ColumnInfo {
+                name: try_is_col_str(row, "name")?,
+                data_type: try_is_col_str(row, "data_type")?,
+                column_type: try_is_col_str(row, "column_type")?,
                 is_nullable: nullable_str == "YES",
                 column_default: is_col_str_opt(row, "column_default"),
                 column_key: is_col_str_opt(row, "column_key"),
                 extra: is_col_str_opt(row, "extra"),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(columns)
 }
@@ -191,7 +206,7 @@ pub(crate) async fn fetch_indexed_columns(
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut cols: Vec<String> = Vec::new();
     for row in &rows {
-        let col_name = is_col_str(row, "Column_name");
+        let col_name = try_is_col_str(row, "Column_name")?;
         if !col_name.is_empty() && seen.insert(col_name.to_lowercase()) {
             cols.push(col_name);
         }
@@ -231,9 +246,9 @@ pub(crate) async fn fetch_composite_indexes(
         std::collections::BTreeMap::new();
     for row in &rows {
         use sqlx::Row;
-        let name = is_col_str(row, "INDEX_NAME");
+        let name = try_is_col_str(row, "INDEX_NAME")?;
         let non_unique: i64 = row.try_get("NON_UNIQUE").unwrap_or(1);
-        let col = is_col_str(row, "COLUMN_NAME");
+        let col = try_is_col_str(row, "COLUMN_NAME")?;
         let entry = index_map.entry(name.clone()).or_insert_with(|| IndexDef {
             name,
             unique: non_unique == 0,
