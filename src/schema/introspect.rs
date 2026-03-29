@@ -293,8 +293,8 @@ impl SchemaIntrospector {
         // --- Case 1: Composite index detection ---
         // If there are 2+ unindexed WHERE columns, check whether a composite index
         // would cover them rather than N individual indexes.
+        // Pre-compute table name formats once (reused across branches).
         let esc = |s: &str| format!("`{}`", super::fetch::escape_mysql_identifier(s));
-        // Sanitize a string for use as part of an index name (alphanumeric + underscore only).
         let safe_name = |s: &str| -> String {
             s.chars()
                 .map(|c| {
@@ -306,6 +306,9 @@ impl SchemaIntrospector {
                 })
                 .collect()
         };
+        let esc_table = esc(table);
+        let safe_table = safe_name(table);
+
         if unindexed_cols.len() >= 2 {
             // An existing composite index covers the WHERE columns iff all WHERE columns
             // appear as a leading prefix of that index (B-tree indexes require leftmost prefix
@@ -325,22 +328,34 @@ impl SchemaIntrospector {
                 prefix_set == where_col_set
             });
             if !covered_by_existing {
-                let idx_cols: Vec<&str> = unindexed_cols.iter().map(|c| c.as_str()).collect();
-                let esc_cols: Vec<String> = idx_cols.iter().map(|c| esc(c)).collect();
-                let safe_cols: Vec<String> = idx_cols.iter().map(|c| safe_name(c)).collect();
+                // Build joined strings directly without intermediate Vec<String>.
+                let mut cols_display = String::new();
+                let mut esc_cols = String::new();
+                let mut safe_cols = String::new();
+                for (i, col) in unindexed_cols.iter().enumerate() {
+                    if i > 0 {
+                        cols_display.push_str(", ");
+                        esc_cols.push_str(", ");
+                        safe_cols.push('_');
+                    }
+                    cols_display.push_str(col);
+                    esc_cols.push_str(&esc(col));
+                    safe_cols.push_str(&safe_name(col));
+                }
                 suggestions.push(format!(
                     "Multiple unindexed WHERE columns on {}: [{}]. Consider a composite index: CREATE INDEX idx_{}_{} ON {}({});",
-                    esc(table), idx_cols.join(", "), safe_name(table), safe_cols.join("_"), esc(table), esc_cols.join(", ")
+                    esc_table, cols_display, safe_table, safe_cols, esc_table, esc_cols
                 ));
             } else {
                 suggestions.push(format!(
                     "WHERE columns on {} are covered by an existing composite index. No new index needed.",
-                    esc(table)
+                    esc_table
                 ));
             }
         } else {
             // Single unindexed column: emit the standard per-column suggestion.
             for col in &unindexed_cols {
+                let esc_col = esc(col);
                 let low_card = col_info
                     .get(&col.to_lowercase())
                     .map(|ci| is_low_cardinality_type(&ci.column_type))
@@ -348,12 +363,12 @@ impl SchemaIntrospector {
                 if low_card {
                     suggestions.push(format!(
                         "Column {} in WHERE clause on table {} has no index, but its type has low cardinality (few distinct values). An index may not improve performance — the optimizer may prefer a full table scan. Consider filtering on a higher-cardinality column instead, or use a partial/functional index.",
-                        esc(col), esc(table)
+                        esc_col, esc_table
                     ));
                 } else {
                     suggestions.push(format!(
                         "Column {} in WHERE clause on table {} has no index. Consider: CREATE INDEX idx_{}_{} ON {}({});",
-                        esc(col), esc(table), safe_name(table), safe_name(col), esc(table), esc(col)
+                        esc_col, esc_table, safe_table, safe_name(col), esc_table, esc_col
                     ));
                 }
             }
