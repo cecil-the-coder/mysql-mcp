@@ -373,17 +373,31 @@ pub async fn spawn_ssh_tunnel(
         };
         match child.try_wait() {
             Ok(Some(status)) => {
-                // Collect any buffered stderr for diagnostics (best effort, 500 ms cap).
+                // Collect any buffered stderr for diagnostics (best effort, 2 s cap).
+                // Reads until EOF, buffer full, or timeout to capture longer SSH error output
+                // (e.g., host key verification failures with verbose diagnostics).
                 let stderr_snippet = if let Some(mut stderr) = child.stderr.take() {
-                    let mut buf = vec![0u8; 2048];
-                    let n = tokio::time::timeout(
-                        Duration::from_millis(500),
-                        tokio::io::AsyncReadExt::read(&mut stderr, &mut buf),
+                    let mut buf = vec![0u8; 8192];
+                    let mut total = 0;
+                    let read_result = tokio::time::timeout(
+                        Duration::from_secs(2),
+                        async {
+                            use tokio::io::AsyncReadExt;
+                            loop {
+                                if total >= buf.len() {
+                                    break;
+                                }
+                                match stderr.read(&mut buf[total..]).await {
+                                    Ok(0) => break, // EOF
+                                    Ok(n) => total += n,
+                                    Err(_) => break,
+                                }
+                            }
+                        },
                     )
-                    .await
-                    .ok()
-                    .and_then(|r| r.ok())
-                    .unwrap_or(0);
+                    .await;
+                    // If the timeout expired, we still use whatever was read so far.
+                    let n = total;
                     let s = String::from_utf8_lossy(&buf[..n]).trim().to_string();
                     if s.is_empty() {
                         None
