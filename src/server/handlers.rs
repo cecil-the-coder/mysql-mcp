@@ -69,10 +69,10 @@ impl SessionStore {
             const VALID: &[&str] = &["indexes", "foreign_keys", "size"];
             for (i, elem) in arr.iter().enumerate() {
                 match elem.as_str() {
-                    Some(s) if s.is_empty() => {
+                    Some(s) if s.trim().is_empty() => {
                         return tool_error!(
                             "include[{}]: empty string is not a valid value. Valid values: indexes, foreign_keys, size",
-                            i
+                            i,
                         );
                     }
                     Some(s) if VALID.contains(&s) => {}

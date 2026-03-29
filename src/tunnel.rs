@@ -379,7 +379,7 @@ pub async fn spawn_ssh_tunnel(
                 let stderr_snippet = if let Some(mut stderr) = child.stderr.take() {
                     let mut buf = vec![0u8; 8192];
                     let mut total = 0;
-                    let read_result = tokio::time::timeout(
+                    let _ = tokio::time::timeout(
                         Duration::from_secs(2),
                         async {
                             use tokio::io::AsyncReadExt;
@@ -390,7 +390,10 @@ pub async fn spawn_ssh_tunnel(
                                 match stderr.read(&mut buf[total..]).await {
                                     Ok(0) => break, // EOF
                                     Ok(n) => total += n,
-                                    Err(_) => break,
+                                    Err(e) => {
+                                        tracing::trace!("Error reading SSH stderr: {}", e);
+                                        break;
+                                    }
                                 }
                             }
                         },
