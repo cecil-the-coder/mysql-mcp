@@ -178,8 +178,8 @@ pub async fn execute_read_query(
             break;
         }
 
-        total_memory_bytes = total_memory_bytes.saturating_add(row_total);
         json_rows.push(json_row);
+        total_memory_bytes = total_memory_bytes.saturating_add(row_total);
     }
     let ser_elapsed = ser_start.elapsed().as_millis() as u64;
 
@@ -361,13 +361,14 @@ fn column_to_json(
             }
         }
         "BIT" => {
-            // BIT columns: decode as u64 bitmask
-            if let Ok(v) = row.try_get::<Option<u64>, _>(idx) {
-                return v.map(|n| serde_json::json!(n)).unwrap_or(Value::Null);
-            }
-            // single-bit BIT(1): try bool
+            // BIT(1): try bool first for consistency with TINYINT(1)/BOOLEAN handling.
+            // Multi-bit BIT(n) columns will fail the bool decode and fall through to u64.
             if let Ok(v) = row.try_get::<Option<bool>, _>(idx) {
                 return v.map(Value::Bool).unwrap_or(Value::Null);
+            }
+            // BIT(n) with n > 1: decode as u64 bitmask
+            if let Ok(v) = row.try_get::<Option<u64>, _>(idx) {
+                return v.map(|n| serde_json::json!(n)).unwrap_or(Value::Null);
             }
         }
         "YEAR" => {
