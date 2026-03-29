@@ -323,7 +323,7 @@ impl Config {
             }
             if ssh.port == 0 {
                 anyhow::bail!(
-                    "ssh.port must be between 1 and 65535 (got: 0)"
+                    "ssh.port must be > 0 (got: 0)"
                 );
             }
             if ssh.user.is_empty() {
