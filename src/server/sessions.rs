@@ -121,7 +121,7 @@ impl<'a> Drop for ConnectionReservationGuard<'a> {
     fn drop(&mut self) {
         if !self.dismissed {
             self.total_connections
-                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
+                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::AcqRel);
         }
     }
 }
@@ -397,7 +397,7 @@ impl SessionStore {
         let max_total = self.config.security.max_total_connections;
         let reserve_result =
             self.total_connections
-                .fetch_update(Ordering::Release, Ordering::Relaxed, |current| {
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                     if current.saturating_add(NAMED_SESSION_POOL_SIZE) <= max_total {
                         Some(current.saturating_add(NAMED_SESSION_POOL_SIZE))
                     } else {
@@ -562,7 +562,7 @@ impl SessionStore {
         if let Some(session) = removed {
             // Decrement total connections counter
             self.total_connections
-                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
+                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::AcqRel);
             // Clean up SSH tunnel if present (outside the lock — close() may be slow).
             if let Some(tunnel) = session.tunnel {
                 close_tunnel_with_timeout(tunnel, "on disconnect").await;
