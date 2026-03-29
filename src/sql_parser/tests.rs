@@ -559,10 +559,7 @@ fn test_select_string_literal_into_dumpfile_not_false_positive() {
 #[test]
 fn test_strip_string_literals() {
     use super::strip_string_literals;
-    assert_eq!(
-        strip_string_literals("no quotes here"),
-        "no quotes here"
-    );
+    assert_eq!(strip_string_literals("no quotes here"), "no quotes here");
     assert_eq!(
         strip_string_literals("SELECT 'hello' FROM t"),
         "SELECT  FROM t"
@@ -601,10 +598,7 @@ fn test_strip_string_literals_backslash_in_literal() {
     // Backslash is NOT treated as escape (conservative for NO_BACKSLASH_ESCAPES mode)
     // The backslash and following quote are treated as literal characters
     // Note: The function may strip more than necessary for security, which is acceptable
-    assert_eq!(
-        strip_string_literals("SELECT 'it\\'s' FROM t"),
-        "SELECT s"
-    );
+    assert_eq!(strip_string_literals("SELECT 'it\\'s' FROM t"), "SELECT s");
     assert_eq!(
         strip_string_literals("SELECT \"quote\\\"more\" FROM t"),
         "SELECT more"
