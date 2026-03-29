@@ -125,7 +125,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
 
     #[test]
     fn test_is_transient_error_connection_reset() {
@@ -183,17 +184,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_succeeds_on_second_attempt() {
-        let attempts = Arc::new(Mutex::new(0u32));
+        let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
 
         let result = retry_on_transient_error(
             || {
                 let attempts = attempts_clone.clone();
                 async move {
-                    let mut guard = attempts.lock().unwrap();
-                    let current = *guard;
-                    *guard += 1;
-                    drop(guard);
+                    let current = attempts.fetch_add(1, Ordering::SeqCst);
                     if current == 0 {
                         Err(anyhow::anyhow!("connection reset by peer"))
                     } else {
@@ -208,19 +206,19 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "success");
-        assert_eq!(*attempts.lock().unwrap(), 2);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
     async fn test_retry_fails_after_max_attempts() {
-        let attempts = Arc::new(Mutex::new(0u32));
+        let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
 
         let result: Result<(), _> = retry_on_transient_error(
             || {
                 let attempts = attempts_clone.clone();
                 async move {
-                    *attempts.lock().unwrap() += 1;
+                    attempts.fetch_add(1, Ordering::SeqCst);
                     Err(anyhow::anyhow!("connection reset by peer"))
                 }
             },
@@ -230,19 +228,19 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        assert_eq!(*attempts.lock().unwrap(), 3); // initial + 2 retries
+        assert_eq!(attempts.load(Ordering::SeqCst), 3); // initial + 2 retries
     }
 
     #[tokio::test]
     async fn test_no_retry_on_non_transient_error() {
-        let attempts = Arc::new(Mutex::new(0u32));
+        let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
 
         let result: Result<(), _> = retry_on_transient_error(
             || {
                 let attempts = attempts_clone.clone();
                 async move {
-                    *attempts.lock().unwrap() += 1;
+                    attempts.fetch_add(1, Ordering::SeqCst);
                     Err(anyhow::anyhow!("syntax error"))
                 }
             },
@@ -252,19 +250,19 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        assert_eq!(*attempts.lock().unwrap(), 1); // only initial attempt
+        assert_eq!(attempts.load(Ordering::SeqCst), 1); // only initial attempt
     }
 
     #[tokio::test]
     async fn test_retry_with_zero_max_retries() {
-        let attempts = Arc::new(Mutex::new(0u32));
+        let attempts = Arc::new(AtomicU32::new(0));
         let attempts_clone = attempts.clone();
 
         let result: Result<(), _> = retry_on_transient_error(
             || {
                 let attempts = attempts_clone.clone();
                 async move {
-                    *attempts.lock().unwrap() += 1;
+                    attempts.fetch_add(1, Ordering::SeqCst);
                     Err(anyhow::anyhow!("connection reset"))
                 }
             },
@@ -274,6 +272,6 @@ mod tests {
         .await;
 
         assert!(result.is_err());
-        assert_eq!(*attempts.lock().unwrap(), 1); // only initial attempt
+        assert_eq!(attempts.load(Ordering::SeqCst), 1); // only initial attempt
     }
 }

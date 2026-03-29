@@ -18,14 +18,14 @@ use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
 //
 // To prevent deadlocks when multiple methods acquire cache locks concurrently,
 // ALL code paths that hold more than one cache lock simultaneously MUST
-// acquire them in **alphabetical order by field name**:
+// acquire them in the following order (consistent with invalidate_table):
 //
 //   1. columns_cache
-//   2. composite_indexes_cache
-//   3. indexed_columns_cache
+//   2. indexed_columns_cache
+//   3. composite_indexes_cache
 //   4. tables_cache
 //
-// If you add a new cache field, insert it at the correct alphabetical position.
+// If you add a new cache field, add it at an appropriate position.
 // NEVER acquire locks in a different order, even temporarily.
 // ---------------------------------------------------------------------------
 
@@ -406,15 +406,16 @@ impl SchemaIntrospector {
             return;
         }
 
-        // Lock order: columns -> composite_indexes -> indexed_columns -> tables (alphabetical).
+        // Lock order: columns -> indexed_columns -> composite_indexes -> tables.
+        // This is consistent with invalidate_all to prevent deadlock.
         let mut columns_cache = self.inner.columns_cache.lock().await;
-        let mut composite_indexes_cache = self.inner.composite_indexes_cache.lock().await;
         let mut indexed_columns_cache = self.inner.indexed_columns_cache.lock().await;
+        let mut composite_indexes_cache = self.inner.composite_indexes_cache.lock().await;
         let mut tables_cache = self.inner.tables_cache.lock().await;
 
         columns_cache.retain(|key, _| !key_matches_table_and_db(key, table, database));
-        composite_indexes_cache.retain(|key, _| !key_matches_table_and_db(key, table, database));
         indexed_columns_cache.retain(|key, _| !key_matches_table_and_db(key, table, database));
+        composite_indexes_cache.retain(|key, _| !key_matches_table_and_db(key, table, database));
 
         let cache_key = database.unwrap_or("");
         tables_cache.remove(cache_key);
@@ -426,15 +427,16 @@ impl SchemaIntrospector {
     /// Acquires all cache locks atomically to prevent readers from observing partially
     /// invalidated state.
     pub async fn invalidate_all(&self) {
-        // Lock order: columns -> composite_indexes -> indexed_columns -> tables (alphabetical).
+        // Lock order: columns -> indexed_columns -> composite_indexes -> tables.
+        // This is consistent with invalidate_table to prevent deadlock.
         let mut columns_cache = self.inner.columns_cache.lock().await;
-        let mut composite_indexes_cache = self.inner.composite_indexes_cache.lock().await;
         let mut indexed_columns_cache = self.inner.indexed_columns_cache.lock().await;
+        let mut composite_indexes_cache = self.inner.composite_indexes_cache.lock().await;
         let mut tables_cache = self.inner.tables_cache.lock().await;
 
         columns_cache.clear();
-        composite_indexes_cache.clear();
         indexed_columns_cache.clear();
+        composite_indexes_cache.clear();
         tables_cache.clear();
     }
 }
