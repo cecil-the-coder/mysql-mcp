@@ -239,7 +239,7 @@ pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
 /// literal values like `'INTO OUTFILE'` or `"INTO OUTFILE"` are not mistaken for SQL
 /// keywords during safety checks. Double-quoted strings are relevant when MySQL's
 /// ANSI_QUOTES SQL mode is enabled. Handles escaped quotes via `''`/`""`.
-/// 
+///
 /// Note: Backslash-escaped quotes (\' or \") are NOT treated as escapes here,
 /// matching MySQL's default behavior with NO_BACKSLASH_ESCAPES mode. This is
 /// conservative for the INTO OUTFILE check — we may strip more than necessary,
