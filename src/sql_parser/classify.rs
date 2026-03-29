@@ -369,7 +369,7 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
                     let debug = format!("{other:?}");
                     let fallback = debug
                         .split(['{', '(', ' '])
-                        .next()
+                        .find(|s| !s.is_empty())
                         .unwrap_or("Unknown")
                         .to_string();
                     return Ok(ParsedStatement {
