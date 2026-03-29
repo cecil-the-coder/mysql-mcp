@@ -362,6 +362,9 @@ impl SessionStore {
             if !std::path::Path::new(key_path).exists() {
                 return tool_error!("SSH private key file not found: {}", key_path);
             }
+            if let Err(e) = crate::config::check_private_key_permissions(key_path) {
+                return tool_error!("{}", e);
+            }
         }
         if let Some(ref khf) = ssh_known_hosts_file {
             let khf_path = std::path::Path::new(khf);
@@ -371,6 +374,9 @@ impl SessionStore {
                         "SSH known_hosts file not found: {} (required for strict mode)",
                         khf
                     );
+                }
+                if let Err(e) = crate::config::check_known_hosts_permissions(khf) {
+                    return tool_error!("{}", e);
                 }
             } else if let Some(parent) = khf_path.parent() {
                 if !parent.exists() {
