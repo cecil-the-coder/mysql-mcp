@@ -1,6 +1,17 @@
 use anyhow::Result;
 use std::future::Future;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
+
+/// Lazily-initialized monotonic epoch used for jitter calculation.
+/// Unlike `SystemTime`, `Instant` is guaranteed to be monotonic and won't
+/// jump backwards due to NTP syncs or leap seconds.
+static JITTER_EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// Returns a monotonically increasing nanosecond value suitable for jitter.
+fn jitter_nanos() -> u32 {
+    let epoch = JITTER_EPOCH.get_or_init(Instant::now);
+    epoch.elapsed().subsec_nanos()
+}
 
 /// Error patterns that indicate a transient network failure.
 /// These are safe to retry because the operation was never completed.
@@ -89,10 +100,7 @@ where
                 let base_ms = BASE_BACKOFF_MS.saturating_mul(1u64 << shift);
 
                 // ±25% jitter using integer arithmetic to prevent thundering herd
-                let nanos = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .subsec_nanos();
+                let nanos = jitter_nanos();
                 let jitter_pct = nanos % 51; // 0..=50
                 let jitter_range = base_ms / 2; // half of base = ±25%
                 let jitter = jitter_range * jitter_pct as u64 / 50;
