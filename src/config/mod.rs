@@ -316,24 +316,6 @@ impl Config {
             }
         }
 
-        // Block dangerous combination: runtime connections + insecure SSH host key checking.
-        // Without host key verification, an attacker can MITM the SSH tunnel and
-        // intercept database credentials supplied at runtime.
-        if sec.allow_runtime_connections {
-            if let Some(ref ssh) = self.ssh {
-                if ssh.known_hosts_check == "insecure" {
-                    anyhow::bail!(
-                        "security.allow_runtime_connections cannot be enabled when \
-                         ssh.known_hosts_check is \"insecure\". This combination allows \
-                         arbitrary SSH tunnels without host key verification, enabling \
-                         man-in-the-middle attacks that could intercept database credentials. \
-                         Use \"strict\" or \"accept-new\" host key checking, or disable \
-                         allow_runtime_connections."
-                    );
-                }
-            }
-        }
-
         // -- SSH validation --
         if let Some(ref ssh) = self.ssh {
             if ssh.host.is_empty() {
@@ -345,6 +327,7 @@ impl Config {
             if ssh.user.is_empty() {
                 anyhow::bail!("ssh.user must not be empty when SSH tunnel is configured");
             }
+            // Validate enum values first to ensure downstream checks work correctly
             if !matches!(
                 ssh.known_hosts_check.as_str(),
                 "strict" | "accept-new" | "insecure"
@@ -352,6 +335,19 @@ impl Config {
                 anyhow::bail!(
                     "ssh.known_hosts_check must be one of: strict, accept-new, insecure (got: '{}')",
                     ssh.known_hosts_check
+                );
+            }
+            // Block dangerous combination: runtime connections + insecure SSH host key checking.
+            // Without host key verification, an attacker can MITM the SSH tunnel and
+            // intercept database credentials supplied at runtime.
+            if sec.allow_runtime_connections && ssh.known_hosts_check == "insecure" {
+                anyhow::bail!(
+                    "security.allow_runtime_connections cannot be enabled when \
+                     ssh.known_hosts_check is \"insecure\". This combination allows \
+                     arbitrary SSH tunnels without host key verification, enabling \
+                     man-in-the-middle attacks that could intercept database credentials. \
+                     Use \"strict\" or \"accept-new\" host key checking, or disable \
+                     allow_runtime_connections."
                 );
             }
             if let Some(ref key_path) = ssh.private_key {
