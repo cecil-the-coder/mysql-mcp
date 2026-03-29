@@ -32,6 +32,11 @@ use super::with_timeout;
 /// of raw bytes (→ ~1 MB hex string) to prevent OOM on unexpectedly large BLOBs.
 const MAX_BINARY_DISPLAY_BYTES: usize = 512 * 1024;
 
+/// Maximum number of serialization warnings retained per query. Without this
+/// cap, pathological data (e.g. many binary columns that fail UTF-8 decode)
+/// could cause unbounded memory growth in the warnings Vec.
+const MAX_SERIALIZATION_WARNINGS: usize = 10;
+
 /// Estimate the memory size of a JSON value in bytes.
 fn estimate_value_size(v: &Value) -> usize {
     match v {
@@ -277,6 +282,20 @@ fn row_to_json(row: &sqlx::mysql::MySqlRow, warnings: &mut Vec<String>) -> Map<S
     map
 }
 
+/// Push a warning into `warnings` if the vec has not yet reached
+/// `MAX_SERIALIZATION_WARNINGS`.  Once the cap is hit a single
+/// truncation notice is appended so callers know warnings were dropped.
+fn push_warning(warnings: &mut Vec<String>, msg: String) {
+    if warnings.len() < MAX_SERIALIZATION_WARNINGS {
+        warnings.push(msg);
+    } else if warnings.len() == MAX_SERIALIZATION_WARNINGS {
+        warnings.push(format!(
+            "Over {} serialization warnings generated; further warnings suppressed.",
+            MAX_SERIALIZATION_WARNINGS
+        ));
+    }
+}
+
 fn column_to_json(
     row: &sqlx::mysql::MySqlRow,
     idx: usize,
@@ -332,7 +351,7 @@ fn column_to_json(
                 return serde_json::Number::from_f64(v)
                     .map(Value::Number)
                     .unwrap_or_else(|| {
-                        warnings.push(format!(
+                        push_warning(warnings, format!(
                             "Column '{}' contains NaN/Infinity value converted to NULL",
                             col.name()
                         ));
@@ -451,7 +470,7 @@ fn column_to_json(
                     let _ = write!(hex, "{:02x}", b);
                 }
                 if total > MAX_BINARY_DISPLAY_BYTES {
-                    warnings.push(format!(
+                    push_warning(warnings, format!(
                         "Binary column '{}' truncated: {} bytes total, displayed first {} bytes as hex",
                         col.name(),
                         total,
@@ -462,7 +481,7 @@ fn column_to_json(
             }),
         };
     }
-    warnings.push(format!(
+    push_warning(warnings, format!(
         "Column '{}' (type '{}') could not be decoded as text or binary, returning NULL",
         col.name(),
         type_name
@@ -620,6 +639,23 @@ mod integration_tests {
         );
         assert_eq!(row["a"], serde_json::json!(1), "first a should be 1");
         assert_eq!(row["a_2"], serde_json::json!(2), "second a should be 2");
+    }
+
+    #[test]
+    fn test_push_warning_caps_at_limit() {
+        let mut warnings: Vec<String> = Vec::new();
+        // Fill up to the limit.
+        for i in 0..MAX_SERIALIZATION_WARNINGS {
+            push_warning(&mut warnings, format!("warning {i}"));
+        }
+        assert_eq!(warnings.len(), MAX_SERIALIZATION_WARNINGS);
+        // One more push should add the truncation notice.
+        push_warning(&mut warnings, "extra".to_string());
+        assert_eq!(warnings.len(), MAX_SERIALIZATION_WARNINGS + 1);
+        assert!(warnings.last().unwrap().contains("further warnings suppressed"));
+        // Subsequent pushes should be silently dropped.
+        push_warning(&mut warnings, "yet another".to_string());
+        assert_eq!(warnings.len(), MAX_SERIALIZATION_WARNINGS + 1);
     }
 
     #[tokio::test]
