@@ -91,14 +91,14 @@ pub struct SchemaIntrospector {
 /// Cache keys have the form "{database}\t{table}" where database may be empty.
 /// Tab is used as separator because it is not a valid MySQL identifier character.
 /// When `database` is Some, both database and table must match (case-insensitive).
-/// When `database` is None, only the table must match (case-insensitive).
+/// When `database` is None, the key's database portion must be empty and the table must match (case-insensitive).
 fn key_matches_table_and_db(key: &str, table: &str, database: Option<&str>) -> bool {
     match key.split_once('\t') {
         Some((key_db, key_table)) => {
             let table_matches = key_table.eq_ignore_ascii_case(table);
             match database {
                 Some(db) => table_matches && key_db.eq_ignore_ascii_case(db),
-                None => table_matches,
+                None => table_matches && key_db.is_empty(),
             }
         }
         None => {
