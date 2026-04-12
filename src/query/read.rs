@@ -236,6 +236,13 @@ pub async fn execute_read_query(
                 while preview_end > 0 && !sql.is_char_boundary(preview_end) {
                     preview_end -= 1;
                 }
+                // Defensive: if we over-truncated to 0 because the truncation
+                // point landed inside a multi-byte UTF-8 character, advance to
+                // include at least the first character so we don't return an
+                // empty preview for a non-empty string.
+                if preview_end == 0 && !sql.is_empty() {
+                    preview_end = sql.chars().next().map_or(0, |c| c.len_utf8());
+                }
                 let sql_preview = sql.get(..preview_end).unwrap_or("");
                 tracing::warn!(sql = %sql_preview, error = %msg, "EXPLAIN failed; continuing without plan");
                 (None, Some(msg))

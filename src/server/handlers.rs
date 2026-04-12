@@ -524,6 +524,12 @@ fn log_query_result(
     while sql_trunc_end > 0 && !sql.is_char_boundary(sql_trunc_end) {
         sql_trunc_end -= 1;
     }
+    // Defensive: if we over-truncated to 0 because the truncation point landed
+    // inside a multi-byte UTF-8 character, advance to include at least the
+    // first character so we don't return an empty preview for a non-empty string.
+    if sql_trunc_end == 0 && !sql.is_empty() {
+        sql_trunc_end = sql.chars().next().map_or(0, |c| c.len_utf8());
+    }
     let sql_truncated = &sql[..sql_trunc_end];
     let plan_tier = result
         .plan
