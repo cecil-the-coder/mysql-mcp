@@ -139,12 +139,22 @@ pub fn check_all_permissions(
     config: &Config,
     parsed: &crate::sql_parser::ParsedStatement,
 ) -> Result<()> {
-    if parsed.all_target_schemas.is_empty() {
+    // Filter out empty/whitespace-only schemas — they should be treated as
+    // unqualified (i.e., fall back to the connected database) rather than
+    // being looked up as literal "" or "   " schema names.
+    let schemas: Vec<&str> = parsed
+        .all_target_schemas
+        .iter()
+        .map(|s| s.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .collect();
+
+    if schemas.is_empty() {
         // No explicit schema — check with None (falls back to connected DB).
         return check_permission(config, &parsed.statement_type, None);
     }
-    for schema in &parsed.all_target_schemas {
-        check_permission(config, &parsed.statement_type, Some(schema.as_str()))?;
+    for schema in &schemas {
+        check_permission(config, &parsed.statement_type, Some(schema))?;
     }
     Ok(())
 }
@@ -518,6 +528,45 @@ mod tests {
         config.security.allow_delete = true;
         let parsed = make_parsed(StatementType::Delete, None, vec![]);
         assert!(check_all_permissions(&config, &parsed).is_ok());
+    }
+
+    #[test]
+    fn test_multi_schema_whitespace_only_treated_as_empty() {
+        // Whitespace-only schema names should be filtered out and treated as
+        // unqualified (falls back to connected DB), not looked up literally.
+        let mut config = Config::default();
+        config.connection.database = Some("testdb".to_string());
+        config.security.allow_delete = true;
+        let parsed = make_parsed(
+            StatementType::Delete,
+            None,
+            vec!["   ".to_string(), "\t".to_string(), "".to_string()],
+        );
+        // All schemas are whitespace-only → treated as empty → falls back to connected DB
+        assert!(check_all_permissions(&config, &parsed).is_ok());
+    }
+
+    #[test]
+    fn test_multi_schema_mixed_whitespace_and_valid() {
+        // A mix of whitespace-only and valid schemas should only check the valid ones.
+        use crate::config::SchemaPermissions;
+        let mut config = Config::default();
+        config.security.allow_delete = true;
+        // Deny delete on db1
+        config.security.schema_permissions.insert(
+            "db1".to_string(),
+            SchemaPermissions {
+                allow_delete: Some(false),
+                ..Default::default()
+            },
+        );
+        let parsed = make_parsed(
+            StatementType::Delete,
+            None,
+            vec!["   ".to_string(), "db1".to_string()],
+        );
+        // Whitespace is filtered out, but db1 still denies delete
+        assert!(check_all_permissions(&config, &parsed).is_err());
     }
 
     #[test]
