@@ -163,6 +163,16 @@ pub async fn execute_read_query(
     };
     let mut json_rows: Vec<Map<String, Value>> = Vec::with_capacity(initial_capacity);
     for row in &rows {
+        // Skip expensive serialization if we've already exceeded the memory limit
+        // (can happen when the previous row exactly hit the limit)
+        if max_memory_bytes > 0 && total_memory_bytes >= max_memory_bytes {
+            warnings.push(format!(
+                "Result truncated at {} rows due to memory limit ({} MB). Add a more specific WHERE clause or reduce selected columns.",
+                json_rows.len(), max_result_memory_mb
+            ));
+            break;
+        }
+
         let json_row = row_to_json(row, &mut warnings);
 
         // Estimate memory usage of this row (rough approximation)

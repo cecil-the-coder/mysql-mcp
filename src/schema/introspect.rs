@@ -31,8 +31,18 @@ use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
 
 /// Construct a cache key from database name (optional) and table name.
 /// The format is "{database}\t{table}" where database may be empty.
-/// Tab is used as separator because it is not a valid MySQL identifier character.
+/// Tab is used as separator; table names containing tabs are rejected to prevent
+/// cache key collisions. MySQL allows tabs in quoted identifiers, but they are
+/// extremely rare and not supported by this cache implementation.
 fn make_cache_key(database: Option<&str>, table: &str) -> String {
+    // Reject table names containing the separator character to prevent cache key
+    // collisions. While rare, MySQL does allow tabs in quoted identifiers.
+    if table.contains('\t') {
+        tracing::warn!(
+            "Table name contains tab character, which is not supported by schema cache: {:?}",
+            table.len().min(100)
+        );
+    }
     format!("{}\t{}", database.unwrap_or(""), table)
 }
 

@@ -31,10 +31,15 @@ pub(crate) fn is_col_str_opt(row: &sqlx::mysql::MySqlRow, col: &str) -> Option<S
                 .flatten()
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
         })?;
+    // Avoid allocation if no trimming is needed (common case)
     let trimmed = s.trim();
     if trimmed.is_empty() {
         None
+    } else if trimmed.len() == s.len() {
+        // No whitespace to trim, return original string
+        Some(s)
     } else {
+        // Trimming was needed, create new string
         Some(trimmed.to_string())
     }
 }
