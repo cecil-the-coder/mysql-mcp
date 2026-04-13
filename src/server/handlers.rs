@@ -170,7 +170,7 @@ impl SessionStore {
                         tracing::debug!("Failed to get read_only as integer: {}", e);
                         // Fallback: try as string for edge cases
                         row.try_get::<String, _>("read_only")
-                            .map(|s| s.to_uppercase() == "ON" || s == "1")
+                            .map(|s| s.eq_ignore_ascii_case("ON") || s == "1")
                             .unwrap_or(false)
                     }
                 };
