@@ -57,8 +57,21 @@ pub struct IndexDef {
 /// enum, set, or bit(N) with N≤4). An index on such a column alone often has
 /// poor selectivity and the optimizer may choose a full table scan instead.
 pub fn is_low_cardinality_type(data_type: &str) -> bool {
-    // Use case-insensitive comparisons to avoid allocating a lowercase copy
+    // Use case-insensitive comparisons to avoid allocating a lowercase copy.
+    // Also check that slicing doesn't split a multi-byte character boundary,
+    // though MySQL column types are typically ASCII.
     let dt = data_type;
+    // Helper: safely get prefix of up to n chars, handling multi-byte UTF-8 boundaries
+    fn safe_prefix(s: &str, n: usize) -> &str {
+        let end = s.len().min(n);
+        let mut prefix_end = end;
+        // Walk back to find a valid UTF-8 char boundary
+        while prefix_end > 0 && !s.is_char_boundary(prefix_end) {
+            prefix_end -= 1;
+        }
+        &s[..prefix_end]
+    }
+
     // TINYINT(1) is used as BOOLEAN in MySQL; BOOL/BOOLEAN are aliases.
     // ENUM and SET have a fixed, typically small value domain.
     // BIT(N) with N≤4 has at most 16 possible values (2^N) — too few for good
@@ -68,12 +81,18 @@ pub fn is_low_cardinality_type(data_type: &str) -> bool {
     // and `tinyint(1) unsigned` are all recognised.
     dt.eq_ignore_ascii_case("bool")
         || dt.eq_ignore_ascii_case("boolean")
-        || dt.len() >= 4 && dt[..4].eq_ignore_ascii_case("enum")
-        || dt.len() >= 3 && dt[..3].eq_ignore_ascii_case("set")
-        || dt.len() >= 10 && dt[..10].eq_ignore_ascii_case("tinyint(1)")
+        || dt.len() >= 4 && safe_prefix(dt, 4).eq_ignore_ascii_case("enum")
+        || dt.len() >= 3 && safe_prefix(dt, 3).eq_ignore_ascii_case("set")
+        || dt.len() >= 10 && safe_prefix(dt, 10).eq_ignore_ascii_case("tinyint(1)")
         || {
-            if dt.len() >= 4 && dt[..4].eq_ignore_ascii_case("bit(") {
-                let n_str: String = dt[4..].chars().take_while(|c| c.is_ascii_digit()).collect();
+            if dt.len() >= 4 && safe_prefix(dt, 4).eq_ignore_ascii_case("bit(") {
+                // Extract digits after "bit(" prefix safely
+                let prefix_len = safe_prefix(dt, 4).len();
+                let after_prefix = &dt[prefix_len..];
+                let n_str: String = after_prefix
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
                 n_str.parse::<u32>().is_ok_and(|n| n <= 4)
             } else {
                 false
