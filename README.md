@@ -18,6 +18,22 @@ A MySQL MCP (Model Context Protocol) server written in Rust. It exposes a MySQL 
 - **SSL support**: encrypted connections with optional CA verification
 - **Unix socket support**: connect via socket path instead of host:port
 
+## MySQL Version Compatibility
+
+| Version | Support | Notes |
+|---------|---------|-------|
+| **MySQL 5.7** | ✅ Minimum supported | Basic functionality; EXPLAIN v1 parser |
+| **MySQL 8.0.x** | ✅ Fully supported | EXPLAIN v1 parser (8.0.0-8.0.15) or v2 parser (8.0.16+) |
+| **MySQL 8.1+** | ✅ Recommended | Full feature support including enhanced EXPLAIN FORMAT=JSON |
+| **MySQL 9.x** | ✅ Fully supported | Tested against 9.2 and 9.6.0-cloud; uses EXPLAIN v2 parser |
+| **MariaDB** | ⚠️ Not tested | May work but not officially supported |
+
+**Recommended version**: MySQL 8.0.16 or newer for optimal EXPLAIN plan analysis and full feature support.
+
+The server auto-detects the MySQL version and uses the appropriate EXPLAIN parser:
+- **Schema v1** (`query_block` format): MySQL 5.7 and 8.0.0-8.0.15
+- **Schema v2** (`query_plan` format): MySQL 8.0.16+ and 9.x
+
 ## Architecture
 
 mysql-mcp follows a modular design with clear separation of concerns:
