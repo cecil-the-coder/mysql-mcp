@@ -1,0 +1,95 @@
+# Production SSL Configuration Example
+# =====================================
+# This configuration demonstrates a secure, read-only production setup with SSL/TLS
+# encryption. It is designed for production analytics and reporting use cases where
+# data integrity and security are paramount.
+#
+# SECURITY HIGHLIGHTS:
+# - SSL/TLS encryption enforced for all connections
+# - Read-only permissions prevent accidental data modification
+# - CA certificate validation prevents MITM attacks
+# - Connection limits prevent resource exhaustion
+#
+# Deployment checklist:
+#   [ ] SSL CA certificate obtained from your CA or DBA
+#   [ ] Certificate file placed in secure location (e.g., /etc/mysql-mcp/)
+#   [ ] Certificate file permissions set to 600 (chmod 600 ca.pem)
+#   [ ] Database user has SELECT-only grants
+#   [ ] max_rows limit tested with your largest expected queries
+
+[connection]
+# Production database host (use private IP or internal DNS in cloud environments)
+host = "db.production.internal"
+port = 3306
+
+# Dedicated read-only user with minimal privileges
+# Recommended GRANT: GRANT SELECT ON database.* TO 'analytics'@'%';
+user = "analytics"
+password = "${MYSQL_PASSWORD}"  # Use environment variable - never commit passwords
+
+# Target database for analytics
+database = "production_db"
+
+[pool]
+# Connection pool sized for production load (tune based on your query patterns)
+size = 20
+
+# Conservative timeouts suitable for production analytics queries
+query_timeout_ms = 60000      # 60 seconds for complex analytical queries
+connect_timeout_ms = 15000    # 15 seconds for network resilience
+
+# Schema caching improves performance for repeated queries
+# Trade-off: schema changes won't be visible for cache_ttl_secs duration
+cache_ttl_secs = 300
+
+# Result set limit - tune based on your application's memory constraints
+# and typical result set sizes. Prevents runaway queries from consuming
+# excessive memory.
+max_rows = 10000
+
+# Retry attempts for transient network errors in production
+# Value of 2 provides resilience without excessive delay
+retry_attempts = 2
+
+# Memory limit for result sets (256 MB default)
+# Prevents OOM errors from massive result sets
+max_result_memory_mb = 256
+
+[security]
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🔒 READ-ONLY PRODUCTION SECURITY CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# These settings enforce a strict read-only policy suitable for production
+# analytics and reporting. All data modification operations are disabled.
+
+# INSERT operations are DISABLED for read-only production access
+allow_insert = false
+
+# UPDATE operations are DISABLED for read-only production access
+allow_update = false
+
+# DELETE operations are DISABLED for read-only production access
+allow_delete = false
+
+# DDL operations are DISABLED - prevents any schema modifications
+allow_ddl = false
+
+# SSL is MANDATORY for production - unencrypted connections are rejected
+# This prevents credential and data exposure in transit
+ssl = true
+
+# CA certificate for SSL verification
+# This validates the server's certificate against a trusted CA, preventing
+# man-in-the-middle attacks. Obtain this from your database provider or CA.
+# Security: File must be readable by the mysql-mcp process, but not by others
+# (recommended permissions: 600 or 644, owned by the service user)
+ssl_ca = "/etc/mysql-mcp/ca.pem"
+
+# IMPORTANT: Never set ssl_accept_invalid_certs = true in production
+# Doing so disables all SSL security benefits and exposes you to MITM attacks.
+# ssl_accept_invalid_certs = false  # (default - do not change)
+
+# Runtime connections are DISABLED - only preset configuration is used
+# This prevents arbitrary database connections that could bypass security controls
+allow_runtime_connections = false

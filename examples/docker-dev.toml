@@ -1,0 +1,80 @@
+# Docker Development Configuration Example
+# =========================================
+# This configuration is optimized for local development using a Docker MySQL container.
+# It enables relaxed permissions suitable for development while keeping security
+# considerations documented.
+#
+# SECURITY NOTE: This configuration allows write operations and disables SSL.
+# Do NOT use this for production environments or databases with sensitive data.
+#
+# Quick start with Docker:
+#   docker run -d --name mysql-dev -e MYSQL_ROOT_PASSWORD=devpass -p 3306:3306 mysql:8
+#   mysql-mcp -c mysql-mcp.toml
+
+[connection]
+# Connect to the MySQL container running on localhost
+host = "localhost"
+port = 3306
+
+# Root user with full privileges for development convenience
+user = "root"
+password = "devpass"
+
+# Connect to a specific development database
+database = "dev_db"
+
+[pool]
+# Smaller pool for local development (default is 20)
+size = 10
+
+# Shorter timeouts for faster feedback during development
+query_timeout_ms = 15000
+connect_timeout_ms = 5000
+
+# Disable schema caching during active development (queries will be slower
+# but always reflect the latest schema changes). Set to 60+ for production.
+cache_ttl_secs = 0
+
+# Increase max rows for data exploration (reduce in production)
+max_rows = 5000
+
+# Performance hints: "auto" helps identify slow queries during development
+# Values: "none" (default), "auto" (slow query logging), "always" (always EXPLAIN)
+performance_hints = "auto"
+slow_query_threshold_ms = 100
+
+[security]
+# ═══════════════════════════════════════════════════════════════════════════════
+# ⚠️  DEVELOPMENT-ONLY PERMISSIONS - NOT FOR PRODUCTION
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# These settings allow all data modification operations for convenient development.
+# In production, these should ALL be set to false for read-only access, or
+# carefully reviewed for specific write use cases.
+
+# Allow INSERT operations (default: false)
+# Security: Enable in dev to insert test data; disable in production unless needed
+allow_insert = true
+
+# Allow UPDATE operations (default: false)
+# Security: Enable in dev to modify test data; disable in production unless needed
+allow_update = true
+
+# Allow DELETE operations (default: false)
+# Security: Enable in dev to clean up test data; disable in production unless needed
+allow_delete = true
+
+# Allow DDL operations - CREATE, ALTER, DROP, TRUNCATE (default: false)
+# Security: HIGH RISK - schema changes can destroy data; enable only for schema management
+allow_ddl = true
+
+# Require SSL for MySQL connections (default: false)
+# Security: In production, ALWAYS set to true with a valid SSL CA certificate.
+# For local Docker development, SSL is typically not configured.
+ssl = false
+
+# Allow runtime connections via mysql_connect tool (default: false)
+# Security: When true, LLM assistants can create new database connections at runtime
+# with arbitrary credentials. This enables multi-database workflows but increases
+# exposure if the MCP server is compromised. Enable only if you need multi-database support.
+allow_runtime_connections = false
