@@ -53,6 +53,12 @@ use std::sync::Arc;
 /// This tool executes SQL queries and supports an optional `session` parameter
 /// for routing queries to named connections, plus an `explain` flag for
 /// performance analysis.
+///
+/// ## Environment Variable Mapping
+///
+/// The default behavior can be configured via environment variables:
+/// - `MYSQL_PERFORMANCE_HINTS` - Sets the default for the `explain` parameter
+///   (values: "none", "auto", "always")
 pub(crate) fn mysql_query_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
     Arc::new(rmcp::model::object(json!({
         "type": "object",
@@ -116,6 +122,31 @@ pub(crate) fn mysql_server_info_schema() -> Arc<serde_json::Map<String, serde_js
 ///
 /// This tool creates a named session with MySQL connection parameters.
 /// Supports direct connections as well as SSH tunneling options.
+///
+/// ## Environment Variable Mapping
+///
+/// The following tool parameters correspond to environment variables that
+/// configure default connection behavior. When a parameter is omitted from
+/// the tool call, the server uses the value from the corresponding env var:
+///
+/// | Tool Parameter | Environment Variable | Description |
+/// |----------------|---------------------|-------------|
+/// | `host` | `MYSQL_HOST` | MySQL server hostname |
+/// | `port` | `MYSQL_PORT` | MySQL server port (default: 3306) |
+/// | `user` | `MYSQL_USER` | MySQL username |
+/// | `password` | `MYSQL_PASS` | MySQL password |
+/// | `database` | `MYSQL_DB` | Default database name |
+/// | `ssl` | `MYSQL_SSL` | Enable SSL/TLS (default: false) |
+/// | `ssl_ca` | `MYSQL_SSL_CA` | Path to CA certificate for SSL |
+/// | `ssh_host` | `MYSQL_SSH_HOST` | SSH bastion hostname |
+/// | `ssh_port` | `MYSQL_SSH_PORT` | SSH server port (default: 22) |
+/// | `ssh_user` | `MYSQL_SSH_USER` | SSH username |
+/// | `ssh_private_key` | `MYSQL_SSH_PRIVATE_KEY` | Path to SSH private key |
+/// | `ssh_known_hosts_check` | `MYSQL_SSH_KNOWN_HOSTS_CHECK` | Host key verification mode |
+/// | `ssh_known_hosts_file` | `MYSQL_SSH_KNOWN_HOSTS_FILE` | Path to known_hosts file |
+///
+/// Additionally, `MYSQL_ALLOW_RUNTIME_CONNECTIONS` controls whether the
+/// `mysql_connect` tool can be used at all (default: false).
 pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
     Arc::new(rmcp::model::object(json!({
         "type": "object",
