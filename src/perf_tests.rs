@@ -122,7 +122,8 @@ pub mod perf_impl {
                 .unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
-        let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0).expect("samples should not be empty");
+        let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0)
+            .expect("samples should not be empty");
         print(&format!("Sequential SELECT 1 (n={N})"), &stats);
 
         assert!(
@@ -181,7 +182,8 @@ pub mod perf_impl {
                 .unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
-        let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0).expect("samples should not be empty");
+        let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0)
+            .expect("samples should not be empty");
         print(&format!("Sequential 3-table JOIN (n={N})"), &stats);
 
         assert!(
@@ -254,7 +256,8 @@ pub mod perf_impl {
         while let Some(r) = set.join_next().await {
             all.extend(r.unwrap());
         }
-        let stats = compute(all, wall.elapsed().as_secs_f64() * 1000.0).expect("samples should not be empty");
+        let stats = compute(all, wall.elapsed().as_secs_f64() * 1000.0)
+            .expect("samples should not be empty");
         print(
             &format!(
                 "Concurrent SELECT 1 (concurrency={CONCURRENCY}, n={})",

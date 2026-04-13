@@ -95,9 +95,18 @@ mod write_tests {
         let insert_wall = insert_ms.iter().sum::<f64>();
         let update_wall = update_ms.iter().sum::<f64>();
         let delete_wall = delete_ms.iter().sum::<f64>();
-        print(&format!("INSERT (n={N})"), &compute(insert_ms, insert_wall).expect("samples should not be empty"));
-        print(&format!("UPDATE (n={N})"), &compute(update_ms, update_wall).expect("samples should not be empty"));
-        print(&format!("DELETE (n={N})"), &compute(delete_ms, delete_wall).expect("samples should not be empty"));
+        print(
+            &format!("INSERT (n={N})"),
+            &compute(insert_ms, insert_wall).expect("samples should not be empty"),
+        );
+        print(
+            &format!("UPDATE (n={N})"),
+            &compute(update_ms, update_wall).expect("samples should not be empty"),
+        );
+        print(
+            &format!("DELETE (n={N})"),
+            &compute(delete_ms, delete_wall).expect("samples should not be empty"),
+        );
     }
 
     /// Schema introspection: cold (TTL=0) vs warm (TTL=60s) cache.
@@ -235,7 +244,8 @@ mod write_tests {
         while let Some(r) = set.join_next().await {
             all.extend(r.unwrap());
         }
-        let stats = compute(all, wall.elapsed().as_secs_f64() * 1000.0).expect("samples should not be empty");
+        let stats = compute(all, wall.elapsed().as_secs_f64() * 1000.0)
+            .expect("samples should not be empty");
         print(
             &format!(
                 "Pool saturation (pool_size=3, concurrency={CONCURRENCY}, n={})",
