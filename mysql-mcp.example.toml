@@ -54,6 +54,14 @@ cache_ttl_secs = 60
 # Queries that take longer than this will have their query plan included in the response.
 # slow_query_threshold_ms = 500
 
+# Number of retry attempts for transient network errors (default: 2).
+# Set to 0 to disable retrying on transient errors like connection timeouts.
+# retry_attempts = 2
+
+# Maximum memory in MB for result sets (default: 256).
+# Prevents excessive memory usage when processing large result sets.
+# max_result_memory_mb = 256
+
 [security]
 # Allow INSERT operations (default: false)
 allow_insert = false
