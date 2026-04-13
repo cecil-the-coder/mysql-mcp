@@ -86,23 +86,6 @@ ssl = false
 # allow_delete = false
 # allow_ddl = false
 
-[monitoring]
-# Enable request logging (default: true)
-logging = true
-
-# Log level: error, warn, info, debug, trace (default: info)
-log_level = "info"
-
-# Enable Prometheus metrics (default: false)
-metrics_enabled = false
-
-# MySQL session timezone (optional)
-# Examples: "UTC", "+08:00", "America/New_York"
-# timezone = "UTC"
-
-# Return date/datetime values as strings instead of native types (default: false)
-date_strings = false
-
 # ─── SSH Tunnel ───────────────────────────────────────────────────────────────
 # Route the MySQL connection through an SSH tunnel (jump host / bastion).
 # Useful when the database is not directly reachable from the machine running
