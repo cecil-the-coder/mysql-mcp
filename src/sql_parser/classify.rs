@@ -1,3 +1,41 @@
+//! SQL statement classification from AST.
+//!
+//! This module performs analysis of SQL statements by traversing the sqlparser AST to extract
+//! metadata about query structure and characteristics. The classification identifies:
+//!
+//! - **Target schemas and tables**: Extracts schema/database names and table names from
+//!   various statement types (SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, etc.).
+//! - **WHERE clause presence**: Detects whether queries have filtering conditions, which
+//!   impacts both security (prevention of full table scans) and performance.
+//! - **LIMIT clause presence**: Identifies unbounded queries that could return excessive
+//!   amounts of data.
+//! - **Wildcard usage**: Flags `SELECT *` patterns that may indicate inefficient queries
+//!   or potential data exposure issues.
+//! - **Query complexity metrics**: Tracks JOIN counts, aggregate functions, GROUP BY clauses,
+//!   and LIKE patterns with leading wildcards.
+//!
+//! The analysis is performed in a single pass through the AST to compute all classification
+//! fields efficiently. The [`classify_statement`] function serves as the primary entry point,
+//! returning a [`ParsedStatement`] containing the extracted metadata.
+//!
+//! # Security and Performance Integration
+//!
+//! This classification feeds into several security and performance features:
+//!
+//! - **Permission checking**: Extracted schema/table names enable fine-grained access control
+//!   by identifying all resources a query touches. Multi-table UPDATE, DELETE, and DROP statements
+//!   are handled specially to collect all affected schemas.
+//! - **Query limiting**: Detection of missing WHERE/LIMIT clauses triggers warnings about
+//!   potentially dangerous queries that could impact database performance or expose sensitive data.
+//! - **Performance optimization**: Analysis of wildcards, leading LIKE patterns, and JOIN counts
+//!   generates targeted warnings to guide users toward more efficient query patterns.
+//! - **Statement type validation**: Certain statement types (e.g., CTE queries, locking reads,
+//!   transaction control) are identified and flagged as unsupported based on security policies.
+//!
+//! The recursive AST traversal in [`collect_where_info`] handles complex WHERE clause structures
+//! including nested expressions, function calls, and CASE statements, with a depth limit to
+//! prevent excessive CPU usage on deeply nested queries.
+
 use anyhow::Result;
 use sqlparser::ast::{
     Expr, FromTable, ObjectName, Query, Select, SelectItem, SetExpr, Statement, TableFactor, Use,
