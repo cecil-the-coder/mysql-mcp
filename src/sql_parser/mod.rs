@@ -15,12 +15,50 @@
 //! - [`parse_sql`] - Parses a SQL string and returns a [`ParsedStatement`]
 //! - [`parse_write_warnings`] - Generates safety warnings for write operations
 //!
-//! # Safety Checks
+//! # Security: Safety Checks
 //!
-//! The parser blocks certain dangerous constructs:
-//! - `SELECT INTO OUTFILE/DUMPFILE` (server-side file access)
-//! - `SET GLOBAL/PERSIST` (server-wide configuration changes)
-//! - Multi-statement SQL (injection prevention)
+//! The parser enforces strict security boundaries to prevent data exfiltration,
+//! privilege escalation, and injection attacks. These checks are security-critical
+//! and should be documented for security auditors.
+//!
+//! ## 1. SELECT INTO OUTFILE/DUMPFILE
+//!
+//! `SELECT ... INTO OUTFILE` and `SELECT ... INTO DUMPFILE` are blocked.
+//!
+//! **Why**: These MySQL extensions write query results to files on the server
+//! filesystem. This could allow attackers to:
+//! - Exfiltrate sensitive data to files they can download
+//! - Overwrite server configuration files
+//! - Write malicious files to web-accessible directories
+//!
+//! **Alternative**: Retrieve data with a standard `SELECT` and export client-side.
+//!
+//! ## 2. SET GLOBAL/PERSIST
+//!
+//! `SET GLOBAL`, `SET PERSIST`, `SET PERSIST_ONLY`, and `@@GLOBAL.*`/`@@PERSIST.*`
+//! variable assignments are blocked.
+//!
+//! **Why**: These affect server-wide configuration and could:
+//! - Disable security settings (e.g., `sql_safe_updates`, authentication plugins)
+//! - Expose sensitive data via configuration changes
+//! - Persist malicious settings across server restarts
+//! - Allow privilege escalation by relaxing security controls
+//!
+//! **Allowed**: Session-level `SET SESSION` and plain `SET` (session-scoped) are
+//! permitted as they only affect the current connection.
+//!
+//! ## 3. Multi-Statement SQL
+//!
+//! SQL strings containing multiple statements separated by semicolons are rejected.
+//!
+//! **Why**: This prevents SQL injection attacks where an attacker might append
+//! malicious statements to a legitimate query:
+//! - `SELECT * FROM users WHERE id = 1; DROP TABLE users; --`
+//! - Even with prepared statements, multi-statement injection can occur in some
+//!   MySQL client configurations
+//!
+//! **Alternative**: Send one statement per request. The connection stays open
+//! for subsequent queries.
 //!
 //! # Example
 //!
