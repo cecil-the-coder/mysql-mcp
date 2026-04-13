@@ -195,6 +195,7 @@ The `.env` file has lower precedence than a TOML config file. If the same settin
 ```bash
 MYSQL_HOST=localhost
 MYSQL_PORT=3306
+# MYSQL_SOCKET_PATH=/var/run/mysqld/mysqld.sock  # Overrides host/port when set
 MYSQL_USER=myuser
 MYSQL_PASS=mypassword
 MYSQL_DB=mydatabase
