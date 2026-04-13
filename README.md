@@ -148,6 +148,41 @@ allow_insert = false
 allow_update = false
 ```
 
+### SSH Tunnel Example
+
+For databases behind a bastion host, you can configure SSH tunneling directly in the TOML file:
+
+```toml
+[connection]
+host = "db.internal"
+port = 3306
+user = "dbuser"
+password = "secret"
+database = "mydatabase"
+
+[ssh]
+host = "bastion.example.com"
+user = "ubuntu"
+private_key = "/home/user/.ssh/id_rsa"
+known_hosts_check = "strict"
+
+[pool]
+size = 20
+max_rows = 1000
+
+[security]
+allow_insert = false
+allow_update = false
+```
+
+All SSH-related options are:
+- `ssh.host` — SSH bastion hostname (required)
+- `ssh.port` — SSH server port (default: 22)
+- `ssh.user` — SSH username (required when host is set)
+- `ssh.private_key` — Path to PEM private key file
+- `ssh.known_hosts_check` — Host key verification: `strict`, `accept-new`, or `insecure` (default: `strict`)
+- `ssh.known_hosts_file` — Override path to known_hosts file
+
 Configuration is loaded in this order (highest priority wins):
 1. Environment variables (highest)
 2. TOML config file (`mysql-mcp.toml` or `$MCP_CONFIG_FILE`)
