@@ -141,6 +141,8 @@ A `.env` file in the working directory is loaded automatically if present.
 
 ## Configuration Reference
 
+**Note:** Environment variables take precedence over TOML configuration file values. If a setting is defined in both places, the environment variable value wins.
+
 ### Connection
 
 | TOML key | Environment variable | Type | Default | Description |
