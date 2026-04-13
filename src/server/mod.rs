@@ -212,7 +212,9 @@ impl McpServer {
                             let _ = reaper_total_connections.fetch_update(
                                 Ordering::AcqRel,
                                 Ordering::Acquire,
-                                |current| Some(current.saturating_sub(sessions::NAMED_SESSION_POOL_SIZE)),
+                                |current| {
+                                    Some(current.saturating_sub(sessions::NAMED_SESSION_POOL_SIZE))
+                                },
                             );
                             reaped.push(session);
                         }
