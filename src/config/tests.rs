@@ -662,4 +662,42 @@ private_key = "/tmp/key.pem"
             "0o620 (group writable) permissions should be rejected"
         );
     }
+
+    // Test: excessive query_timeout_ms fails validation
+    #[test]
+    fn test_query_timeout_ms_excessive_fails_validation() {
+        let mut config = Config::default();
+        config.pool.query_timeout_ms = 86_400_001; // 24 hours + 1 ms
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("query_timeout_ms"),
+            "error should mention query_timeout_ms, got: {}",
+            err
+        );
+    }
+
+    // Test: excessive connect_timeout_ms fails validation
+    #[test]
+    fn test_connect_timeout_ms_excessive_fails_validation() {
+        let mut config = Config::default();
+        config.pool.connect_timeout_ms = 86_400_001; // 24 hours + 1 ms
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("connect_timeout_ms"),
+            "error should mention connect_timeout_ms, got: {}",
+            err
+        );
+    }
+
+    // Test: max timeout values (24 hours) are valid
+    #[test]
+    fn test_max_timeout_values_valid() {
+        let mut config = Config::default();
+        config.pool.query_timeout_ms = 86_400_000; // exactly 24 hours
+        config.pool.connect_timeout_ms = 86_400_000;
+        assert!(
+            config.validate().is_ok(),
+            "timeout of 24 hours should be valid"
+        );
+    }
 }

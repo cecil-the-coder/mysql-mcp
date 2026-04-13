@@ -264,6 +264,20 @@ impl Config {
                 "pool.query_timeout_ms is 0 — query timeouts are disabled; a runaway query can block the server indefinitely"
             );
         }
+        // Prevent potential Duration overflow with unreasonably large timeout values
+        const MAX_TIMEOUT_MS: u64 = 86_400_000; // 24 hours in milliseconds
+        if pool.query_timeout_ms > MAX_TIMEOUT_MS {
+            anyhow::bail!(
+                "pool.query_timeout_ms exceeds maximum of 24 hours (86,400,000 ms, got: {})",
+                pool.query_timeout_ms
+            );
+        }
+        if pool.connect_timeout_ms > MAX_TIMEOUT_MS {
+            anyhow::bail!(
+                "pool.connect_timeout_ms exceeds maximum of 24 hours (86,400,000 ms, got: {})",
+                pool.connect_timeout_ms
+            );
+        }
         if pool.slow_query_threshold_ms > 3_600_000 {
             warn!(
                 "pool.slow_query_threshold_ms is very high ({}ms > 3,600,000ms / 1 hour); slow query logging may not trigger for most queries",

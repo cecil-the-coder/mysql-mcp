@@ -467,6 +467,34 @@ fn test_is_low_cardinality_type() {
     );
 }
 
+// Test that is_low_cardinality_type doesn't panic on multi-byte UTF-8 strings
+#[test]
+fn test_is_low_cardinality_type_multibyte_utf8() {
+    // These strings start with multi-byte characters that would cause
+    // byte slicing to panic if not handled properly.
+    assert!(
+        !is_low_cardinality_type("日本語"),
+        "multi-byte UTF-8 should not panic and returns false"
+    );
+    assert!(
+        !is_low_cardinality_type("🔥emoji"),
+        "4-byte UTF-8 should not panic and returns false"
+    );
+    assert!(
+        !is_low_cardinality_type("émum"),
+        "2-byte UTF-8 should not panic and returns false"
+    );
+    assert!(
+        !is_low_cardinality_type("ÀTEST"),
+        "2-byte UTF-8 should not panic and returns false"
+    );
+    // Mix of multi-byte chars with valid prefixes
+    assert!(
+        !is_low_cardinality_type("énum"),
+        "starts like enum but with é, should return false"
+    );
+}
+
 // mysql-mcp-ttl: non-zero TTL expires and triggers re-fetch
 #[tokio::test]
 async fn test_schema_cache_ttl_expiry_triggers_refetch() {
