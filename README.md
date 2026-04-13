@@ -131,10 +131,10 @@ allow_update = false
 ```
 
 Configuration is loaded in this order (highest priority wins):
-1. Environment variables
+1. Environment variables (highest)
 2. TOML config file (`mysql-mcp.toml` or `$MCP_CONFIG_FILE`)
 3. `.env` file
-4. Built-in defaults
+4. Built-in defaults (lowest)
 
 ---
 
