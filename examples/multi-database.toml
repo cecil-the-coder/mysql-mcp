@@ -1,0 +1,110 @@
+# Multi-Database Configuration Example
+# =====================================
+# This configuration demonstrates how to set up mysql-mcp with multiple databases
+# and per-schema permission overrides. This is useful when you need different
+# access levels for different databases (e.g., read-only for production data,
+# read-write for staging or analytics databases).
+#
+# USE CASES:
+# - Analytics team needs SELECT on all databases but UPDATE only on staging
+# - Development environment with separate databases requiring different permissions
+# - Mixed environment with both production (read-only) and temporary (read-write) databases
+#
+# SECURITY NOTES:
+# - Schema permissions override global settings - review carefully
+# - When allow_runtime_connections is true, users can connect to any database
+# - Consider separate mysql-mcp instances for strict isolation requirements
+
+[connection]
+# Default connection (can be overridden at runtime for multi-database access)
+host = "db.company.internal"
+port = 3306
+user = "mcp_service"
+password = "${MYSQL_PASSWORD}"
+
+# Leave database empty to enable multi-database mode
+# The LLM assistant will specify the database in queries or via mysql_connect
+database = ""  # Multi-database mode
+
+[pool]
+# Larger pool for multi-database workloads
+size = 30
+
+query_timeout_ms = 30000
+connect_timeout_ms = 10000
+
+# Schema caching is especially important for multi-database setups
+# as each database schema is introspected separately
+cache_ttl_secs = 120
+
+max_rows = 5000
+retry_attempts = 2
+max_result_memory_mb = 256
+
+[security]
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🌐 MULTI-DATABASE SECURITY CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Default permissions apply to all databases UNLESS overridden in schema_permissions.
+# This creates a "default-deny" posture with explicit exceptions.
+
+# Global defaults - restrictive baseline for all databases
+allow_insert = false
+allow_update = false
+allow_delete = false
+allow_ddl = false
+ssl = true
+
+# Enable runtime connections for multi-database workflows
+# Security implications:
+# - LLM assistants can connect to any database the credentials have access to
+# - Connection credentials are provided at runtime and may be logged
+# - Use allow_runtime_connections = false if all databases are known at configuration time
+allow_runtime_connections = true
+
+# Session limits prevent resource exhaustion from multi-database usage
+# Each named session creates a new connection pool (5 connections each)
+max_sessions = 20              # Maximum concurrent named sessions
+max_total_connections = 100    # Total connection limit across all sessions
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📋 PER-SCHEMA PERMISSION OVERRIDES
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# These sections override global security settings for specific databases.
+# Schema names must match exactly (case-sensitive on some MySQL configurations).
+
+# Production analytics database - strictly read-only
+# Even if global permissions were changed, this database remains protected
+[security.schema_permissions.analytics_prod]
+allow_insert = false
+allow_update = false
+allow_delete = false
+allow_ddl = false
+
+# Staging database - allows data modification for testing
+# ⚠️ Security: Ensure this database does NOT contain production data
+# and has proper access controls at the MySQL user level
+[security.schema_permissions.staging]
+allow_insert = true
+allow_update = true
+allow_delete = true   # Allow cleanup of test data
+allow_ddl = false     # Still prevent schema changes
+
+# ETL/Import database - allows bulk inserts but prevents updates/deletes
+# Useful for data import workflows where new data is added but existing
+# data should not be modified
+[security.schema_permissions.etl_import]
+allow_insert = true
+allow_update = false
+allow_delete = false
+allow_ddl = false
+
+# Temporary/workspace database - full permissions but short-lived
+# ⚠️ Security: Ensure regular cleanup and monitoring of this database
+[security.schema_permissions.workspace]
+allow_insert = true
+allow_update = true
+allow_delete = true
+allow_ddl = true      # Allow CREATE TEMPORARY TABLE, etc.
