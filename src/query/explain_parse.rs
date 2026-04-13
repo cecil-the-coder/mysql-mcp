@@ -1,3 +1,83 @@
+//! EXPLAIN JSON Parsing for MySQL Query Plans
+//!
+//! This module parses MySQL's `EXPLAIN FORMAT=JSON` output to extract query
+//! performance characteristics and classify queries into performance tiers (Fast,
+//! Slow, VerySlow).
+//!
+//! # Parsing Strategy
+//!
+//! MySQL produces JSON output in two different schema versions:
+//!
+//! - **Schema v2** (MySQL 8.0.16+): Uses a `query_plan` object with a recursive
+//!   tree structure. Each node has an `access_type` (e.g., "table", "index",
+//!   "filter", "join", "sort") and an optional `inputs` array containing child
+//!   nodes. Nodes also include `estimated_rows` for cost estimation.
+//!
+//! - **Schema v1** (MySQL 5.7 / 8.0.x): Uses a `query_block` object with nested
+//!   `table` entries and `nested_loop` arrays for joins. Table nodes contain
+//!   `access_type`, `key`, `rows_examined_per_scan`, and flags like
+//!   `using_filesort` and `using_temporary`.
+//!
+//! The [`parse`] function auto-detects the schema version by checking for the
+//! presence of `query_plan` (v2) or `query_block` (v1) keys.
+//!
+//! # Recursive Tree Walking
+//!
+//! Both schema versions use depth-first recursive traversal:
+//!
+//! - **v2**: [`walk_plan_node`] processes each node based on `access_type`, then
+//!   recursively visits all nodes in the `inputs` array.
+//!
+//! - **v1**: [`walk_v1_block`] handles `table` nodes, `nested_loop` joins,
+//!   `ordering_operation` (filesort), `grouping_operation` (temporary tables),
+//!   and `union_result` structures.
+//!
+//! A shared [`PlanStats`] struct accumulates metrics across the entire tree:
+//! - Full table scan detection
+//! - Index name (first encountered)
+//! - Total estimated rows (summed from leaf nodes)
+//! - Sort operations (`has_sort`)
+//! - Temporary table usage (`has_temporary`)
+//!
+//! # MAX_PLAN_DEPTH Protection
+//!
+//! Deeply nested query plans (e.g., from complex subqueries or pathological input)
+//! could cause stack overflow during recursion. The [`MAX_PLAN_DEPTH`] constant
+//! (default: 100) limits recursion depth. When exceeded, a warning is logged
+//! and the walk terminates gracefully, returning partial statistics gathered so
+//! far. This ensures the parser remains robust against malicious or malformed
+//! EXPLAIN output.
+//!
+//! # PlanStats Accumulation
+//!
+//! The [`PlanStats`] struct collects data during tree traversal:
+//!
+//! - **Full table scans**: Detected when `access_type` is "table" without an
+//!   `index_name`, or "ALL" in v1. Set `has_full_table_scan` to true.
+//!
+//! - **Index usage**: Records the first index name encountered (from `index` nodes
+//!   or `key` fields in v1).
+//!
+//! - **Row estimation**: Sums `estimated_rows` or `rows_examined_per_scan` from
+//!   leaf scan nodes. Parent nodes like "filter" or "sort" don't contribute rows
+//!   directly—their cost flows through children. Special handling avoids
+//!   double-counting materialized subqueries (v1).
+//!
+//! - **Extra flags**: "Using filesort" and "Using temporary" are detected from
+//!   node types (v2 "sort", "aggregate", "hash") or boolean flags (v1).
+//!
+//! The [`make_result`] function converts accumulated [`PlanStats`] into an
+//! [`ExplainResult`] by:
+//! 1. Converting the f64 row total to u64 (with NaN/Infinity guards)
+//! 2. Determining the performance tier based on row thresholds:
+//!    - `VerySlow`: > 10,000 rows
+//!    - `Slow`: > 1,000 rows
+//!    - `Fast`: ≤ 1,000 rows
+//! 3. Populating extra_flags with detected operations
+//!
+//! Note that the tier is determined by estimated row count alone, not the
+//! `full_table_scan` flag. A full scan of a small table may still be "Fast".
+
 use anyhow::Result;
 use serde_json::Value;
 
