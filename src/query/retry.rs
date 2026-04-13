@@ -38,11 +38,30 @@ const TRANSIENT_ERROR_PATTERNS: &[&str] = &[
 ];
 
 /// Check if an error message indicates a transient network failure.
+/// Performs case-insensitive substring matching without allocating.
 fn is_transient_error(error: &anyhow::Error) -> bool {
-    let error_string = error.to_string().to_lowercase();
+    let error_msg = error.to_string();
     TRANSIENT_ERROR_PATTERNS
         .iter()
-        .any(|pattern| error_string.contains(pattern))
+        .any(|pattern| contains_ignore_ascii_case(&error_msg, pattern))
+}
+
+/// Case-insensitive substring search without allocating.
+/// Checks if `haystack` contains `needle` (case-insensitive for ASCII characters).
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if haystack.len() < needle.len() {
+        return false;
+    }
+    let needle_bytes = needle.as_bytes();
+    haystack.as_bytes().windows(needle.len()).any(|window| {
+        window
+            .iter()
+            .zip(needle_bytes.iter())
+            .all(|(h, n)| h.eq_ignore_ascii_case(n))
+    })
 }
 
 /// Execute an async operation with retry logic for transient network failures.
