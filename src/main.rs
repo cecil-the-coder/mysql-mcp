@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::sync::Arc;
 use tracing::info;
+use clap::Parser;
 
 mod config;
 pub mod db;
@@ -25,8 +26,35 @@ pub mod sql_parser;
 pub mod test_helpers;
 pub mod tunnel;
 
+/// CLI arguments for the mysql-mcp server.
+#[derive(Parser, Debug)]
+#[command(name = "mysql-mcp")]
+#[command(about = "MySQL MCP server - expose MySQL databases via the Model Context Protocol")]
+#[command(version)]
+struct CliArgs {
+    /// Path to the TOML configuration file
+    #[arg(short, long, value_name = "PATH")]
+    config: Option<std::path::PathBuf>,
+
+    /// Print the effective configuration and exit
+    #[arg(long)]
+    print_config: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse CLI arguments before initializing tracing to avoid
+    // interfering with JSON-RPC transport on stdout
+    let args = CliArgs::parse();
+
+    // Handle --print-config early (before logging setup)
+    if args.print_config {
+        let config = load_and_merge_config(args.config.as_deref())?;
+        // Print config to stdout as formatted TOML
+        println!("{}", toml::to_string_pretty(&config)?);
+        return Ok(());
+    }
+
     // Initialize tracing — MUST write to stderr, not stdout.
     // The MCP server uses stdout as the JSON-RPC transport; any log line on stdout
     // would corrupt the protocol stream and appear as malformed input to the client.
@@ -36,7 +64,7 @@ async fn main() -> Result<()> {
     info!("mysql-mcp starting");
 
     // Load configuration
-    let raw_config = config::load_config()?;
+    let raw_config = load_and_merge_config(args.config.as_deref())?;
     raw_config.validate()?;
     let config = Arc::new(raw_config);
     info!("Configuration loaded");
@@ -152,4 +180,36 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Load configuration from all sources: dotenv -> TOML file -> env var overrides.
+/// The optional `cli_config_path` is used when --config is passed on the command line,
+/// taking precedence over the MCP_CONFIG_FILE environment variable.
+fn load_and_merge_config(cli_config_path: Option<&std::path::Path>) -> anyhow::Result<config::Config> {
+    // Load .env file if present (must happen before any env var reads)
+    if std::path::Path::new(".env").exists() {
+        if let Err(e) = dotenv::dotenv() {
+            eprintln!("Warning: failed to parse .env file: {}", e);
+        }
+    }
+
+    // Determine which TOML config file to use (CLI arg > env var > default)
+    let toml_path = cli_config_path
+        .map(|p| p.to_path_buf())
+        .or_else(|| {
+            std::env::var("MCP_CONFIG_FILE")
+                .ok()
+                .map(std::path::PathBuf::from)
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("mysql-mcp.toml"));
+
+    let base = if toml_path.exists() {
+        let content = std::fs::read_to_string(&toml_path)?;
+        toml::from_str(&content)?
+    } else {
+        config::Config::default()
+    };
+
+    // Apply environment variable overrides
+    Ok(config::env_config::load_env_config().apply_to(base))
 }

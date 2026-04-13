@@ -148,9 +148,37 @@ allow_insert = false
 allow_update = false
 ```
 
+### Command-line options
+
+The binary supports the following CLI arguments:
+
+| Option | Description |
+|--------|-------------|
+| `-h`, `--help` | Show help and usage information |
+| `-V`, `--version` | Show version information |
+| `-c <PATH>`, `--config <PATH>` | Path to a TOML configuration file (overrides `MCP_CONFIG_FILE` env var) |
+| `--print-config` | Load and merge all configuration sources, print the effective configuration as TOML, and exit |
+
+**Examples:**
+
+```bash
+# Show help
+./mysql-mcp --help
+
+# Show version
+./mysql-mcp --version
+
+# Use a specific config file
+./mysql-mcp --config /path/to/custom-config.toml
+
+# Print effective configuration (useful for debugging)
+./mysql-mcp --print-config
+./mysql-mcp --config /path/to/custom-config.toml --print-config
+```
+
 Configuration is loaded in this order (highest priority wins):
 1. Environment variables
-2. TOML config file (`mysql-mcp.toml` or `$MCP_CONFIG_FILE`)
+2. CLI `--config` option (or `MCP_CONFIG_FILE` env var)
 3. `.env` file
 4. Built-in defaults
 
@@ -187,9 +215,10 @@ MYSQL_ALLOW_DDL=false
 
 **Note:** Configuration is loaded in this order (highest priority wins):
 1. Environment variables (highest)
-2. TOML config file (`mysql-mcp.toml` or `$MCP_CONFIG_FILE`)
-3. `.env` file
-4. Built-in defaults (lowest)
+2. CLI `--config` option
+3. `MCP_CONFIG_FILE` environment variable
+4. `.env` file
+5. Built-in defaults (lowest)
 
 If a setting is defined in multiple places, the higher priority source wins.
 
