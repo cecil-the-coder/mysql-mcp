@@ -68,8 +68,8 @@ pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::
             "user": { "type": "string", "description": "MySQL username" },
             "password": { "type": "string", "description": "MySQL password (optional; use empty string for passwordless login)." },
             "database": { "type": "string", "description": "Default database for this session (optional; passed via connection string)." },
-            "ssl": { "type": "boolean", "description": "Enable SSL/TLS (default: false). When true and ssl_ca is omitted, uses VerifyIdentity mode (full cert+hostname check)." },
-            "ssl_ca": { "type": "string", "description": "Path to PEM CA certificate file for SSL verification. When set, uses VerifyCa mode (validates cert chain without hostname check)." },
+            "ssl": { "type": "boolean", "description": "Enable SSL/TLS (default: false). When enabled: ssl=true alone uses VerifyIdentity mode (full certificate and hostname verification against system trust store); ssl=true + ssl_ca uses VerifyCa mode (validates certificate chain against the provided CA file without hostname verification)." },
+            "ssl_ca": { "type": "string", "description": "Path to PEM CA certificate file for SSL verification. When set alongside ssl=true, uses VerifyCa mode (validates certificate chain against this CA without hostname verification). When omitted with ssl=true, uses system trust store with full hostname verification (VerifyIdentity mode)." },
             "ssh_host": {
                 "type": "string",
                 "description": "SSH bastion hostname. When provided, the connection is made through an SSH tunnel via this host."
