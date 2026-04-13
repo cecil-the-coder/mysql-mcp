@@ -1,3 +1,36 @@
+//! MCP server implementation for the MySQL MCP bridge.
+//!
+//! This module implements the Model Context Protocol (MCP) server that exposes
+//! MySQL databases to LLM clients. It provides MCP tool handlers, session management,
+//! and security features like host validation to ensure safe database access.
+//!
+//! # Architecture
+//!
+//! The module is organized into submodules:
+//!
+//! - `handlers` — Individual MCP tool implementations (query, schema info, etc.)
+//! - `sessions` — Named session management and connection pooling
+//! - `tool_schemas` — JSON schema definitions for MCP tool inputs
+//! - `error` — Error handling utilities for MCP responses
+//!
+//! # Key Components
+//!
+//! - [`McpServer`] — The main server struct implementing the MCP protocol
+//! - [`SessionStore`] — Manages named database sessions with automatic cleanup
+//! - [`validate_host_with_dns`] — Async host validation with DNS resolution
+//! - [`is_blocked_ip`] — IP address filtering for security
+//!
+//! # Security Features
+//!
+//! The server includes several security mechanisms:
+//!
+//! - **Host validation**: Blocks connections to loopback, link-local, multicast,
+//!   and broadcast addresses (both IPv4 and IPv6, including IPv4-mapped IPv6)
+//! - **DNS resolution**: Validates hostnames by resolving them and checking all
+//!   returned IPs against the blocked list
+//! - **Session limits**: Configurable maximum sessions and total connections
+//! - **Idle cleanup**: Automatically reaps sessions idle for >10 minutes
+
 use anyhow::Result;
 use rmcp::{
     model::{
