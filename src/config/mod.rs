@@ -238,9 +238,7 @@ impl Config {
         if pool.size == 0 || pool.size > 1000 {
             anyhow::bail!("pool.size must be between 1 and 1000 (got: {})", pool.size);
         }
-        if pool.max_rows == 0 {
-            anyhow::bail!("pool.max_rows must be >= 1");
-        }
+        // max_rows == 0 means unlimited (no row limit), which is a valid configuration
         if pool.max_rows > 1_000_000 {
             anyhow::bail!(
                 "pool.max_rows must be <= 1,000,000 (got: {})",

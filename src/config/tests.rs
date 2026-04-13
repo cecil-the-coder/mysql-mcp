@@ -171,14 +171,40 @@ host = "myhost"
         assert_eq!(config.security.max_sessions, 50);
     }
 
-    // Test: max_rows=0 fails validation and error mentions max_rows
+    // Test: max_rows=0 passes validation (unlimited mode)
     #[test]
-    fn test_max_rows_zero_fails_validation() {
+    fn test_max_rows_zero_passes_validation() {
         let mut config = Config::default();
         config.pool.max_rows = 0;
         assert!(
+            config.validate().is_ok(),
+            "max_rows=0 should pass validation (unlimited mode)"
+        );
+    }
+
+    // Test: max_rows=0 passes validation (unlimited mode)
+    #[test]
+    fn test_max_rows_valid_values() {
+        // Test valid values: 0 (unlimited), 1 (minimum with limit), 1_000_000 (max allowed)
+        for value in [0, 1, 1000, 1_000_000] {
+            let mut config = Config::default();
+            config.pool.max_rows = value;
+            assert!(
+                config.validate().is_ok(),
+                "max_rows={} should pass validation",
+                value
+            );
+        }
+    }
+
+    // Test: max_rows > 1_000_000 fails validation
+    #[test]
+    fn test_max_rows_too_large_fails_validation() {
+        let mut config = Config::default();
+        config.pool.max_rows = 1_000_001;
+        assert!(
             config.validate().is_err(),
-            "max_rows=0 should fail validation"
+            "max_rows=1_000_001 should fail validation"
         );
         let err = config.validate().unwrap_err();
         assert!(

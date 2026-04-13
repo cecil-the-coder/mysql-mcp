@@ -181,6 +181,11 @@ impl SchemaIntrospector {
         table: &str,
         database: Option<&str>,
     ) -> Result<Vec<String>> {
+        // Validate table name is not empty before querying database
+        if table.trim().is_empty() {
+            anyhow::bail!("Table name cannot be empty");
+        }
+
         let cache_key = make_cache_key(database, table);
         let pool = Arc::clone(&self.inner.pool);
         let owned_table = table.to_owned();
@@ -228,6 +233,11 @@ impl SchemaIntrospector {
         table_name: &str,
         database: Option<&str>,
     ) -> Result<Vec<ColumnInfo>> {
+        // Validate table name is not empty before querying database
+        if table_name.trim().is_empty() {
+            anyhow::bail!("Table name cannot be empty");
+        }
+
         let cache_key = make_cache_key(database, table_name);
         let pool = Arc::clone(&self.inner.pool);
         let owned_table = table_name.to_owned();
