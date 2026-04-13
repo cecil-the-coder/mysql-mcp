@@ -392,8 +392,9 @@ Create a named session to a different MySQL server or database. Requires `MYSQL_
 | `port` | integer | no | MySQL port (default: 3306) |
 | `password` | string | no | MySQL password |
 | `database` | string | no | Default database for the session |
-| `ssl` | boolean | no | Enable SSL/TLS |
-| `ssl_ca` | string | no | Path to PEM CA certificate file |
+| `ssl` | boolean | no | Enable SSL/TLS (default: false). When true without `ssl_ca`, uses VerifyIdentity mode (validates server certificate and hostname). |
+| `ssl_ca` | string | no | Path to PEM CA certificate file. When set (with `ssl=true`), uses VerifyCa mode (validates cert chain without hostname check). Requires `ssl=true`. |
+| `ssl_accept_invalid_certs` | boolean | no | Skip certificate validation (not for production). When true with `ssl=true`, uses Required mode (encrypted but unverified). |
 | `ssh_host` | string | no | SSH bastion hostname (enables SSH tunneling) |
 | `ssh_port` | integer | no | SSH port (default: 22) |
 | `ssh_user` | string | no | SSH username (required when `ssh_host` is set) |
