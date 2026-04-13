@@ -48,6 +48,10 @@ impl WriteResult {
 ///
 /// Retries on transient network errors (connection reset, broken pipe, timeout) up to
 /// `retry_attempts` times with exponential backoff.
+///
+/// # Security
+/// This function defensively checks for statement terminators as a defense-in-depth
+/// measure, even though callers should have already validated the SQL.
 pub async fn execute_write_query(
     pool: &MySqlPool,
     sql: &str,
@@ -55,6 +59,15 @@ pub async fn execute_write_query(
     query_timeout_ms: u64,
     retry_attempts: u32,
 ) -> Result<WriteResult> {
+    // Defensive check: reject SQL containing statement terminators to prevent
+    // potential multi-statement injection, even though callers should have
+    // already validated the SQL.
+    if sql.contains(';') {
+        anyhow::bail!(
+            "SQL contains statement terminator ';' — multi-statement SQL is not supported"
+        );
+    }
+
     // Derive safety warnings from the already-parsed statement.
     let parse_warnings = crate::sql_parser::parse_write_warnings(parsed);
 
@@ -96,12 +109,25 @@ pub async fn execute_write_query(
 ///
 /// Retries on transient network errors (connection reset, broken pipe, timeout) up to
 /// `retry_attempts` times with exponential backoff.
+///
+/// # Security
+/// This function defensively checks for statement terminators as a defense-in-depth
+/// measure, even though callers should have already validated the SQL.
 pub async fn execute_ddl_query(
     pool: &MySqlPool,
     sql: &str,
     query_timeout_ms: u64,
     retry_attempts: u32,
 ) -> Result<WriteResult> {
+    // Defensive check: reject SQL containing statement terminators to prevent
+    // potential multi-statement injection, even though callers should have
+    // already validated the SQL.
+    if sql.contains(';') {
+        anyhow::bail!(
+            "SQL contains statement terminator ';' — multi-statement SQL is not supported"
+        );
+    }
+
     let start = Instant::now();
 
     let pool_clone = pool.clone();
@@ -182,13 +208,43 @@ mod integration_tests {
     }
 
     #[tokio::test]
-    async fn test_invalid_sql_returns_error() {
+    async fn test_write_query_rejects_multi_statement() {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        let sql = "INSERT INTO nonexistent_table_xyz VALUES (1)";
+        // Test that execute_write_query rejects SQL containing semicolons
+        let sql = "INSERT INTO t VALUES (1); DROP TABLE users; --";
         let parsed = crate::sql_parser::parse_sql(sql).unwrap();
         let result = execute_write_query(&test_db.pool, sql, &parsed, 0, 0).await;
-        assert!(result.is_err());
+        assert!(
+            result.is_err(),
+            "execute_write_query should reject multi-statement SQL"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("multi-statement") || err.contains("statement terminator"),
+            "error should mention multi-statement rejection, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ddl_query_rejects_multi_statement() {
+        let Some(test_db) = setup_test_db().await else {
+            return;
+        };
+        // Test that execute_ddl_query rejects SQL containing semicolons
+        let sql = "CREATE TABLE t (id INT); DROP TABLE users; --";
+        let result = execute_ddl_query(&test_db.pool, sql, 0, 0).await;
+        assert!(
+            result.is_err(),
+            "execute_ddl_query should reject multi-statement SQL"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("multi-statement") || err.contains("statement terminator"),
+            "error should mention multi-statement rejection, got: {}",
+            err
+        );
     }
 }

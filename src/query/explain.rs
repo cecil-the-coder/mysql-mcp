@@ -50,6 +50,15 @@ pub async fn run_explain(
     sql: &str,
     query_timeout_ms: u64,
 ) -> Result<ExplainResult> {
+    // Defensive check: reject SQL containing statement terminators to prevent
+    // potential multi-statement injection, even though callers should have
+    // already validated the SQL.
+    if sql.contains(';') {
+        anyhow::bail!(
+            "SQL for EXPLAIN contains statement terminator ';' — multi-statement SQL is not supported"
+        );
+    }
+
     let timeout_ms = query_timeout_ms;
     let explain_sql = format!("EXPLAIN FORMAT=JSON {}", sql);
     let explain_fut = async {
@@ -373,45 +382,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_explain_sort_flagged() {
+    async fn test_explain_rejects_multi_statement() {
+        // Test that run_explain rejects SQL containing semicolons as a defense-in-depth
+        // measure to prevent multi-statement SQL injection.
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS explain_test_sort (
-                id INT PRIMARY KEY AUTO_INCREMENT,
-                name VARCHAR(50)
-            )",
-        )
-        .execute(&test_db.pool)
-        .await
-        .unwrap();
-        sqlx::query("INSERT IGNORE INTO explain_test_sort (id, name) VALUES (1,'Zara'),(2,'Alice'),(3,'Mike')")
-            .execute(&test_db.pool)
-            .await
-            .unwrap();
 
         let result = run_explain(
             &test_db.pool,
-            "SELECT * FROM explain_test_sort ORDER BY name",
+            "SELECT 1; DROP TABLE users; --",
             DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
+
         assert!(
-            result.is_ok(),
-            "run_explain should succeed: {:?}",
-            result.err()
+            result.is_err(),
+            "run_explain should reject multi-statement SQL"
         );
-        let er = result.unwrap();
-        // ORDER BY on a non-indexed column should trigger a sort in most cases.
-        // However, MySQL's optimizer may choose to skip the sort for very small
-        // tables (< ~10 rows) where it's cheaper to just return rows unsorted and
-        // sort them in-memory without a separate sort node.  We therefore only
-        // assert the absence of a crash — the flag may or may not be present
-        // depending on the optimizer's row-count estimate.
-        //
-        // The real validation is that run_explain() successfully parses the EXPLAIN
-        // output and returns a valid ExplainResult, which the assert above checks.
-        let _ = er.extra_flags; // consumed above; just confirm parsing succeeded
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("multi-statement") || err.contains("statement terminator"),
+            "error should mention multi-statement rejection, got: {}",
+            err
+        );
     }
 }

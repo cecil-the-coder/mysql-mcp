@@ -627,3 +627,63 @@ fn test_delete_multi_table_case_insensitive_dedup() {
     // Should have only one entry (the first occurrence's casing is preserved)
     assert_eq!(p.all_target_schemas.len(), 1);
 }
+
+// --- WHERE clause depth limit tests ---
+
+#[test]
+fn test_where_depth_limit_warning() {
+    // Build a deeply nested WHERE clause that exceeds MAX_WHERE_DEPTH (100)
+    // Create deeply nested parenthetical expressions: (((((col = 1)))))
+    // Each level of nesting increases depth by 1
+    let mut sql = "SELECT * FROM t WHERE ".to_string();
+    // Open many nested parentheses
+    for _ in 0..110 {
+        sql.push_str("(");
+    }
+    sql.push_str("col = 1");
+    // Close all parentheses
+    for _ in 0..110 {
+        sql.push_str(")");
+    }
+
+    let p = parse_sql(&sql).unwrap();
+    // Query should parse successfully
+    assert_eq!(p.statement_type, StatementType::Select);
+    // Should have a warning about depth limit
+    let has_depth_warning = p
+        .warnings
+        .iter()
+        .any(|w| w.contains("maximum analysis depth"));
+    assert!(
+        has_depth_warning,
+        "Expected warning about WHERE clause depth limit, got: {:?}",
+        p.warnings
+    );
+}
+
+#[test]
+fn test_where_depth_under_limit_no_warning() {
+    // Build a moderately nested WHERE clause that is under MAX_WHERE_DEPTH (100)
+    let mut sql = "SELECT * FROM t WHERE ".to_string();
+    for _ in 0..50 {
+        sql.push_str("(");
+    }
+    sql.push_str("col = 1");
+    for _ in 0..50 {
+        sql.push_str(")");
+    }
+
+    let p = parse_sql(&sql).unwrap();
+    // Query should parse successfully
+    assert_eq!(p.statement_type, StatementType::Select);
+    // Should NOT have a depth warning
+    let has_depth_warning = p
+        .warnings
+        .iter()
+        .any(|w| w.contains("maximum analysis depth"));
+    assert!(
+        !has_depth_warning,
+        "Should not have depth warning for shallow WHERE clause, got: {:?}",
+        p.warnings
+    );
+}

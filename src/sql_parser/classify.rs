@@ -97,6 +97,8 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
     let mut is_compound_query = false;
     let mut all_target_schemas: Vec<String> = vec![];
 
+    let mut where_depth_exceeded = false;
+
     let (statement_type, target_schema, target_table) = match stmt {
         Statement::Query(query) if query.with.is_some() => (
             StatementType::Other(
@@ -120,13 +122,14 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
                 });
                 if let Some(selection) = &select.selection {
                     let mut seen = HashSet::new();
-                    collect_where_info(
+                    let all_traversed = collect_where_info(
                         selection,
                         &mut where_columns,
                         &mut seen,
                         &mut has_leading_wildcard_like,
                         0,
                     );
+                    where_depth_exceeded = !all_traversed;
                 }
                 has_named_table = select
                     .from
@@ -482,6 +485,12 @@ pub(super) fn classify_statement(stmt: &Statement) -> Result<ParsedStatement> {
             "UNION/INTERSECT/EXCEPT: index usage and row estimates are not available for compound queries".to_string()
         );
     }
+    if where_depth_exceeded && warnings.len() < MAX_DEPTH_WARNING_COUNT + 10 {
+        warnings.push(
+            "WHERE clause exceeds maximum analysis depth — index suggestions may be incomplete"
+                .to_string(),
+        );
+    }
 
     // For non-DELETE statements, derive all_target_schemas from target_schema.
     if all_target_schemas.is_empty() {
@@ -674,12 +683,19 @@ fn extract_first_from_table_name(query: &Query) -> Option<String> {
 /// on deeply nested WHERE clause ASTs (e.g., adversarial UNION/AND/OR chains).
 const MAX_WHERE_DEPTH: u32 = 100;
 
+/// Maximum number of warnings for WHERE clause depth exceeded.
+/// Prevents warning spam if multiple deep expressions exist.
+const MAX_DEPTH_WARNING_COUNT: usize = 1;
+
 /// Recursively walk a WHERE expression tree in a single pass, collecting column name
 /// identifiers into `cols`/`seen` and setting `*has_leading_wildcard` when a LIKE/ILike
 /// pattern starts with '%'.  Replaces the former separate `collect_where_columns` and
 /// `expr_has_leading_wildcard_like` functions.
 ///
-/// Bails out silently when `depth` exceeds `MAX_WHERE_DEPTH` to guard against
+/// Returns `true` if the full tree was traversed without hitting depth limits,
+/// `false` if recursion was truncated due to exceeding `MAX_WHERE_DEPTH`.
+///
+/// Bails out when `depth` exceeds `MAX_WHERE_DEPTH` to guard against
 /// excessively deep nesting that could cause high CPU usage.
 pub(super) fn collect_where_info(
     expr: &Expr,
@@ -687,10 +703,11 @@ pub(super) fn collect_where_info(
     seen: &mut HashSet<String>,
     has_leading_wildcard: &mut bool,
     depth: u32,
-) {
+) -> bool {
     if depth > MAX_WHERE_DEPTH {
-        return;
+        return false; // Indicate that we hit the depth limit
     }
+    let mut all_subtrees_ok = true;
     match expr {
         Expr::Identifier(ident) => {
             if seen.insert(ident.value.to_lowercase()) {
@@ -706,25 +723,33 @@ pub(super) fn collect_where_info(
             }
         }
         Expr::BinaryOp { left, right, .. } => {
-            collect_where_info(left, cols, seen, has_leading_wildcard, depth + 1);
-            collect_where_info(right, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(left, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(right, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::UnaryOp { expr, .. } => {
-            collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::IsNull(inner) | Expr::IsNotNull(inner) => {
-            collect_where_info(inner, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(inner, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::IsDistinctFrom(left, right) | Expr::IsNotDistinctFrom(left, right) => {
-            collect_where_info(left, cols, seen, has_leading_wildcard, depth + 1);
-            collect_where_info(right, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(left, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(right, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::Between {
             expr, low, high, ..
         } => {
-            collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
-            collect_where_info(low, cols, seen, has_leading_wildcard, depth + 1);
-            collect_where_info(high, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &= collect_where_info(low, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(high, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::Like {
             expr: like_expr,
@@ -744,14 +769,18 @@ pub(super) fn collect_where_info(
                     *has_leading_wildcard = true;
                 }
             }
-            collect_where_info(like_expr, cols, seen, has_leading_wildcard, depth + 1);
-            collect_where_info(pattern, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(like_expr, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(pattern, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::InList { expr, .. } => {
-            collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::InSubquery { expr, .. } => {
-            collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::Function(func) => {
             // Recurse into function arguments so columns inside UPPER(col), COALESCE(a, b), etc.
@@ -764,13 +793,15 @@ pub(super) fn collect_where_info(
                         sqlparser::ast::FunctionArg::Unnamed(arg) => arg,
                     };
                     if let sqlparser::ast::FunctionArgExpr::Expr(e) = arg_expr {
-                        collect_where_info(e, cols, seen, has_leading_wildcard, depth + 1);
+                        all_subtrees_ok &=
+                            collect_where_info(e, cols, seen, has_leading_wildcard, depth + 1);
                     }
                 }
             }
         }
         Expr::Cast { expr, .. } => {
-            collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(expr, cols, seen, has_leading_wildcard, depth + 1);
         }
         Expr::Case {
             operand,
@@ -780,21 +811,27 @@ pub(super) fn collect_where_info(
             ..
         } => {
             if let Some(op) = operand {
-                collect_where_info(op, cols, seen, has_leading_wildcard, depth + 1);
+                all_subtrees_ok &=
+                    collect_where_info(op, cols, seen, has_leading_wildcard, depth + 1);
             }
             for cond in conditions {
-                collect_where_info(cond, cols, seen, has_leading_wildcard, depth + 1);
+                all_subtrees_ok &=
+                    collect_where_info(cond, cols, seen, has_leading_wildcard, depth + 1);
             }
             for result in results {
-                collect_where_info(result, cols, seen, has_leading_wildcard, depth + 1);
+                all_subtrees_ok &=
+                    collect_where_info(result, cols, seen, has_leading_wildcard, depth + 1);
             }
             if let Some(else_expr) = else_result {
-                collect_where_info(else_expr, cols, seen, has_leading_wildcard, depth + 1);
+                all_subtrees_ok &=
+                    collect_where_info(else_expr, cols, seen, has_leading_wildcard, depth + 1);
             }
         }
         Expr::Nested(inner) => {
-            collect_where_info(inner, cols, seen, has_leading_wildcard, depth + 1);
+            all_subtrees_ok &=
+                collect_where_info(inner, cols, seen, has_leading_wildcard, depth + 1);
         }
         _ => {}
     }
+    all_subtrees_ok
 }
