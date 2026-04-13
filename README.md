@@ -149,10 +149,10 @@ allow_update = false
 ```
 
 Configuration is loaded in this order (highest priority wins):
-1. Environment variables
+1. Environment variables (highest)
 2. TOML config file (`mysql-mcp.toml` or `$MCP_CONFIG_FILE`)
 3. `.env` file
-4. Built-in defaults
+4. Built-in defaults (lowest)
 
 ---
 
@@ -214,7 +214,7 @@ If a setting is defined in multiple places, the higher priority source wins.
 | `pool.connect_timeout_ms` | `MYSQL_CONNECT_TIMEOUT` | u64 | `10000` | Connection establishment timeout in milliseconds; also serves as the acquire timeout |
 | `pool.performance_hints` | `MYSQL_PERFORMANCE_HINTS` | string | `none` | When to run EXPLAIN: `none`, `auto` (only when query exceeds `slow_query_threshold_ms`), or `always` |
 | `pool.slow_query_threshold_ms` | `MYSQL_SLOW_QUERY_THRESHOLD_MS` | u64 | `500` | Threshold used by `performance_hints=auto` |
-| `pool.max_rows` | `MYSQL_MAX_ROWS` | u32 | `1000` | Cap on rows returned per query; `LIMIT {max_rows}` is appended when the query has no LIMIT. `0` disables the cap |
+| `pool.max_rows` | `MYSQL_MAX_ROWS` | u32 | `1000` | Cap on rows returned per query; `LIMIT {max_rows}` is appended when the query has no LIMIT. Must be >= 1 (use 1000000 for effectively unlimited rows) |
 | `pool.cache_ttl_secs` | `MYSQL_CACHE_TTL` | u64 | `60` | Schema introspection cache TTL in seconds (`0` disables caching) |
 | `pool.retry_attempts` | `MYSQL_RETRY_ATTEMPTS` | u32 | `2` | Number of retry attempts for transient network errors |
 | `pool.max_result_memory_mb` | `MYSQL_MAX_RESULT_MEMORY_MB` | u32 | `256` | Maximum memory in MB for result sets |
@@ -491,7 +491,7 @@ You can also override per-call by passing `"explain": true` to `mysql_query` or 
 
 ### `max_rows` protects against runaway results
 
-By default, `max_rows = 1000`. When a SELECT has no LIMIT clause, `LIMIT 1000` is appended automatically and `capped: true` is set in the response. This prevents accidentally pulling back millions of rows. Set `max_rows = 0` to disable the cap entirely, or raise it for large exports.
+By default, `max_rows = 1000`. When a SELECT has no LIMIT clause, `LIMIT 1000` is appended automatically and `capped: true` is set in the response. This prevents accidentally pulling back millions of rows. `max_rows` must be >= 1 (use a large value like 1000000 for effectively unlimited rows).
 
 ---
 
