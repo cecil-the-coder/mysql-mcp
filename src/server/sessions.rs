@@ -115,7 +115,9 @@ pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToo
             kind
         )));
     }
-    if value.len() > 64 {
+    // Use chars().count() for Unicode-aware length checking, not byte length.
+    // MySQL identifiers are limited by character count, not byte count.
+    if value.chars().count() > 64 {
         return Err(crate::server::error::error_response(format!(
             "{} too long (max 64 characters)",
             kind
