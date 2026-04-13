@@ -99,17 +99,19 @@ fn walk_plan_node_inner(node: &Value, stats: &mut PlanStats, depth: usize) {
 /// Convert accumulated PlanStats into a final ExplainResult.
 fn make_result(stats: PlanStats) -> Result<ExplainResult> {
     let full_table_scan = stats.has_full_table_scan;
-    // Guard against NaN / Infinity before casting to u64: non-finite values
-    // produce u64::MAX (Infinity) or 0 (NaN) in Rust's as-cast, both wrong.
-    let rows_examined_estimate = if stats.total_estimated_rows.is_finite() {
-        stats.total_estimated_rows.ceil() as u64
-    } else {
-        tracing::warn!(
-            estimated_rows = stats.total_estimated_rows,
-            "EXPLAIN row count estimate is non-finite (Infinity or NaN); reporting as 0"
-        );
-        0
-    };
+    // Guard against NaN, Infinity, or negative values before casting to u64.
+    // Non-finite values produce u64::MAX (Infinity) or 0 (NaN) in Rust's as-cast, both wrong.
+    // Negative values from malformed EXPLAIN JSON would underflow to very large u64 values.
+    let rows_examined_estimate =
+        if stats.total_estimated_rows.is_finite() && stats.total_estimated_rows >= 0.0 {
+            stats.total_estimated_rows.ceil() as u64
+        } else {
+            tracing::warn!(
+                estimated_rows = stats.total_estimated_rows,
+                "EXPLAIN row count estimate is invalid (non-finite or negative); reporting as 0"
+            );
+            0
+        };
     let mut extra_flags = vec![];
     if stats.has_sort {
         extra_flags.push("Using filesort");
