@@ -18,6 +18,7 @@ use sqlx::MySqlPool;
 use std::sync::Arc;
 use std::time::Instant;
 
+#[derive(Debug)]
 pub struct WriteResult {
     pub rows_affected: u64,
     pub last_insert_id: Option<u64>,
