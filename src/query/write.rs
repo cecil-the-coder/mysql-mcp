@@ -1,3 +1,15 @@
+//! Write and DDL query execution (INSERT, UPDATE, DELETE, CREATE, ALTER, DROP).
+//!
+//! This module handles execution of SQL statements that modify data or schema:
+//!
+//! - **DML operations** ([`execute_write_query`]): INSERT, UPDATE, DELETE statements
+//!   executed within an explicit transaction that is committed on success. If the
+//!   operation fails or the connection drops, MySQL rolls back automatically.
+//!
+//! - **DDL operations** ([`execute_ddl_query`]): CREATE, ALTER, DROP, TRUNCATE
+//!   statements executed without an explicit transaction wrapper, since MySQL
+//!   implicitly commits DDL statements.
+
 use super::retry::retry_on_transient_error;
 use super::with_timeout;
 use crate::sql_parser::ParsedStatement;

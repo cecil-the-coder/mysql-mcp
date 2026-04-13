@@ -18,6 +18,10 @@ pub(crate) fn mysql_query_schema() -> Arc<serde_json::Map<String, serde_json::Va
             "session": {
                 "type": "string",
                 "description": "Named session to route this query to (omit for default connection). Use 'default' or a session name from mysql_connect."
+            },
+            "explain": {
+                "type": "boolean",
+                "description": "Force an EXPLAIN run for this query, overriding the performance_hints setting"
             }
         },
         "required": ["sql"]

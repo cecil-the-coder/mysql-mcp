@@ -1,3 +1,16 @@
+//! EXPLAIN plan execution and result types.
+//!
+//! Runs `EXPLAIN FORMAT=JSON` against a MySQL database and parses the
+//! returned JSON into a structured [`ExplainResult`] containing:
+//!
+//! - Whether a full table scan was detected
+//! - Which index (if any) was used
+//! - Estimated rows examined
+//! - Extra flags (filesort, temporary table, etc.)
+//! - A performance tier ([`ExplainTier`]) derived from the plan
+//!
+//! The actual JSON parsing logic lives in [`super::explain_parse`].
+
 use anyhow::Result;
 use sqlx::MySqlPool;
 

@@ -1,3 +1,15 @@
+//! Retry logic for transient database connection failures.
+//!
+//! Provides [`retry_on_transient_error`], a generic wrapper that re-executes
+//! an async database operation when it fails with a transient network error
+//! (connection reset, broken pipe, timeout, connection refused, etc.).
+//!
+//! Non-transient errors (syntax errors, permission denied, unknown columns)
+//! are returned immediately without retry.
+//!
+//! **Backoff strategy**: exponential (base 100 ms, capped at 2¹⁰ × 100 ms ≈ 102 s)
+//! with ±25% jitter to avoid thundering-herd effects.
+
 use anyhow::Result;
 use std::future::Future;
 use std::time::{Duration, Instant};
