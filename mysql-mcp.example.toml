@@ -80,6 +80,10 @@ allow_runtime_connections = false
 # (default: 50)
 # max_sessions = 50
 
+# Maximum total database connections across all sessions (default pool + named
+# session pools). Named sessions use 5 connections each. (default: 100)
+# max_total_connections = 100
+
 # Per-schema permission overrides
 # These take precedence over the global settings above.
 # Useful for allowing writes to one database while keeping others read-only.
