@@ -47,7 +47,7 @@ mod tests {
     fn extract_text(result: &CallToolResult) -> &str {
         result
             .content
-            .get(0)
+            .first()
             .and_then(|c| c.raw.as_text())
             .map(|t| t.text.as_str())
             .expect("expected text content")
