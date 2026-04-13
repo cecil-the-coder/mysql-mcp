@@ -226,9 +226,9 @@ impl SchemaIntrospector {
                     let data_length: Option<i64> = row.try_get("DATA_LENGTH").ok().flatten();
                     let index_length: Option<i64> = row.try_get("INDEX_LENGTH").ok().flatten();
                     serde_json::json!({
-                        "estimated_rows": table_rows.and_then(|n| n.try_into().ok()),
-                        "data_bytes":     data_length.and_then(|n| n.try_into().ok()),
-                        "index_bytes":    index_length.and_then(|n| n.try_into().ok()),
+                        "estimated_rows": table_rows.and_then(|n| u64::try_from(n).ok()),
+                        "data_bytes":     data_length.and_then(|n| u64::try_from(n).ok()),
+                        "index_bytes":    index_length.and_then(|n| u64::try_from(n).ok()),
                     })
                 }
                 None => serde_json::Value::Null,
