@@ -18,6 +18,84 @@ mod tests;
 pub use introspect::SchemaIntrospector;
 
 // --------------------------------------------------------------------------
+// Caching strategy
+// --------------------------------------------------------------------------
+//
+/// The `SchemaIntrospector` uses a multi-level TTL (time-to-live) cache to
+/// avoid repeated database queries for schema information. The cache is
+/// configured via `PoolConfig::cache_ttl_secs` (default: 60s). When the TTL
+/// expires, the next call to any introspective method will trigger a
+/// background refresh.
+///
+/// ### Cache hierarchy
+///
+/// The module maintains four independent LRU-style caches keyed by
+/// `{database}\\t{table}`:
+/// 1. **tables_cache**          — `Vec<TableInfo>`    (from `list_tables`)
+/// 2. **columns_cache**         — `Vec<ColumnInfo>`  (from `get_columns`)
+/// 3. **indexed_columns_cache** — `Vec<String>`      (from `list_indexed_columns`)
+/// 4. **composite_indexes_cache** — `Vec<IndexDef>`  (from `list_composite_indexes`)
+///
+/// Each cache entry stores both the data and the `Instant` it was fetched.
+/// On every access, the entry’s age is compared against the TTL; if stale,
+/// a fresh fetch is scheduled.
+///
+/// ### TTL configuration
+///
+/// - `cache_ttl_secs = 0` — cache is effectively disabled; every call hits
+///   the database.
+/// - `cache_ttl_secs > 0` — entries are considered fresh for that many
+///   seconds. The cache is checked under a per-map mutex, and refreshes
+///   are performed outside the lock to avoid blocking concurrent readers.
+///
+/// ### Programmatic usage
+///
+/// ```ignore
+/// # use autoanneal::schema::SchemaIntrospector;
+/// # use std::sync::Arc;
+/// # let pool: Arc<sqlx::MySqlPool> = todo!();
+/// let inspector = SchemaIntrospector::new(Arc::clone(&pool), 60);
+///
+/// // Fetch full schema info (columns from cache, indexes+size from DB)
+/// let info = inspector
+///     .get_schema_info("users", None, true, true, true)
+///     .await?;
+///
+/// // List tables (cached)
+/// let tables = inspector.list_tables(None).await?;
+///
+/// // List indexed columns (cached)
+/// let indexed = inspector.list_indexed_columns("users", None).await?;
+///
+/// // List composite indexes (cached)
+/// let indexes = inspector.list_composite_indexes("users", None).await?;
+///
+/// // Invalidate after DDL
+/// inspector.invalidate_table("users", None).await;
+/// ```
+///
+/// ### Cache invalidation
+///
+/// Use `invalidate_table()` after DDL that affects a specific table (e.g.,
+/// `ALTER TABLE`) and `invalidate_all()` after operations that span multiple
+/// tables (e.g., `DROP DATABASE`). Both methods acquire all cache locks in a
+/// fixed order (columns → indexed_columns → composite_indexes → tables)
+/// to prevent deadlocks.
+///
+/// ### Index suggestions
+///
+/// The `generate_index_suggestions()` method combines cached column metadata
+/// with live index information to produce actionable recommendations. It
+/// detects:
+/// - **Composite-index opportunities** — when multiple WHERE columns are
+///   covered by a single existing composite index.
+/// - **Low-cardinality warnings** — when a WHERE column’s type has very few
+///   distinct values (e.g., `TINYINT(1)`, `ENUM`, `SET`, `BIT(N≤4)`), an index
+///   may offer poor selectivity and the suggestion notes this.
+///
+/// ---
+///
+// --------------------------------------------------------------------------
 // Public types
 // --------------------------------------------------------------------------
 
