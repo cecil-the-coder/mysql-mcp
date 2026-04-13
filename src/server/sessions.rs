@@ -682,7 +682,11 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         // CallToolResult wraps the error content; check the text
-        let text = err.content[0].raw.as_text().expect("expected text content");
+        let text = err
+            .content
+            .get(0)
+            .and_then(|c| c.raw.as_text())
+            .expect("expected text content");
         assert!(text.text.contains("Identifier cannot be empty"));
     }
 
@@ -692,7 +696,11 @@ mod tests {
         let result = validate_identifier(&long_id, "Identifier");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        let text = err.content[0].raw.as_text().expect("expected text content");
+        let text = err
+            .content
+            .get(0)
+            .and_then(|c| c.raw.as_text())
+            .expect("expected text content");
         assert!(text.text.contains("Identifier too long"));
     }
 
@@ -702,7 +710,11 @@ mod tests {
         let result = validate_identifier("invalid name", "Identifier");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        let text = err.content[0].raw.as_text().expect("expected text content");
+        let text = err
+            .content
+            .get(0)
+            .and_then(|c| c.raw.as_text())
+            .expect("expected text content");
         assert!(text.text.contains("must contain only alphanumeric"));
 
         // Test with dot

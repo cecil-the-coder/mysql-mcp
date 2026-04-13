@@ -38,11 +38,14 @@ pub mod perf_impl {
         pub qps: f64,
     }
 
-    pub(crate) fn compute(mut samples_ms: Vec<f64>, wall_ms: f64) -> Stats {
+    pub(crate) fn compute(mut samples_ms: Vec<f64>, wall_ms: f64) -> Option<Stats> {
+        if samples_ms.is_empty() {
+            return None;
+        }
         samples_ms.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let n = samples_ms.len();
-        let pct = |p: f64| samples_ms[((n as f64 * p) as usize).min(n - 1)];
-        Stats {
+        let pct = |p: f64| samples_ms[((n as f64 * p) as usize).min(n.saturating_sub(1))];
+        Some(Stats {
             count: n,
             min_ms: samples_ms[0],
             max_ms: samples_ms[n - 1],
@@ -52,7 +55,7 @@ pub mod perf_impl {
             p99_ms: pct(0.99),
             wall_ms,
             qps: n as f64 / (wall_ms / 1000.0),
-        }
+        })
     }
 
     pub(crate) fn print(label: &str, s: &Stats) {
@@ -119,7 +122,8 @@ pub mod perf_impl {
                 .unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
-        let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
+        let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0)
+            .expect("samples should not be empty");
         print(&format!("Sequential SELECT 1 (n={N})"), &stats);
 
         assert!(
@@ -178,7 +182,8 @@ pub mod perf_impl {
                 .unwrap();
             samples.push(t.elapsed().as_secs_f64() * 1000.0);
         }
-        let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0);
+        let stats = compute(samples, wall.elapsed().as_secs_f64() * 1000.0)
+            .expect("samples should not be empty");
         print(&format!("Sequential 3-table JOIN (n={N})"), &stats);
 
         assert!(
@@ -251,7 +256,8 @@ pub mod perf_impl {
         while let Some(r) = set.join_next().await {
             all.extend(r.unwrap());
         }
-        let stats = compute(all, wall.elapsed().as_secs_f64() * 1000.0);
+        let stats = compute(all, wall.elapsed().as_secs_f64() * 1000.0)
+            .expect("samples should not be empty");
         print(
             &format!(
                 "Concurrent SELECT 1 (concurrency={CONCURRENCY}, n={})",
