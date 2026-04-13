@@ -40,7 +40,7 @@ cache_ttl_secs = 60
 
 # Maximum number of rows returned per query (default: 1000).
 # Acts as a safety limit to prevent runaway queries from returning huge result sets.
-# Set to a large number like 10000 for effectively unlimited rows.
+# Must be >= 1 and <= 1,000,000. Set to a large number like 10000 for effectively unlimited rows.
 # max_rows = 1000
 
 # Performance hints control automatic EXPLAIN analysis (default: "none").
