@@ -86,14 +86,17 @@ pub fn is_low_cardinality_type(data_type: &str) -> bool {
         || dt.len() >= 10 && safe_prefix(dt, 10).eq_ignore_ascii_case("tinyint(1)")
         || {
             if dt.len() >= 4 && safe_prefix(dt, 4).eq_ignore_ascii_case("bit(") {
-                // Extract digits after "bit(" prefix safely
+                // Extract digits after "bit(" prefix and parse directly without allocating.
                 let prefix_len = safe_prefix(dt, 4).len();
                 let after_prefix = &dt[prefix_len..];
-                let n_str: String = after_prefix
-                    .chars()
-                    .take_while(|c| c.is_ascii_digit())
-                    .collect();
-                n_str.parse::<u32>().is_ok_and(|n| n <= 4)
+                // Parse the leading digits directly into a u32 without allocating a String.
+                let mut n: u32 = 0;
+                let mut has_digits = false;
+                for c in after_prefix.chars().take_while(|c| c.is_ascii_digit()) {
+                    has_digits = true;
+                    n = n.saturating_mul(10).saturating_add(c as u32 - b'0' as u32);
+                }
+                has_digits && n <= 4
             } else {
                 false
             }
