@@ -156,8 +156,14 @@ impl<'a> ConnectionReservationGuard<'a> {
 impl<'a> Drop for ConnectionReservationGuard<'a> {
     fn drop(&mut self) {
         if !self.dismissed {
-            self.total_connections
-                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::AcqRel);
+            // Use fetch_update with saturating_sub to prevent underflow.
+            // The counter should never go below 0, but defensive coding
+            // protects against any potential double-decrement bugs.
+            let _ = self.total_connections.fetch_update(
+                Ordering::AcqRel,
+                Ordering::Acquire,
+                |current| Some(current.saturating_sub(NAMED_SESSION_POOL_SIZE)),
+            );
         }
     }
 }
@@ -619,8 +625,12 @@ impl SessionStore {
         };
         if let Some(session) = removed {
             // Decrement total connections counter
-            self.total_connections
-                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::AcqRel);
+            // Use saturating_sub to prevent underflow in edge cases
+            let _ = self.total_connections.fetch_update(
+                Ordering::AcqRel,
+                Ordering::Acquire,
+                |current| Some(current.saturating_sub(NAMED_SESSION_POOL_SIZE)),
+            );
             // Clean up SSH tunnel if present (outside the lock — close() may be slow).
             if let Some(tunnel) = session.tunnel {
                 close_tunnel_with_timeout(tunnel, "on disconnect").await;

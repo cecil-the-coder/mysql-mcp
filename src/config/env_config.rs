@@ -29,34 +29,46 @@ use std::collections::HashMap;
 
 fn parse_env_num<T: std::str::FromStr>(key: &str) -> Option<T> {
     match std::env::var(key) {
-        Ok(v) if !v.is_empty() => match v.parse::<T>() {
-            Ok(n) => Some(n),
-            Err(_) => {
-                eprintln!(
-                    "Warning: {} is set to {:?} but could not be parsed as a number; using default",
-                    key, v
-                );
-                None
+        Ok(v) => {
+            let trimmed = v.trim();
+            if trimmed.is_empty() {
+                return None;
             }
-        },
+            match trimmed.parse::<T>() {
+                Ok(n) => Some(n),
+                Err(_) => {
+                    eprintln!(
+                        "Warning: {} is set to {:?} but could not be parsed as a number; using default",
+                        key, v
+                    );
+                    None
+                }
+            }
+        }
         _ => None,
     }
 }
 
 fn parse_bool_env(key: &str) -> Option<bool> {
     match std::env::var(key) {
-        Ok(v) if !v.is_empty() => match v.to_lowercase().as_str() {
-            "true" | "1" | "yes" => Some(true),
-            "false" | "0" | "no" => Some(false),
-            _ => {
-                eprintln!(
-                    "Warning: {} is set to {:?} but is not a recognized boolean \
-                     (true/false/1/0/yes/no); using default",
-                    key, v
-                );
-                None
+        Ok(v) => {
+            let trimmed = v.trim();
+            if trimmed.is_empty() {
+                return None;
             }
-        },
+            match trimmed.to_lowercase().as_str() {
+                "true" | "1" | "yes" => Some(true),
+                "false" | "0" | "no" => Some(false),
+                _ => {
+                    eprintln!(
+                        "Warning: {} is set to {:?} but is not a recognized boolean \
+                         (true/false/1/0/yes/no); using default",
+                        key, v
+                    );
+                    None
+                }
+            }
+        }
         _ => None,
     }
 }
