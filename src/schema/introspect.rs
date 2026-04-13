@@ -34,6 +34,13 @@ use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
 /// Tab is used as separator; both database and table names containing tabs
 /// are escaped (tabs replaced with spaces) to prevent cache key collisions.
 fn make_cache_key(database: Option<&str>, table: &str) -> String {
+    // Warn about tabs in table names (rare but allowed in MySQL quoted identifiers)
+    if table.contains('\t') {
+        tracing::warn!(
+            "Table name contains tab character, which is not supported by schema cache: {}",
+            &table[..table.len().min(100)]
+        );
+    }
     let safe_db = database.map(|s| s.replace('\t', " ")).unwrap_or_default();
     let safe_table = table.replace('\t', " ");
     format!("{}\t{}", safe_db, safe_table)
