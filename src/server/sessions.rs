@@ -239,9 +239,7 @@ impl SessionStore {
             );
         }
         let port = match args.get("port").and_then(|v| v.as_u64()) {
-            Some(p) if (1..=65535).contains(&p) => {
-                p.try_into().expect("port range already validated")
-            }
+            Some(p) if (1..=65535).contains(&p) => p as u16,
             Some(_) => return tool_error!("Port out of range (1-65535)"),
             None => 3306,
         };
@@ -306,9 +304,7 @@ impl SessionStore {
             }
         }
         let ssh_port = match args.get("ssh_port").and_then(|v| v.as_u64()) {
-            Some(p) if (1..=65535).contains(&p) => {
-                p.try_into().expect("ssh_port range already validated")
-            }
+            Some(p) if (1..=65535).contains(&p) => p as u16,
             Some(_) => return tool_error!("ssh_port out of range (1-65535)"),
             None => 22,
         };

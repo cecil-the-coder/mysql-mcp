@@ -10,6 +10,23 @@ const SLOW_ROW_THRESHOLD: u64 = 1_000;
 /// Prevents stack overflow from pathological or malicious deeply-nested JSON.
 const MAX_PLAN_DEPTH: usize = 100;
 
+/// Safely add an f64 value to an accumulator, saturating at f64::MAX instead of
+/// overflowing to Infinity. This prevents pathological EXPLAIN JSON with
+/// extremely large `estimated_rows` values from causing incorrect row estimates.
+fn saturating_add_f64(acc: f64, val: f64) -> f64 {
+    // Check if either value is non-finite first
+    if !acc.is_finite() || !val.is_finite() {
+        return acc;
+    }
+    let sum = acc + val;
+    // If sum is infinite or NaN, return a large finite value instead
+    if sum.is_finite() {
+        sum
+    } else {
+        f64::MAX
+    }
+}
+
 #[derive(Default)]
 struct PlanStats {
     has_full_table_scan: bool,
@@ -53,14 +70,20 @@ fn walk_plan_node_inner(node: &Value, stats: &mut PlanStats, depth: usize) {
                 // No index specified - this is a full table scan
                 stats.has_full_table_scan = true;
             }
-            stats.total_estimated_rows += node["estimated_rows"].as_f64().unwrap_or(0.0);
+            stats.total_estimated_rows = saturating_add_f64(
+                stats.total_estimated_rows,
+                node["estimated_rows"].as_f64().unwrap_or(0.0),
+            );
         }
         "index" => {
             // Short-circuit: only record the first index name encountered.
             if stats.index_name.is_none() {
                 stats.index_name = node["index_name"].as_str().map(str::to_string);
             }
-            stats.total_estimated_rows += node["estimated_rows"].as_f64().unwrap_or(0.0);
+            stats.total_estimated_rows = saturating_add_f64(
+                stats.total_estimated_rows,
+                node["estimated_rows"].as_f64().unwrap_or(0.0),
+            );
         }
         "sort" => {
             stats.has_sort = true;
@@ -76,7 +99,10 @@ fn walk_plan_node_inner(node: &Value, stats: &mut PlanStats, depth: usize) {
         }
         "rows_fetched_before_execution" => {
             // Constant / const-optimized query — rows resolved at parse time.
-            stats.total_estimated_rows += node["estimated_rows"].as_f64().unwrap_or(1.0);
+            stats.total_estimated_rows = saturating_add_f64(
+                stats.total_estimated_rows,
+                node["estimated_rows"].as_f64().unwrap_or(1.0),
+            );
         }
         // Index range/lookup access types — accumulate row counts for tier classification.
         "range" | "ref" | "eq_ref" | "ref_or_null" | "index_merge" | "unique_subquery"
@@ -84,7 +110,10 @@ fn walk_plan_node_inner(node: &Value, stats: &mut PlanStats, depth: usize) {
             if stats.index_name.is_none() {
                 stats.index_name = node["index_name"].as_str().map(str::to_string);
             }
-            stats.total_estimated_rows += node["estimated_rows"].as_f64().unwrap_or(0.0);
+            stats.total_estimated_rows = saturating_add_f64(
+                stats.total_estimated_rows,
+                node["estimated_rows"].as_f64().unwrap_or(0.0),
+            );
         }
         _ => {}
     }
@@ -219,7 +248,7 @@ fn walk_v1_table(table: &Value, stats: &mut PlanStats) {
             walk_v1_block(qb, stats);
         }
     } else {
-        stats.total_estimated_rows += rows;
+        stats.total_estimated_rows = saturating_add_f64(stats.total_estimated_rows, rows);
     }
 }
 

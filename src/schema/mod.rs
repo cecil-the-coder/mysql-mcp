@@ -219,10 +219,16 @@ impl SchemaIntrospector {
             match rows.into_iter().next() {
                 Some(row) => {
                     use sqlx::Row;
+                    // MySQL information_schema columns are BIGINT (signed). For very large tables,
+                    // row estimates can occasionally be negative due to wrap-around. Convert safely
+                    // by treating negative values as None (unknown).
+                    let table_rows: Option<i64> = row.try_get("TABLE_ROWS").ok().flatten();
+                    let data_length: Option<i64> = row.try_get("DATA_LENGTH").ok().flatten();
+                    let index_length: Option<i64> = row.try_get("INDEX_LENGTH").ok().flatten();
                     serde_json::json!({
-                        "estimated_rows": row.try_get::<Option<u64>, _>("TABLE_ROWS").ok().flatten(),
-                        "data_bytes":     row.try_get::<Option<u64>, _>("DATA_LENGTH").ok().flatten(),
-                        "index_bytes":    row.try_get::<Option<u64>, _>("INDEX_LENGTH").ok().flatten(),
+                        "estimated_rows": table_rows.and_then(|n| if n >= 0 { Some(n as u64) } else { None }),
+                        "data_bytes":     data_length.and_then(|n| if n >= 0 { Some(n as u64) } else { None }),
+                        "index_bytes":    index_length.and_then(|n| if n >= 0 { Some(n as u64) } else { None }),
                     })
                 }
                 None => serde_json::Value::Null,
