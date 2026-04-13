@@ -1,41 +1,77 @@
-//! SQL statement classification from AST.
+//! SQL statement classification and AST analysis.
 //!
-//! This module performs analysis of SQL statements by traversing the sqlparser AST to extract
-//! metadata about query structure and characteristics. The classification identifies:
+//! This module implements the core logic for analyzing SQL abstract syntax trees (ASTs)
+//! and extracting structured metadata about statements. It performs a single-pass analysis
+//! of the AST to classify statement types, identify target schemas and tables, and detect
+//! potentially problematic patterns.
 //!
-//! - **Target schemas and tables**: Extracts schema/database names and table names from
-//!   various statement types (SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, etc.).
-//! - **WHERE clause presence**: Detects whether queries have filtering conditions, which
-//!   impacts both security (prevention of full table scans) and performance.
-//! - **LIMIT clause presence**: Identifies unbounded queries that could return excessive
-//!   amounts of data.
-//! - **Wildcard usage**: Flags `SELECT *` patterns that may indicate inefficient queries
-//!   or potential data exposure issues.
-//! - **Query complexity metrics**: Tracks JOIN counts, aggregate functions, GROUP BY clauses,
-//!   and LIKE patterns with leading wildcards.
+//! # Classification Algorithm
 //!
-//! The analysis is performed in a single pass through the AST to compute all classification
-//! fields efficiently. The [`classify_statement`] function serves as the primary entry point,
-//! returning a [`ParsedStatement`] containing the extracted metadata.
+//! The classification process works in a single pass through the AST:
 //!
-//! # Security and Performance Integration
+//! 1. **Statement Type Matching**: The main `classify_statement()` function matches the
+//!    `Statement` enum variant to determine the basic statement type (SELECT, INSERT,
+//!    UPDATE, DELETE, CREATE, etc.).
 //!
-//! This classification feeds into several security and performance features:
+//! 2. **Schema/Table Extraction**: For data-modifying statements, the classifier extracts
+//!    target schema and table names from `ObjectName` and `TableFactor` AST nodes. It
+//!    handles:
+//!    - Single-table operations (simple INSERT, UPDATE, DELETE)
+//!    - Multi-table operations (multi-table UPDATE/DELETE with JOINs)
+//!    - Fully-qualified names (`schema.table`)
 //!
-//! - **Permission checking**: Extracted schema/table names enable fine-grained access control
-//!   by identifying all resources a query touches. Multi-table UPDATE, DELETE, and DROP statements
-//!   are handled specially to collect all affected schemas.
-//! - **Query limiting**: Detection of missing WHERE/LIMIT clauses triggers warnings about
-//!   potentially dangerous queries that could impact database performance or expose sensitive data.
-//! - **Performance optimization**: Analysis of wildcards, leading LIKE patterns, and JOIN counts
-//!   generates targeted warnings to guide users toward more efficient query patterns.
-//! - **Statement type validation**: Certain statement types (e.g., CTE queries, locking reads,
-//!   transaction control) are identified and flagged as unsupported based on security policies.
+//! 3. **WHERE Clause Analysis**: The `collect_where_info()` function recursively walks
+//!    the WHERE expression tree to:
+//!    - Extract column names referenced in filter conditions
+//!    - Detect leading wildcard patterns in LIKE expressions (e.g., `%pattern`)
+//!    - Handle nested expressions, function calls, and complex predicates
 //!
-//! The recursive AST traversal in [`collect_where_info`] handles complex WHERE clause structures
-//! including nested expressions, function calls, and CASE statements, with a depth limit to
-//! prevent excessive CPU usage on deeply nested queries.
-
+//! 4. **Aggregate Detection**: The `has_aggregate_function()` and `expr_has_aggregate()`
+//!    functions scan SELECT projections for aggregate functions (COUNT, SUM, AVG, MIN, MAX,
+//!    MySQL-specific aggregates like GROUP_CONCAT, BIT_AND, etc.).
+//!
+//! 5. **Performance Warning Generation**: `compute_select_warnings()` analyzes cached
+//!    analysis fields to generate performance warnings such as:
+//!    - `SELECT *` on real tables
+//!    - Missing WHERE clause without LIMIT
+//!    - Leading wildcard LIKE patterns (prevents index usage)
+//!    - Complex joins (3+ tables)
+//!
+//! # Permission System Integration
+//!
+//! The classifier supports fine-grained permission checks through `all_target_schemas`:
+//!
+//! - **Single-table statements**: Most statements reference one schema, stored in both
+//!   `target_schema` and `all_target_schemas[0]`.
+//!
+//! - **Multi-table statements**: Multi-table UPDATE and DELETE statements can reference
+//!   multiple schemas (e.g., `UPDATE db1.t1 JOIN db2.t2 ...`). The classifier collects
+//!   all distinct schemas into `all_target_schemas` for comprehensive permission validation.
+//!
+//! - **Unsupported statements**: Certain statement types are explicitly rejected with
+//!   descriptive error messages:
+//!   - CTEs (WITH clauses) - complex rewriting required
+//!   - SELECT FOR UPDATE/SHARE - row locking not supported
+//!   - Transaction control (BEGIN/COMMIT/ROLLBACK) - auto-managed transactions
+//!   - Privilege statements (GRANT/REVOKE) - security restriction
+//!
+//! # Safety and Limits
+//!
+//! - **Recursion Depth**: `collect_where_info()` enforces a `MAX_WHERE_DEPTH` (100)
+//!   to prevent stack overflow or excessive CPU usage on adversarial deeply-nested
+//!   WHERE clauses.
+//!
+//! - **Statement Validation**: The classifier validates extracted identifiers but
+//!   relies on the upstream SQL parser (sqlparser-rs) for syntax correctness.
+//!
+//! # Key Functions
+//!
+//! - [`classify_statement()`] - Main entry point, performs full AST analysis
+//! - [`collect_where_info()`] - Recursive WHERE clause analyzer
+//! - [`compute_select_warnings()`] - Performance warning generator
+//! - [`extract_schema_from_object_name()`] - Schema name extractor
+//! - [`extract_first_from_table_name()`] - Primary table name from SELECT
+//!
 use anyhow::Result;
 use sqlparser::ast::{
     Expr, FromTable, ObjectName, Query, Select, SelectItem, SetExpr, Statement, TableFactor, Use,

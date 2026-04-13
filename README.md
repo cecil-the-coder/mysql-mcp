@@ -141,6 +141,8 @@ A `.env` file in the working directory is loaded automatically if present.
 
 ## Configuration Reference
 
+**Note:** Environment variables take precedence over TOML configuration file values. If a setting is defined in both places, the environment variable value wins.
+
 ### Connection
 
 | TOML key | Environment variable | Type | Default | Description |
@@ -392,8 +394,9 @@ Create a named session to a different MySQL server or database. Requires `MYSQL_
 | `port` | integer | no | MySQL port (default: 3306) |
 | `password` | string | no | MySQL password |
 | `database` | string | no | Default database for the session |
-| `ssl` | boolean | no | Enable SSL/TLS |
-| `ssl_ca` | string | no | Path to PEM CA certificate file |
+| `ssl` | boolean | no | Enable SSL/TLS (default: false). When true without `ssl_ca`, uses VerifyIdentity mode (validates server certificate and hostname). |
+| `ssl_ca` | string | no | Path to PEM CA certificate file. When set (with `ssl=true`), uses VerifyCa mode (validates cert chain without hostname check). Requires `ssl=true`. |
+| `ssl_accept_invalid_certs` | boolean | no | Skip certificate validation (not for production). When true with `ssl=true`, uses Required mode (encrypted but unverified). |
 | `ssh_host` | string | no | SSH bastion hostname (enables SSH tunneling) |
 | `ssh_port` | integer | no | SSH port (default: 22) |
 | `ssh_user` | string | no | SSH username (required when `ssh_host` is set) |
@@ -499,6 +502,16 @@ MYSQL_SSL_CA=/path/to/ca.pem         # VerifyCa mode (validates cert chain)
 # For self-signed certs only — do not use in production:
 MYSQL_SSL_ACCEPT_INVALID_CERTS=true
 ```
+
+### SSL/TLS Troubleshooting
+
+| Error | Fix |
+|-------|-----|
+| `unable to get local issuer certificate` / `certificate verify failed` | Verify `MYSQL_SSL_CA` points to the correct CA bundle; use `MYSQL_SSL_ACCEPT_INVALID_CERTS=true` for self-signed certs (development only) |
+| `SSL connection error: unknown error number` | Check the MySQL server supports TLS 1.2+; verify `MYSQL_SSL_CA` file exists and is readable |
+| `SSL CA file not found` | Ensure the path in `MYSQL_SSL_CA` is absolute and the file exists; check file permissions |
+| Self-signed certificate rejected | Either set `MYSQL_SSL_ACCEPT_INVALID_CERTS=true` (insecure, development only) or add the self-signed cert to your system's trust store |
+| `Bad handshake` / TLS version mismatch | Ensure client and server support compatible TLS versions; MySQL 8.0 defaults to TLS 1.2+ which may reject older clients |
 
 ---
 

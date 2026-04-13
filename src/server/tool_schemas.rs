@@ -1,12 +1,58 @@
+//! JSON schemas for MCP tools and response serialization.
+//!
+//! This module defines the input JSON schemas for all MySQL MCP tools, along with
+//! utilities for serializing responses. These schemas define the structure and
+//! validation rules for tool parameters that clients (like AI assistants) provide
+//! when invoking MCP tools.
+//!
+//! ## Adding a New Tool Schema
+//!
+//! To add a new MCP tool with a custom input schema:
+//!
+//! 1. Define a new schema function in this module that returns
+//!    `Arc<serde_json::Map<String, serde_json::Value>>`
+//! 2. Use `rmcp::model::object()` to create the schema object
+//! 3. Define the JSON schema with `type`, `properties`, `required`, etc.
+//! 4. Register the tool in [`crate::server::ServerHandler::list_tools`]
+//! 5. Implement the handler in [`handlers`](super::handlers) or [`sessions`](super::sessions)
+//!
+//! ### Example Schema Function
+//!
+//! ```rust,ignore
+//! pub(crate) fn my_new_tool_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
+//!     Arc::new(rmcp::model::object(json!({
+//!         "type": "object",
+//!         "properties": {
+//!             "param_name": {
+//!                 "type": "string",
+//!                 "description": "Description of the parameter"
+//!             },
+//!             "optional_param": {
+//!                 "type": "integer",
+//!                 "description": "An optional parameter",
+//!                 "minimum": 1
+//!             }
+//!         },
+//!         "required": ["param_name"]
+//!     })))
+//! }
+//! ```
+//!
+//! ## Response Serialization
+//!
+//! Use [`serialize_response`] to convert a [`serde_json::Value`] into a
+//! [`CallToolResult`](rmcp::model::CallToolResult) with pretty-printed JSON text.
+//! This ensures consistent formatting across all tool responses.
+
 use rmcp::model::Content;
 use serde_json::json;
 use std::sync::Arc;
 
-// ============================================================
-// Tool input schemas
-// Each function builds and returns the JSON schema for its tool.
-// ============================================================
-
+/// Returns the JSON input schema for the `mysql_query` tool.
+///
+/// This tool executes SQL queries and supports an optional `session` parameter
+/// for routing queries to named connections, plus an `explain` flag for
+/// performance analysis.
 pub(crate) fn mysql_query_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
     Arc::new(rmcp::model::object(json!({
         "type": "object",
@@ -28,6 +74,10 @@ pub(crate) fn mysql_query_schema() -> Arc<serde_json::Map<String, serde_json::Va
     })))
 }
 
+/// Returns the JSON input schema for the `mysql_schema_info` tool.
+///
+/// This tool retrieves schema metadata for a table, including columns,
+/// indexes, foreign keys, and size information based on the `include` parameter.
 pub(crate) fn mysql_schema_info_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
     Arc::new(rmcp::model::object(json!({
         "type": "object",
@@ -48,6 +98,10 @@ pub(crate) fn mysql_schema_info_schema() -> Arc<serde_json::Map<String, serde_js
     })))
 }
 
+/// Returns the JSON input schema for the `mysql_server_info` tool.
+///
+/// This tool retrieves server metadata such as version, configuration,
+/// and current status for the specified session.
 pub(crate) fn mysql_server_info_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
     Arc::new(rmcp::model::object(json!({
         "type": "object",
@@ -58,6 +112,10 @@ pub(crate) fn mysql_server_info_schema() -> Arc<serde_json::Map<String, serde_js
     })))
 }
 
+/// Returns the JSON input schema for the `mysql_connect` tool.
+///
+/// This tool creates a named session with MySQL connection parameters.
+/// Supports direct connections as well as SSH tunneling options.
 pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
     Arc::new(rmcp::model::object(json!({
         "type": "object",
@@ -68,8 +126,8 @@ pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::
             "user": { "type": "string", "description": "MySQL username" },
             "password": { "type": "string", "description": "MySQL password (optional; use empty string for passwordless login)." },
             "database": { "type": "string", "description": "Default database for this session (optional; passed via connection string)." },
-            "ssl": { "type": "boolean", "description": "Enable SSL/TLS (default: false). When true and ssl_ca is omitted, uses VerifyIdentity mode (full cert+hostname check)." },
-            "ssl_ca": { "type": "string", "description": "Path to PEM CA certificate file for SSL verification. When set, uses VerifyCa mode (validates cert chain without hostname check)." },
+            "ssl": { "type": "boolean", "description": "Enable SSL/TLS (default: false). When enabled: ssl=true alone uses VerifyIdentity mode (full certificate and hostname verification against system trust store); ssl=true + ssl_ca uses VerifyCa mode (validates certificate chain against the provided CA file without hostname verification)." },
+            "ssl_ca": { "type": "string", "description": "Path to PEM CA certificate file for SSL verification. When set alongside ssl=true, uses VerifyCa mode (validates certificate chain against this CA without hostname verification). When omitted with ssl=true, uses system trust store with full hostname verification (VerifyIdentity mode)." },
             "ssh_host": {
                 "type": "string",
                 "description": "SSH bastion hostname. When provided, the connection is made through an SSH tunnel via this host."
@@ -104,6 +162,9 @@ pub(crate) fn mysql_connect_schema() -> Arc<serde_json::Map<String, serde_json::
     })))
 }
 
+/// Returns the JSON input schema for the `mysql_disconnect` tool.
+///
+/// This tool closes a named session created via `mysql_connect`.
 pub(crate) fn mysql_disconnect_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
     Arc::new(rmcp::model::object(json!({
         "type": "object",
@@ -114,6 +175,10 @@ pub(crate) fn mysql_disconnect_schema() -> Arc<serde_json::Map<String, serde_jso
     })))
 }
 
+/// Returns the JSON input schema for the `mysql_list_sessions` tool.
+///
+/// This tool returns a list of all active sessions, including both the
+/// default session and any named sessions created via `mysql_connect`.
 pub(crate) fn mysql_list_sessions_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
     Arc::new(rmcp::model::object(json!({
         "type": "object",
@@ -122,6 +187,10 @@ pub(crate) fn mysql_list_sessions_schema() -> Arc<serde_json::Map<String, serde_
     })))
 }
 
+/// Returns the JSON input schema for the `mysql_explain_plan` tool.
+///
+/// This tool generates an execution plan for a SELECT statement,
+/// helping analyze query performance before execution.
 pub(crate) fn mysql_explain_plan_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
     Arc::new(rmcp::model::object(json!({
         "type": "object",
@@ -139,6 +208,10 @@ pub(crate) fn mysql_explain_plan_schema() -> Arc<serde_json::Map<String, serde_j
     })))
 }
 
+/// Returns the JSON input schema for the `mysql_list_tables` tool.
+///
+/// This tool lists all tables in a database. If no database is specified,
+/// it uses the current database for the session.
 pub(crate) fn mysql_list_tables_schema() -> Arc<serde_json::Map<String, serde_json::Value>> {
     Arc::new(rmcp::model::object(json!({
         "type": "object",

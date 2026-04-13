@@ -421,8 +421,35 @@ impl ServerHandler for McpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Use mysql_query to execute SQL queries against the connected MySQL database."
-                    .to_string(),
+                concat!(
+                    "You are connected to a MySQL database via the Model Context Protocol. ",
+                    "Available tools and recommended workflows:",
+                    "\n\n",
+                    "1. INITIAL SETUP: Use mysql_server_info to check the MySQL version, ",
+                    "current database, user permissions, and which features are enabled. ",
+                    "This helps you understand what operations are allowed and the environment context.",
+                    "\n\n",
+                    "2. SCHEMA DISCOVERY: Before querying unknown tables, use mysql_list_tables ",
+                    "to see available tables, then use mysql_schema_info to inspect table structure, ",
+                    "columns, indexes, foreign keys, and table sizes. This helps write correct queries ",
+                    "and understand relationships.",
+                    "\n\n",
+                    "3. QUERY PLANNING: For complex or potentially expensive queries, use mysql_explain_plan ",
+                    "to check the execution plan before running. This shows if indexes will be used, ",
+                    "estimated rows to scan, and whether a full table scan will occur.",
+                    "\n\n",
+                    "4. EXECUTION: Use mysql_query to run SELECT, INSERT, UPDATE, DELETE, or DDL statements. ",
+                    "The query tool returns results, timing, and may include warnings about missing LIMITs ",
+                    "or full table scans. Enable explain:true for automatic execution plan inclusion.",
+                    "\n\n",
+                    "5. SESSION MANAGEMENT: Use mysql_connect to create named sessions for different ",
+                    "databases or hosts (requires MYSQL_ALLOW_RUNTIME_CONNECTIONS). Use mysql_list_sessions ",
+                    "to see active sessions and mysql_disconnect to close unused ones. Idle sessions ",
+                    "are automatically cleaned up after 10 minutes.",
+                    "\n\n",
+                    "RECOMMENDED WORKFLOW: server_info → list_tables → schema_info → (explain_plan for expensive queries) → mysql_query"
+                )
+                .to_string(),
             ),
         }
     }
