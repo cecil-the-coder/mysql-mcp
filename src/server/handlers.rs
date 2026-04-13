@@ -170,7 +170,7 @@ impl SessionStore {
                         tracing::debug!("Failed to get read_only as integer: {}", e);
                         // Fallback: try as string for edge cases
                         row.try_get::<String, _>("read_only")
-                            .map(|s| s.to_uppercase() == "ON" || s == "1")
+                            .map(|s| s.eq_ignore_ascii_case("ON") || s == "1")
                             .unwrap_or(false)
                     }
                 };
@@ -593,11 +593,11 @@ mod tests {
         // Verify it's an error response (CallToolResult with is_error=Some(true))
         assert_eq!(err.is_error, Some(true));
         // Verify error message contains expected text
-        let text = err.content[0].raw.as_text();
+        let text = err.content.get(0).and_then(|c| c.raw.as_text());
         assert!(
             text.is_some(),
             "expected text content in error response, got: {:?}",
-            err.content[0].raw
+            err.content.get(0).map(|c| &c.raw)
         );
         let text = text.unwrap();
         assert!(text.text.contains("SQL cannot be empty"));
@@ -612,11 +612,11 @@ mod tests {
         let err = result.unwrap_err();
         assert_eq!(err.is_error, Some(true));
         // Verify error message mentions size limit
-        let text = err.content[0].raw.as_text();
+        let text = err.content.get(0).and_then(|c| c.raw.as_text());
         assert!(
             text.is_some(),
             "expected text content in error response, got: {:?}",
-            err.content[0].raw
+            err.content.get(0).map(|c| &c.raw)
         );
         let text = text.unwrap();
         assert!(text.text.contains("exceeds maximum size"));

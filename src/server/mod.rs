@@ -208,8 +208,14 @@ impl McpServer {
                     for name in stale_names {
                         if let Some(session) = map.remove(&name) {
                             // Decrement total connections counter for reaped session
-                            reaper_total_connections
-                                .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::AcqRel);
+                            // Use saturating_sub to prevent underflow in edge cases
+                            let _ = reaper_total_connections.fetch_update(
+                                Ordering::AcqRel,
+                                Ordering::Acquire,
+                                |current| {
+                                    Some(current.saturating_sub(sessions::NAMED_SESSION_POOL_SIZE))
+                                },
+                            );
                             reaped.push(session);
                         }
                     }

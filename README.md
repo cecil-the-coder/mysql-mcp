@@ -149,15 +149,47 @@ allow_update = false
 Configuration is loaded in this order (highest priority wins):
 1. Environment variables
 2. TOML config file (`mysql-mcp.toml` or `$MCP_CONFIG_FILE`)
-3. Built-in defaults
+3. `.env` file
+4. Built-in defaults
 
-A `.env` file in the working directory is loaded automatically if present.
+---
+
+## Environment Variables via `.env` Files
+
+A `.env` file in the working directory is loaded automatically if present. This provides a convenient way to set environment variables without exporting them in your shell or including them in your Claude Desktop configuration.
+
+The `.env` file has lower precedence than a TOML config file. If the same setting is defined in both the `.env` file and the TOML config, the TOML value wins.
+
+### Example `.env` file
+
+```bash
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+MYSQL_USER=myuser
+MYSQL_PASS=mypassword
+MYSQL_DB=mydatabase
+
+MYSQL_POOL_SIZE=20
+MYSQL_MAX_ROWS=1000
+MYSQL_PERFORMANCE_HINTS=auto
+
+MYSQL_ALLOW_INSERT=false
+MYSQL_ALLOW_UPDATE=false
+MYSQL_ALLOW_DELETE=false
+MYSQL_ALLOW_DDL=false
+```
 
 ---
 
 ## Configuration Reference
 
-**Note:** Environment variables take precedence over TOML configuration file values. If a setting is defined in both places, the environment variable value wins.
+**Note:** Configuration is loaded in this order (highest priority wins):
+1. Environment variables (highest)
+2. TOML config file (`mysql-mcp.toml` or `$MCP_CONFIG_FILE`)
+3. `.env` file
+4. Built-in defaults (lowest)
+
+If a setting is defined in multiple places, the higher priority source wins.
 
 ### Connection
 

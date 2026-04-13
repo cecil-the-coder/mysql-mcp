@@ -95,9 +95,18 @@ mod write_tests {
         let insert_wall = insert_ms.iter().sum::<f64>();
         let update_wall = update_ms.iter().sum::<f64>();
         let delete_wall = delete_ms.iter().sum::<f64>();
-        print(&format!("INSERT (n={N})"), &compute(insert_ms, insert_wall));
-        print(&format!("UPDATE (n={N})"), &compute(update_ms, update_wall));
-        print(&format!("DELETE (n={N})"), &compute(delete_ms, delete_wall));
+        print(
+            &format!("INSERT (n={N})"),
+            &compute(insert_ms, insert_wall).expect("samples should not be empty"),
+        );
+        print(
+            &format!("UPDATE (n={N})"),
+            &compute(update_ms, update_wall).expect("samples should not be empty"),
+        );
+        print(
+            &format!("DELETE (n={N})"),
+            &compute(delete_ms, delete_wall).expect("samples should not be empty"),
+        );
     }
 
     /// Schema introspection: cold (TTL=0) vs warm (TTL=60s) cache.
@@ -144,8 +153,8 @@ mod write_tests {
 
         let cold_wall = cold_ms.iter().sum::<f64>();
         let warm_wall = warm_ms.iter().sum::<f64>();
-        let cold_stats = compute(cold_ms, cold_wall);
-        let warm_stats = compute(warm_ms, warm_wall);
+        let cold_stats = compute(cold_ms, cold_wall).expect("samples should not be empty");
+        let warm_stats = compute(warm_ms, warm_wall).expect("samples should not be empty");
 
         print("Schema list_tables — COLD (TTL=0, n=20)", &cold_stats);
         print(
@@ -235,7 +244,8 @@ mod write_tests {
         while let Some(r) = set.join_next().await {
             all.extend(r.unwrap());
         }
-        let stats = compute(all, wall.elapsed().as_secs_f64() * 1000.0);
+        let stats = compute(all, wall.elapsed().as_secs_f64() * 1000.0)
+            .expect("samples should not be empty");
         print(
             &format!(
                 "Pool saturation (pool_size=3, concurrency={CONCURRENCY}, n={})",
@@ -317,8 +327,8 @@ mod write_tests {
         }
         let wall_without_ms = wall_without.elapsed().as_secs_f64() * 1000.0;
 
-        let with_stats = compute(with_tx_ms, wall_with_ms);
-        let no_stats = compute(no_tx_ms, wall_without_ms);
+        let with_stats = compute(with_tx_ms, wall_with_ms).expect("samples should not be empty");
+        let no_stats = compute(no_tx_ms, wall_without_ms).expect("samples should not be empty");
 
         print(
             &format!("SELECT 1 — WITH transaction (4-RTT, n={N})"),

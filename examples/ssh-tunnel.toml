@@ -1,0 +1,128 @@
+# SSH Tunnel Configuration Example
+# ================================
+# This configuration demonstrates how to connect to a MySQL database through
+# an SSH tunnel (also known as a bastion host or jump host). This is essential
+# when the database is in a private network not directly accessible from the
+# machine running mysql-mcp (common in cloud VPCs and corporate networks).
+#
+# NETWORK TOPOLOGY:
+#   [mysql-mcp] --> SSH tunnel --> [bastion host] --> [MySQL database]
+#                           (22)                    (3306)
+#
+# PREREQUISITES:
+#   - SSH access to the bastion host
+#   - Private key file with appropriate permissions (600) OR SSH agent
+#   - The bastion host can reach the MySQL database on port 3306
+#
+# SECURITY HIGHLIGHTS:
+# - Host key verification prevents MITM attacks on the SSH connection
+# - Private key permissions are validated (must be 600 or 400)
+# - Known hosts file integrity is checked in strict mode
+
+[connection]
+# MySQL connection details (from perspective of the bastion host)
+# The SSH tunnel forwards local traffic to the remote database
+host = "db.internal.vpc"      # Hostname resolvable from the bastion host
+port = 3306
+user = "app_user"
+password = "${MYSQL_PASSWORD}"  # Use environment variable for security
+database = "app_production"
+
+[pool]
+# Standard production pool settings
+size = 20
+query_timeout_ms = 30000
+connect_timeout_ms = 10000
+
+# Longer cache TTL is appropriate for stable production databases
+cache_ttl_secs = 300
+
+max_rows = 1000
+retry_attempts = 2
+
+[security]
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🔒 SECURITY SETTINGS FOR TUNNELED CONNECTION
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# These settings should be conservative since the connection traverses
+# multiple network hops and potentially hostile networks.
+
+# Read-only production access (adjust based on your use case)
+allow_insert = false
+allow_update = false
+allow_delete = false
+allow_ddl = false
+
+# SSL through the tunnel provides defense-in-depth
+# Even though SSH provides encryption, MySQL SSL adds an additional layer
+ssl = true
+
+# Runtime connections combined with SSH tunnels require extra scrutiny
+# When enabled, arbitrary SSH tunnels could be created - ensure your
+# SSH configuration on the bastion host restricts port forwarding appropriately
+allow_runtime_connections = false
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🔐 SSH TUNNEL CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# This section configures the SSH tunnel to the bastion host.
+# The tunnel transparently forwards MySQL traffic through the encrypted SSH connection.
+
+[ssh]
+# Bastion / jump host configuration
+# This is the host you SSH into, which then forwards traffic to the database
+host = "bastion.example.com"  # Or IP address: "203.0.113.10"
+port = 22                     # SSH port (change if your bastion uses non-standard port)
+user = "tunneluser"           # SSH username on the bastion host
+
+# Authentication: Private key file (one of private_key or use_agent must be configured)
+# Security: File MUST have restrictive permissions (600 or 400).
+# The server will refuse to use keys with overly permissive permissions.
+private_key = "/home/user/.ssh/id_rsa_tunnel"
+
+# Alternative: Use SSH agent for authentication
+# Uncomment the line below and remove/comment private_key to use agent authentication
+# Security: Ensure your SSH agent is properly secured and locked when not in use
+# use_agent = true
+
+# Host key verification mode (default: "strict")
+#   "strict"     - Most secure. Only connect to hosts with known, verified host keys.
+#                  Pre-populate known_hosts with: ssh-keyscan bastion.example.com >> ~/.ssh/known_hosts
+#                  Failure to verify will result in connection errors.
+#   "accept-new" - Automatically accept new host keys on first connection, verify known ones.
+#                  Convenient but slightly less secure - vulnerable to first-connection MITM.
+#   "insecure"   - Skip all host key verification (NOT RECOMMENDED)
+#                  Vulnerable to MITM attacks - only use in isolated test environments.
+#                  CANNOT be combined with allow_runtime_connections = true (will error).
+known_hosts_check = "strict"
+
+# Path to known_hosts file (default: ~/.ssh/known_hosts)
+# In strict mode, this file must exist and contain the bastion's host key.
+# Security: File must not be writable by group or others in strict mode.
+# known_hosts_file = "/home/user/.ssh/known_hosts"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📋 SSH SETUP CHECKLIST
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Before using this configuration, verify:
+#
+# 1. Private key permissions are correct:
+#    ls -la /home/user/.ssh/id_rsa_tunnel
+#    # Should show: -rw------- (600)
+#    # If not: chmod 600 /home/user/.ssh/id_rsa_tunnel
+#
+# 2. Bastion host key is in known_hosts (for strict mode):
+#    ssh-keyscan -H bastion.example.com >> ~/.ssh/known_hosts
+#
+# 3. Direct SSH connection works:
+#    ssh -i /home/user/.ssh/id_rsa_tunnel tunneluser@bastion.example.com
+#
+# 4. From the bastion, verify MySQL connectivity:
+#    ssh -i /home/user/.ssh/id_rsa_tunnel tunneluser@bastion.example.com
+#    mysql -h db.internal.vpc -u app_user -p
+#
+# 5. Environment variable for password is set:
+#    export MYSQL_PASSWORD="your_secure_password"

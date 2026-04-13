@@ -123,7 +123,7 @@ pub fn check_permission(
             _ if name.starts_with("Load") => {
                 "LOAD DATA is not supported. Use INSERT statements to load data".to_string()
             }
-            _ => format!("Unsupported statement type: {name}. Supported types: SELECT, SHOW, EXPLAIN, INSERT, UPDATE, DELETE, CREATE (TABLE/DATABASE/INDEX), ALTER, DROP, TRUNCATE, USE, SET"),
+            _ => format!("Unsupported statement type: {:?}. Supported types: SELECT, SHOW, EXPLAIN, INSERT, UPDATE, DELETE, CREATE (TABLE/DATABASE/INDEX), ALTER, DROP, TRUNCATE, USE, SET", name),
         };
         bail!("{}", hint);
     }
