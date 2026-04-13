@@ -1,3 +1,84 @@
+//! MCP (Model Context Protocol) server implementation for MySQL.
+//!
+//! This module serves as the primary entry point for the MySQL MCP server,
+//! implementing the MCP protocol to expose MySQL databases via standardized
+//! tool interfaces.
+//!
+//! # Architecture Overview
+//!
+//! The server acts as a bridge between the MCP protocol layer (via the `rmcp` crate)
+//! and MySQL database operations. It coordinates several subsystems:
+//!
+//! - **Tool handlers** ([`handlers`]): Implement the actual MCP tools like `mysql_query`,
+//!   `mysql_schema_info`, `mysql_connect`, etc. These handlers parse input parameters,
+//!   validate permissions, execute database operations, and serialize responses.
+//!
+//! - **Session management** ([`sessions`]): Manages both the default connection
+//!   (configured at startup) and named sessions created at runtime. Sessions support
+//!   SSH tunneling for secure access through bastion hosts, with automatic cleanup
+//!   of idle sessions via a background reaper task.
+//!
+//! - **Database connection pool** ([`crate::db`]): Provides the underlying MySQL
+//!   connection pools used by both the default session and named sessions.
+//!
+//! - **Schema introspection** ([`crate::schema`]): Caches and provides metadata about
+//!   database tables, indexes, and foreign keys for schema-aware operations.
+//!
+//! # The [`McpServer`] Struct
+//!
+//! [`McpServer`] is the core server type that implements the [`rmcp::ServerHandler`]
+//! trait. It handles MCP protocol requests including:
+//!
+//! - **Server info**: Returns server capabilities and metadata
+//! - **Tool listing**: Advertises available MySQL tools (`mysql_query`, `mysql_connect`, etc.)
+//! - **Tool invocation**: Routes incoming tool calls to the appropriate handlers
+//!
+//! The struct holds:
+//! - Configuration ([`Config`]) for security settings and pool parameters
+//! - The default database connection pool ([`sqlx::MySqlPool`])
+//! - A schema introspector for metadata caching
+//! - A [`SessionStore`] for managing named sessions
+//! - A background reaper task that cleans up idle sessions after 10 minutes
+//!
+//! # Security Features
+//!
+//! The server includes several security mechanisms:
+//!
+//! - **Host validation**: Validates hostnames via DNS resolution, blocking loopback,
+//!   link-local, multicast, and other private IP ranges to prevent SSRF attacks.
+//!   See [`validate_host_with_dns`] and [`is_blocked_ip`].
+//!
+//! - **Permission checking**: Enforces configurable restrictions on SQL statement
+//!   types (INSERT, UPDATE, DELETE, DDL) via [`crate::permissions`].
+//!
+//! - **Connection limits**: Enforces maximum session counts and total connection
+//!   limits to prevent resource exhaustion.
+//!
+//! - **Identifier validation**: Ensures session names and database names contain
+//!   only safe characters (alphanumeric and underscores).
+//!
+//! # Example Usage
+//!
+//! ```rust,no_run
+//! use std::sync::Arc;
+//! use mysql_mcp::config::Config;
+//! use mysql_mcp::server::McpServer;
+//!
+//! async fn start_server() -> anyhow::Result<()> {
+//!     let config = Arc::new(Config::from_env()?);
+//!     let db = Arc::new(sqlx::MySqlPool::connect("...").await?);
+//!     let server = McpServer::new(config, db, None);
+//!     server.run().await
+//! }
+//! ```
+//!
+//! # Module Structure
+//!
+//! - [`error`]: Error response formatting and the `tool_error!` macro
+//! - [`handlers`]: MCP tool handler implementations
+//! - [`sessions`]: Named session management and lifecycle
+//! - [`tool_schemas`]: JSON schemas for tool input validation
+
 use anyhow::Result;
 use rmcp::{
     model::{
@@ -27,9 +108,19 @@ use sessions::SessionStore;
 use tool_schemas::*;
 
 /// Check if an IP address is in a blocked range.
+///
+/// This function is used for SSRF prevention by blocking potentially dangerous
+/// IP address ranges that could be used to access internal services.
+///
 /// When `allow_loopback` is true, loopback addresses are permitted (for hostname
 /// resolution where localhost is legitimate). When false, loopback is blocked
 /// (for direct IP connections).
+///
+/// # Blocked ranges
+///
+/// - IPv4: link-local (169.254.0.0/16), broadcast, unspecified (0.0.0.0), multicast
+/// - IPv6: link-local (fe80::/10), unspecified (::), multicast
+/// - IPv4-mapped IPv6 addresses are checked as IPv4
 fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
     match ip {
         IpAddr::V4(v4) => {
@@ -63,12 +154,33 @@ fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
 }
 
 /// Result of host validation with DNS resolution.
+///
+/// Returned by [`validate_host_with_dns`] to indicate whether a host is allowed
+/// and optionally provide a reason for blocking.
 pub(crate) struct HostValidation {
+    /// Whether the host is allowed for connections
     pub(crate) allowed: bool,
+    /// Optional human-readable reason when the host is blocked
     pub(crate) reason: Option<String>,
 }
 
 /// Validate a host string, resolving hostnames via DNS.
+///
+/// This function performs SSRF-safe host validation:
+/// 1. For literal IP addresses: checks against blocked ranges directly
+/// 2. For hostnames: resolves via DNS with a 5-second timeout, then validates
+///    all returned IP addresses
+///
+/// Loopback addresses are allowed for hostnames (to support "localhost" resolution)
+/// but blocked for direct IP connections.
+///
+/// # Arguments
+///
+/// - `host`: The host string to validate (IP address or hostname)
+///
+/// # Returns
+///
+/// A [`HostValidation`] indicating whether the host is allowed and why not if blocked.
 pub(crate) async fn validate_host_with_dns(host: &str) -> HostValidation {
     // Fast path: literal IP address (no DNS lookup needed)
     if let Ok(ip) = host.parse::<IpAddr>() {
@@ -147,6 +259,21 @@ fn is_private_host(host: &str) -> bool {
     }
 }
 
+/// The main MCP server that handles protocol requests and coordinates MySQL operations.
+///
+/// This struct implements [`rmcp::ServerHandler`] to serve as the MCP protocol endpoint.
+/// It manages the default database connection, named sessions, and routes tool calls
+/// to the appropriate handlers.
+///
+/// # Fields
+///
+/// - `config`: Server configuration including security settings, pool parameters, and
+///   connection limits
+/// - `db`: The default database connection pool used when no session is specified
+/// - `introspector`: Schema introspector for caching table metadata
+/// - `store`: Manages named sessions and their lifecycle
+/// - `_default_tunnel`: Optional SSH tunnel handle for the default connection
+/// - `_shutdown_tx`: Signals the session reaper task to shut down when the server drops
 pub struct McpServer {
     pub config: Arc<Config>,
     pub db: Arc<sqlx::MySqlPool>,
@@ -160,6 +287,24 @@ pub struct McpServer {
 }
 
 impl McpServer {
+    /// Creates a new MCP server instance with the given configuration and database pool.
+    ///
+    /// This initializes:
+    /// - A schema introspector for caching table metadata
+    /// - An empty session store for named sessions
+    /// - A background reaper task that periodically cleans up idle sessions (after 10 minutes)
+    ///
+    /// # Arguments
+    ///
+    /// - `config`: Server configuration (connection settings, security, pool parameters)
+    /// - `db`: The default database connection pool
+    /// - `tunnel`: Optional SSH tunnel handle for the default connection
+    ///
+    /// # Session Reaper
+    ///
+    /// The server spawns a background task that runs every 60 seconds to detect and
+    /// clean up named sessions that have been idle for more than 10 minutes. This task
+    /// gracefully shuts down when the server is dropped.
     pub fn new(
         config: Arc<Config>,
         db: Arc<sqlx::MySqlPool>,
@@ -243,6 +388,16 @@ impl McpServer {
         }
     }
 
+    /// Runs the MCP server over stdio transport.
+    ///
+    /// This method starts the server and blocks until the MCP protocol connection
+    /// closes (e.g., when the client disconnects). It uses stdio for communication,
+    /// making it suitable for use as a subprocess in MCP hosts.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transport fails to initialize or if there's an
+    /// unrecoverable protocol error during operation.
     pub async fn run(self) -> Result<()> {
         let service = self.serve(stdio()).await?;
         service.waiting().await?;
