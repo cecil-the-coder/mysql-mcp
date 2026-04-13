@@ -50,6 +50,34 @@ const POOL_IDLE_TIMEOUT_SECS: u64 = 300;
 /// Maximum lifetime of any pooled connection before it is recycled.
 const POOL_MAX_LIFETIME_SECS: u64 = 1800;
 
+/// Creates the main connection pool from configuration.
+///
+/// This function builds a connection pool suitable for general application use,
+/// using the pool size and timeout settings from the configuration. The pool
+/// supports TCP connections, Unix sockets, or connection strings depending on
+/// what's configured.
+///
+/// # Arguments
+///
+/// * `config` - The application configuration containing connection details,
+///   pool settings, and security options.
+///
+/// # Returns
+///
+/// A `Result` containing the configured `MySqlPool` on success, or an error
+/// if the pool creation fails (e.g., invalid connection string, network issues).
+///
+/// # Examples
+///
+/// ```ignore
+/// use mysql_mcp::config::Config;
+/// use mysql_mcp::db::build_pool;
+///
+/// async fn example(config: &Config) -> anyhow::Result<sqlx::MySqlPool> {
+///     let pool = build_pool(config).await?;
+///     Ok(pool)
+/// }
+/// ```
 pub async fn build_pool(config: &Config) -> Result<MySqlPool> {
     let connect_options =
         build_connect_options(config)?.statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
@@ -65,7 +93,48 @@ pub async fn build_pool(config: &Config) -> Result<MySqlPool> {
     .await
 }
 
-/// Build a small pool (max 5) for a named session from raw connection fields.
+/// Build a small pool (max 5 connections) for a named session from raw connection fields.
+///
+/// This is useful for creating temporary pools for specific database sessions or
+/// interactive operations where a full-sized pool is not needed. The pool has
+/// a hardcoded maximum of 5 connections to limit resource usage.
+///
+/// # Arguments
+///
+/// * `host` - The database server hostname or IP address.
+/// * `port` - The database server port (typically 3306 for MySQL).
+/// * `user` - The database username.
+/// * `password` - The database password.
+/// * `database` - Optional database name to connect to.
+/// * `ssl` - Whether to enable SSL/TLS encryption.
+/// * `ssl_accept_invalid_certs` - If true, accept invalid certificates (less secure).
+/// * `ssl_ca` - Optional path to a CA certificate file for certificate validation.
+/// * `connect_timeout_ms` - Connection timeout in milliseconds.
+///
+/// # Returns
+///
+/// A `Result` containing a small `MySqlPool` (max 5 connections) on success.
+///
+/// # Examples
+///
+/// ```ignore
+/// use mysql_mcp::db::build_session_pool;
+///
+/// async fn example() -> anyhow::Result<sqlx::MySqlPool> {
+///     let pool = build_session_pool(
+///         "localhost",
+///         3306,
+///         "root",
+///         "password",
+///         Some("mydb"),
+///         true,   // ssl enabled
+///         false,  // strict cert validation
+///         None,   // no custom CA
+///         5000,   // 5 second timeout
+///     ).await?;
+///     Ok(pool)
+/// }
+/// ```
 #[allow(clippy::too_many_arguments)]
 pub async fn build_session_pool(
     host: &str,
@@ -187,9 +256,44 @@ async fn build_pool_tunneled(
 }
 
 /// Build a connection pool through an SSH tunnel.
-/// Spawns the SSH subprocess, waits for it to be ready, then connects sqlx through it.
-/// Returns both the pool and the tunnel handle — the caller must keep the handle alive
-/// for the duration the pool is in use.
+///
+/// Spawns an SSH subprocess to create a tunnel, waits for it to be ready,
+/// then creates a connection pool that connects through the tunnel to the
+/// database. This allows secure access to databases behind bastion hosts.
+///
+/// # Arguments
+///
+/// * `config` - The application configuration containing connection details,
+///   pool settings, and security options.
+/// * `ssh` - SSH configuration for the bastion host (host, port, user, key, etc.).
+///
+/// # Returns
+///
+/// A `Result` containing a tuple of:
+/// * A `MySqlPool` connected through the tunnel
+/// * A `TunnelHandle` that must be kept alive to maintain the SSH tunnel
+///
+/// # Note
+///
+/// The caller must keep the returned tunnel handle alive for the duration
+/// the pool is in use. When the tunnel handle is dropped, the SSH tunnel
+/// will be closed and the pool connections will fail.
+///
+/// SSL `VerifyIdentity` mode is automatically downgraded to `Required` when
+/// using an SSH tunnel, because hostname verification cannot work when
+/// connecting to `127.0.0.1` (the local tunnel endpoint).
+///
+/// # Examples
+///
+/// ```ignore
+/// use mysql_mcp::config::{Config, SshConfig};
+/// use mysql_mcp::db::build_pool_and_tunnel;
+///
+/// async fn example(config: &Config, ssh: &SshConfig) -> anyhow::Result<(sqlx::MySqlPool, mysql_mcp::tunnel::TunnelHandle)> {
+///     let (pool, tunnel) = build_pool_and_tunnel(config, ssh).await?;
+///     Ok((pool, tunnel))
+/// }
+/// ```
 pub async fn build_pool_and_tunnel(
     config: &Config,
     ssh: &crate::config::SshConfig,
@@ -201,9 +305,71 @@ pub async fn build_pool_and_tunnel(
     Ok((pool, tunnel))
 }
 
-/// Build a small session pool through an SSH tunnel.
-/// Spawns the tunnel to reach `host:port` via the bastion in `ssh`, then connects sqlx
-/// to `127.0.0.1:{tunnel.local_port}`.
+/// Build a small session pool (max 5 connections) through an SSH tunnel.
+///
+/// Spawns an SSH tunnel to connect to the remote database via a bastion host,
+/// then creates a small connection pool that connects through the tunnel.
+/// The returned tunnel handle must be kept alive for the duration of pool use.
+///
+/// # Arguments
+///
+/// * `host` - The target database server hostname or IP address (accessed through the tunnel).
+/// * `port` - The target database server port (typically 3306 for MySQL).
+/// * `user` - The database username.
+/// * `password` - The database password.
+/// * `database` - Optional database name to connect to.
+/// * `ssl` - Whether to enable SSL/TLS encryption (through the tunnel).
+/// * `ssl_accept_invalid_certs` - If true, accept invalid certificates.
+/// * `ssl_ca` - Optional path to a CA certificate file for certificate validation.
+/// * `connect_timeout_ms` - Connection timeout in milliseconds.
+/// * `ssh` - SSH configuration for the bastion host (host, port, user, key, etc.).
+///
+/// # Returns
+///
+/// A `Result` containing a tuple of:
+/// * A small `MySqlPool` (max 5 connections) connected through the tunnel
+/// * A `TunnelHandle` that must be kept alive to maintain the SSH tunnel
+///
+/// # Note
+///
+/// SSL `VerifyIdentity` mode is automatically downgraded to `Required` when
+/// using an SSH tunnel, because hostname verification cannot work when
+/// connecting to `127.0.0.1` (the local tunnel endpoint).
+///
+/// # Examples
+///
+/// ```ignore
+/// use mysql_mcp::config::SshConfig;
+/// use mysql_mcp::db::build_session_pool_with_tunnel;
+///
+/// async fn example() -> anyhow::Result<(sqlx::MySqlPool, mysql_mcp::tunnel::TunnelHandle)> {
+///     let ssh = SshConfig {
+///         host: "bastion.example.com".to_string(),
+///         port: 22,
+///         user: "ssh-user".to_string(),
+///         private_key: "/path/to/key.pem".to_string(),
+///         timeout_secs: 30,
+///         strict_host_key_checking: true,
+///     };
+///
+///     let (pool, tunnel) = build_session_pool_with_tunnel(
+///         "internal-db.example.com",
+///         3306,
+///         "dbuser",
+///         "dbpass",
+///         Some("mydb"),
+///         true,   // ssl enabled
+///         false,  // strict cert validation
+///         None,   // no custom CA
+///         5000,   // 5 second timeout
+///         &ssh,
+///     ).await?;
+///
+///     // Use the pool...
+///     // The tunnel handle must remain alive while using the pool
+///     Ok((pool, tunnel))
+/// }
+/// ```
 #[allow(clippy::too_many_arguments)]
 pub async fn build_session_pool_with_tunnel(
     host: &str,
