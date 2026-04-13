@@ -49,6 +49,8 @@ MCP Request → Tool Handler → Permission Check → SQL Parser → Query Execu
 
 ## Quick Start
 
+> **Need help?** See the [TROUBLESHOOTING.md](TROUBLESHOOTING.md) guide for solutions to common issues.
+
 ### Installation
 
 ```bash
@@ -537,6 +539,8 @@ MYSQL_SSL_ACCEPT_INVALID_CERTS=true
 
 ### SSL/TLS Troubleshooting
 
+See the full [TROUBLESHOOTING.md](TROUBLESHOOTING.md) guide for comprehensive SSL/TLS debugging steps.
+
 | Error | Fix |
 |-------|-----|
 | `unable to get local issuer certificate` / `certificate verify failed` | Verify `MYSQL_SSL_CA` points to the correct CA bundle; use `MYSQL_SSL_ACCEPT_INVALID_CERTS=true` for self-signed certs (development only) |
@@ -635,6 +639,8 @@ The `mysql_connect` tool also accepts SSH parameters for on-demand tunneled sess
 Requires `MYSQL_ALLOW_RUNTIME_CONNECTIONS=true`.
 
 ### Troubleshooting
+
+See the full [TROUBLESHOOTING.md](TROUBLESHOOTING.md) guide for comprehensive SSH tunnel debugging steps.
 
 | Error | Fix |
 |-------|-----|
