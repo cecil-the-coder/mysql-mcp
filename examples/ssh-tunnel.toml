@@ -77,15 +77,11 @@ host = "bastion.example.com"  # Or IP address: "203.0.113.10"
 port = 22                     # SSH port (change if your bastion uses non-standard port)
 user = "tunneluser"           # SSH username on the bastion host
 
-# Authentication: Private key file (one of private_key or use_agent must be configured)
-# Security: File MUST have restrictive permissions (600 or 400).
+# Authentication: Private key file is optional. If not provided, the SSH agent
+# will be used automatically (requires SSH agent to be running with loaded keys).
+# Security: If using a key file, it MUST have restrictive permissions (600 or 400).
 # The server will refuse to use keys with overly permissive permissions.
-private_key = "/home/user/.ssh/id_rsa_tunnel"
-
-# Alternative: Use SSH agent for authentication
-# Uncomment the line below and remove/comment private_key to use agent authentication
-# Security: Ensure your SSH agent is properly secured and locked when not in use
-# use_agent = true
+# private_key = "/home/user/.ssh/id_rsa_tunnel"
 
 # Host key verification mode (default: "strict")
 #   "strict"     - Most secure. Only connect to hosts with known, verified host keys.
@@ -109,20 +105,29 @@ known_hosts_check = "strict"
 #
 # Before using this configuration, verify:
 #
-# 1. Private key permissions are correct:
-#    ls -la /home/user/.ssh/id_rsa_tunnel
-#    # Should show: -rw------- (600)
-#    # If not: chmod 600 /home/user/.ssh/id_rsa_tunnel
+# 1. If using private key authentication (private_key uncommented):
+#    a. Private key file permissions are correct:
+#       ls -la /home/user/.ssh/id_rsa_tunnel
+#       # Should show: -rw------- (600)
+#       # If not: chmod 600 /home/user/.ssh/id_rsa_tunnel
 #
-# 2. Bastion host key is in known_hosts (for strict mode):
+#    b. Direct SSH connection works:
+#       ssh -i /home/user/.ssh/id_rsa_tunnel tunneluser@bastion.example.com
+#
+#    c. From the bastion, verify MySQL connectivity:
+#       ssh -i /home/user/.ssh/id_rsa_tunnel tunneluser@bastion.example.com
+#       mysql -h db.internal.vpc -u app_user -p
+#
+# 2. If using SSH agent (private_key commented):
+#    a. SSH agent is running and key is loaded:
+#       ssh-add -l  # verify key is loaded
+#       ssh-add ~/.ssh/id_rsa_tunnel  # add key if needed
+#
+#    b. Direct SSH connection works:
+#       ssh tunneluser@bastion.example.com
+#
+# 3. Bastion host key is in known_hosts (for strict mode):
 #    ssh-keyscan -H bastion.example.com >> ~/.ssh/known_hosts
 #
-# 3. Direct SSH connection works:
-#    ssh -i /home/user/.ssh/id_rsa_tunnel tunneluser@bastion.example.com
-#
-# 4. From the bastion, verify MySQL connectivity:
-#    ssh -i /home/user/.ssh/id_rsa_tunnel tunneluser@bastion.example.com
-#    mysql -h db.internal.vpc -u app_user -p
-#
-# 5. Environment variable for password is set:
+# 4. Environment variable for password is set:
 #    export MYSQL_PASSWORD="your_secure_password"

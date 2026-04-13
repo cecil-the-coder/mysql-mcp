@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `mysql_server_info` tool for server metadata
 - Add `mysql_list_sessions` tool for session management visibility
 - Add `mysql_disconnect` tool for explicit session cleanup
-- Add SSH tunneling support via bastion/jump hosts
+- Add SSH tunneling support via bastion/jump hosts (subprocess-based OpenSSH with key file authentication)
 - Add SSL/TLS support with certificate verification options
 - Add Unix socket connection support
 - Add per-schema permission overrides for fine-grained write control
