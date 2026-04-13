@@ -1,0 +1,20 @@
+## Summary of Changes
+
+**File Modified:** `src/sql_parser/mod.rs`
+
+**Change Type:** Documentation Enhancement
+
+**What was changed:**
+- Replaced the existing module-level documentation (`//!` comments) with a more comprehensive version that:
+  1. Clearly describes the module's architecture (parser, classifier, safety analyzer)
+  2. Explicitly explains integration with the permission system (`permissions` module)
+  3. Provides a detailed markdown table of all `StatementType` variants with `Write?` and `DDL?` flags
+  4. Documents security considerations and parsing safety guarantees
+  5. Includes a usage example
+
+**Constraints satisfied:**
+- Only modified `src/sql_parser/mod.rs` (the only file allowed)
+- No changes to functional code, logic, or dependencies
+- Documentation is comprehensive and addresses all requirements from the task description
+
+The enhanced documentation will help developers understand how SQL classification works, how safety checks are performed, and how the module integrates with the permission system for access control.

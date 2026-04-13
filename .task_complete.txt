@@ -1,0 +1,8 @@
+Task completed successfully. The sql_parser module in src/sql_parser/mod.rs now has comprehensive documentation describing:
+- The module's architecture and purpose
+- Integration with permission checks (explicitly linking StatementType, ParsedStatement, and parse_write_warnings to the permissions system)
+- A detailed table of all StatementType variants with write/DDL flags
+- Security considerations and parsing safety guarantees
+- An example usage
+
+All changes are documentation-only, with no modifications to functional code.

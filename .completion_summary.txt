@@ -1,0 +1,9 @@
+Documentation added successfully to src/sql_parser/mod.rs. The module now has comprehensive documentation covering:
+- Architecture of the sql_parser module
+- Integration with permission checks
+- Detailed statement types table
+- Security considerations
+- Parsing safety guarantees
+- Example usage
+
+All changes are documentation-only, with no modifications to functional code.

@@ -1,0 +1,8 @@
+The sql_parser module now has comprehensive documentation that explicitly describes:
+1. The architecture and purpose of the module
+2. How it integrates with the permission system (permissions module)
+3. Detailed statement types with a table showing all variants and their properties
+4. Security considerations and parsing safety guarantees
+5. An example usage
+
+All changes are documentation-only, with no modifications to code logic, satisfying the task constraints.
