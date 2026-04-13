@@ -14,7 +14,11 @@ pub(crate) fn is_col_str(row: &sqlx::mysql::MySqlRow, col: &str) -> String {
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
         })
         .unwrap_or_else(|e| {
-            tracing::warn!("Failed to extract column '{}' from row: {}", col, e);
+            tracing::warn!(
+                "Failed to extract column '{}' from row as String or binary: {}",
+                col,
+                e
+            );
             String::new()
         })
 }
