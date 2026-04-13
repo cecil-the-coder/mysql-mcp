@@ -54,6 +54,14 @@ cache_ttl_secs = 60
 # Queries that take longer than this will have their query plan included in the response.
 # slow_query_threshold_ms = 500
 
+# Number of retry attempts for transient network errors (default: 2).
+# Set to 0 to disable retrying on transient errors like connection timeouts.
+# retry_attempts = 2
+
+# Maximum memory in MB for result sets (default: 256).
+# Prevents excessive memory usage when processing large result sets.
+# max_result_memory_mb = 256
+
 [security]
 # Allow INSERT operations (default: false)
 allow_insert = false
@@ -70,10 +78,19 @@ allow_ddl = false
 # Require SSL for MySQL connections (default: false)
 ssl = false
 
+# Allow runtime connections via mysql_connect tool (default: false)
+# When true, LLM assistants can create new database connections at runtime
+# with arbitrary credentials. Enable only if you need multi-database support.
+allow_runtime_connections = false
+
 # Maximum number of concurrent named sessions (not counting the default session).
 # Prevents unbounded session creation when allow_runtime_connections is true.
 # (default: 50)
 # max_sessions = 50
+
+# Maximum total database connections across all sessions (default pool + named
+# session pools). Named sessions use 5 connections each. (default: 100)
+# max_total_connections = 100
 
 # Per-schema permission overrides
 # These take precedence over the global settings above.
