@@ -3,22 +3,57 @@
 //! This module implements [`SessionStore`] which manages both the default connection
 //! (configured at startup) and named sessions created at runtime via the `mysql_connect` tool.
 //!
-//! # Key Features
+//! # Key Types
 //!
-//! - **Session creation**: Create named database connections with optional SSH tunnel support
-//!   for accessing databases through bastion hosts
-//! - **Idle session reaping**: Sessions track their `last_used` timestamp; the server's
-//!   reaper task cleans up sessions idle for more than 10 minutes
-//! - **Connection pool limits**: Each named session uses a fixed pool size (5 connections),
-//!   with enforcement of `max_sessions` and `max_total_connections` limits
-//! - **Session lifecycle**: Full lifecycle management including creation, lookup,
-//!   listing, and cleanup with proper resource release
+//! - [`SessionStore`]: Central registry managing all sessions (default + named)
+//! - [`Session`]: A named database session with connection pool and metadata
+//! - [`SessionContext`]: Context returned when resolving a session (pool + schema introspector)
+//! - [`ConnectionReservationGuard`]: RAII guard for atomic connection limit tracking
 //!
-//! # Session Resolution
+//! # Session Lifecycle
 //!
-//! Tools that accept a `session` parameter use [`SessionStore::resolve_session`] to
-//! obtain a [`SessionContext`] containing the connection pool and schema introspector.
-//! If no session is specified, the default connection is used.
+//! 1. **Creation**: `handle_connect()` validates parameters, reserves connection slots
+//!    atomically using [`ConnectionReservationGuard`], creates the pool (with optional
+//!    SSH tunnel), and inserts the session into the store.
+//!
+//! 2. **Usage**: Tools call [`SessionStore::resolve_session`] to get a [`SessionContext`].
+//!    This updates `last_used` timestamp for tracking idle time.
+//!
+//! 3. **Cleanup**: Sessions can be closed explicitly via `handle_disconnect()` or
+//!    automatically by the session reaper after 10 minutes of idle time.
+//!
+//! 4. **Reaping**: A background task (spawned in `server/mod.rs`) wakes every 60 seconds
+//!    to identify and close sessions idle for >10 minutes. The reaper decrements the
+//!    total connection counter and properly closes SSH tunnels.
+//!
+//! # Connection Pooling
+//!
+//! Each named session uses a fixed pool size of [`NAMED_SESSION_POOL_SIZE`] (5 connections).
+//! The `SessionStore` enforces two limits:
+//! - `max_sessions`: Maximum number of named sessions (configurable)
+//! - `max_total_connections`: Total connections across all sessions (5 × session count)
+//!
+//! [`ConnectionReservationGuard`] ensures the total connection counter is decremented
+//! on any failure path before the session is fully established.
+//!
+//! # SSH Tunnel Association
+//!
+//! Sessions may include an SSH tunnel for accessing databases through bastion hosts:
+//! - The [`Session`] struct holds an optional [`crate::tunnel::TunnelHandle`]
+//! - Tunnel lifecycle matches the session: created on connect, closed on disconnect/reap
+//! - The `ssh_host` field stores the bastion hostname for display in `mysql_list_sessions`
+//! - [`close_tunnel_with_timeout`] ensures tunnels are closed with a 5-second timeout
+//!
+//! # Security Considerations
+//!
+//! - Session names and database names are validated as MySQL identifiers
+//! - Runtime connections can be disabled via `allow_runtime_connections` config
+//! - SSH tunnels require `ssh_user` when `ssh_host` is provided
+//! - `ssh_known_hosts_check='insecure'` is blocked for runtime connections
+//!   (prevents MITM attacks that could intercept credentials)
+//!
+//! [`Session`]: struct.Session.html
+//! [`crate::tunnel::TunnelHandle`]: ../tunnel/struct.TunnelHandle.html
 
 use rmcp::model::CallToolResult;
 use serde_json::json;
