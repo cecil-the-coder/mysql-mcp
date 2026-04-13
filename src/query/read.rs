@@ -43,12 +43,20 @@ fn estimate_value_size(v: &Value) -> usize {
         Value::Null => 8,
         Value::Bool(_) => 1,
         Value::Number(_) => 24, // simplified - no need to stringify
-        Value::String(s) => s.len() + 24,
-        Value::Array(arr) => arr.iter().map(estimate_value_size).sum::<usize>() + arr.len() * 8,
+        Value::String(s) => s.len().saturating_add(24),
+        Value::Array(arr) => arr
+            .iter()
+            .map(estimate_value_size)
+            .fold(0usize, |acc, size| acc.saturating_add(size))
+            .saturating_add(arr.len().saturating_mul(8)),
         Value::Object(obj) => obj
             .iter()
-            .map(|(k, v)| k.len() + estimate_value_size(v) + 16)
-            .sum(),
+            .map(|(k, v)| {
+                k.len()
+                    .saturating_add(estimate_value_size(v))
+                    .saturating_add(16)
+            })
+            .fold(0usize, |acc, size| acc.saturating_add(size)),
     }
 }
 

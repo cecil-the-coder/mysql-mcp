@@ -39,8 +39,8 @@ fn make_cache_key(database: Option<&str>, table: &str) -> String {
     // collisions. While rare, MySQL does allow tabs in quoted identifiers.
     if table.contains('\t') {
         tracing::warn!(
-            "Table name contains tab character, which is not supported by schema cache: {:?}",
-            table.len().min(100)
+            "Table name contains tab character, which is not supported by schema cache: {}",
+            &table[..table.len().min(100)]
         );
     }
     format!("{}\t{}", database.unwrap_or(""), table)
