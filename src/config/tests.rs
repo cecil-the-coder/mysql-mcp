@@ -689,6 +689,24 @@ private_key = "/tmp/key.pem"
         );
     }
 
+    // Test: max_total_connections=0 fails validation
+    #[test]
+    fn test_max_total_connections_zero_fails_validation() {
+        let mut config = Config::default();
+        config.security.max_total_connections = 0;
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("max_total_connections"),
+            "error should mention max_total_connections, got: {}",
+            err
+        );
+        assert!(
+            err.to_string().contains("must be >= 1"),
+            "error should say 'must be >= 1', got: {}",
+            err
+        );
+    }
+
     // Test: excessive query_timeout_ms fails validation
     #[test]
     fn test_query_timeout_ms_excessive_fails_validation() {

@@ -301,6 +301,9 @@ impl Config {
         if sec.max_sessions == 0 {
             anyhow::bail!("security.max_sessions must be >= 1");
         }
+        if sec.max_total_connections == 0 {
+            anyhow::bail!("security.max_total_connections must be >= 1");
+        }
         if sec.max_total_connections < pool.size {
             anyhow::bail!(
                 "security.max_total_connections ({}) must be >= pool.size ({})",
