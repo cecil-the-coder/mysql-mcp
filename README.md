@@ -583,6 +583,32 @@ MYSQL_SSL_CA=/path/to/ca.pem         # VerifyCa mode (validates cert chain)
 MYSQL_SSL_ACCEPT_INVALID_CERTS=true
 ```
 
+#### SSL/TLS Mode Decision Matrix
+
+The SSL mode is determined by the combination of three configuration options:
+
+| `ssl` | `ssl_accept_invalid_certs` | `ssl_ca` set | SSL Mode | Description |
+|-------|---------------------------|--------------|----------|-------------|
+| `false` | any | any | **Disabled** | No encryption; plain TCP connection |
+| `true` | `true` | any | **Required** | Encrypted but no certificate validation |
+| `true` | `false` | `true` | **VerifyCa** | Validates certificate chain against CA; skips hostname check |
+| `true` | `false` | `false` | **VerifyIdentity** | Full validation: certificate chain + hostname verification |
+
+**Mode descriptions:**
+- **Disabled**: No SSL/TLS encryption. Connection uses plain TCP.
+- **Required**: SSL encryption is enforced, but no certificate validation is performed. Useful for encrypted connections where you don't have the CA certificate (development environments).
+- **VerifyCa**: SSL encryption with certificate chain validation against the provided CA. Does not verify the hostname matches the certificate. Good for servers with CN-only certificates accessed by IP.
+- **VerifyIdentity**: Full security with both certificate chain validation and hostname verification. Requires the server hostname to match the certificate CN/SAN.
+
+**TOML equivalent:**
+
+```toml
+[security]
+ssl = true
+ssl_accept_invalid_certs = false
+ssl_ca = "/path/to/ca.pem"   # Omit for VerifyIdentity, include for VerifyCa
+```
+
 ### SSL/TLS Troubleshooting
 
 See the full [TROUBLESHOOTING.md](TROUBLESHOOTING.md) guide for comprehensive SSL/TLS debugging steps.
