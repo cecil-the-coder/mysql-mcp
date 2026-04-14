@@ -666,6 +666,12 @@ See the full [TROUBLESHOOTING.md](TROUBLESHOOTING.md) guide for comprehensive SS
 | `Timed out waiting for local port` | Check SSH connectivity: `ssh user@bastion` interactively |
 | Connection resets after idle | Expected — the 10-minute session reaper closes idle sessions |
 
+### Security Considerations
+
+When using SSH tunnels with `MYSQL_ALLOW_RUNTIME_CONNECTIONS=true`, you should **never** set `ssh.known_hosts_check = "insecure"`. This combination allows remote attackers to perform man-in-the-middle attacks on your SSH tunnel, compromising the security of your database connection.
+
+The valid values for `known_hosts_check` are `strict` (recommended — requires pre-populating known hosts), `accept-new` (automatically adds new keys on first connect), and `insecure` (no host key verification — **blocked when `allow_runtime_connections` is enabled**).
+
 ---
 
 ## Development
