@@ -1,17 +1,90 @@
 //! Configuration management for the MySQL MCP server.
 //!
-//! This module provides configuration structures and loading logic for database
-//! connections, connection pooling, security settings, and SSH tunnel options.
-//! Configuration can be provided via TOML files and/or environment variables.
+//! # Configuration Architecture
 //!
-//! # Key Types
+//! The configuration system is designed to be flexible and secure, supporting both
+//! TOML configuration files and environment variables. The configuration is loaded
+//! in a specific order with environment variables taking precedence over file settings.
 //!
-//! - [`Config`] - Top-level configuration container
-//! - [`ConnectionConfig`] - MySQL connection parameters (host, port, credentials)
-//! - [`PoolConfig`] - Connection pool sizing and timeouts
-//! - [`SecurityConfig`] - Write permissions and SSL settings
-//! - [`SshConfig`] - SSH tunnel configuration for bastion host access
-//! - [`SchemaPermissions`] - Per-schema permission overrides
+//! ## Configuration Sources and Precedence
+//!
+//! Configuration is loaded through the following pipeline, where each subsequent
+//! source overrides values from the previous:
+//!
+//! 1. **Default values** - Built-in defaults for all configuration structures
+//! 2. **TOML file** - Loaded from `MCP_CONFIG_FILE` environment variable (defaults to `mysql-mcp.toml`)
+//!    - If the file doesn't exist, defaults are used without error
+//! 3. **Environment variables** - All environment variables that correspond to
+//!    configuration fields are applied as overrides
+//!
+//! This precedence order ensures that:
+//! - Default values provide safe, working defaults out of the box
+//! - TOML files allow for complex, multi-value configurations (like SSH keys, schema permissions)
+//! - Environment variables enable runtime customization and secret injection (e.g., passwords)
+//!
+//! ## TOML File Format
+//!
+//! The primary configuration is specified in a TOML file. Key sections include:
+//!
+//! - `[connection]` - Database connection parameters (host, port, user, password, socket)
+//! - `[pool]` - Connection pool settings (size, timeouts, retry behavior)
+//! - `[security]` - Security settings (permissions, SSL, runtime connection controls)
+//! - `[ssh]` - Optional SSH tunnel configuration for bastion hosts
+//!
+//! Environment variables can override any TOML value by using the same field name
+//! with an `MCP_` prefix (e.g., `MCP_POOL_SIZE` overrides `pool.size`).
+//!
+//! ## Environment Variable Integration
+//!
+//! Environment variables provide runtime configuration flexibility and are essential
+//! for injecting sensitive information (passwords, keys) without storing them in files.
+//! All configuration fields can be set via environment variables using the `MCP_` prefix.
+//! This supports:
+//!
+//! - **Simple values**: `MCP_POOL_SIZE=50`
+//! - **Boolean flags**: `MCP_SECURITY_SSL=true`
+//! - **Connection strings**: `MCP_CONNECTION_CONNECTION_STRING=...`
+//!
+//! When both a TOML file and environment variables are present, environment variables
+//! take precedence, allowing deployment-specific overrides without modifying configuration files.
+//!
+//! ## Key Design Decisions
+//!
+//! ### Security by Default
+//!
+//! The configuration follows a security-first approach:
+//!
+//! - All write permissions (`allow_insert`, `allow_update`, etc.) are **disabled by default**
+//! - Runtime connections are **disabled by default** (`allow_runtime_connections: false`)
+//! - SSL is **disabled by default** (must be explicitly enabled)
+//! - Session creation is strictly limited (`max_sessions: 50`)
+//!
+//! ### Connection String Precedence
+//!
+//! When `connection_string` is set in the connection configuration, it takes precedence
+//! over individual field values (host, port, user, etc.). This allows complex connection
+//! strings with parameters that might be difficult to express individually.
+//!
+//! ### Validation and Safety
+//!
+//! The `Config::validate()` method performs comprehensive validation including:
+//!
+//! - Range checks on numeric values (pool sizes, timeouts, retry counts)
+//! - Security restriction validation (e.g., preventing insecure SSH + runtime connections)
+//! - File existence checks for SSL certificates and SSH keys
+//! - Permission validation on Unix systems for sensitive files
+//!
+//! Warnings are issued for potentially problematic but non-fatal configurations,
+//! while errors result in `anyhow::Result` returns to prevent unsafe operation.
+//!
+//! ### SSH Tunnel Security
+//!
+//! SSH tunneling requires careful configuration:
+//!
+//! - In strict mode (default), known hosts must be verified
+//! - Private keys must have restrictive permissions (0o600 or 0o400)
+//! - **Critical**: Runtime connections cannot be used with insecure SSH host key checking
+//!   as this would allow MITM attacks on database credentials
 //!
 //! # Example
 //!
@@ -19,6 +92,7 @@
 //! use config::load_config;
 //! let config = load_config()?;
 //! config.validate()?;
+//! # Ok::<(), anyhow::Error>(())
 //! ```
 
 use serde::{Deserialize, Serialize};
