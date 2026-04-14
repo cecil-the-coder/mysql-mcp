@@ -15,7 +15,9 @@
 //! - `sql_parser`: SQL statement classification and parsing utilities
 //! - `tunnel`: SSH tunnel support for secure database connections
 
+pub mod backend;
 pub mod config;
+#[cfg(feature = "mysql")]
 pub mod db;
 pub mod permissions;
 pub mod query;
@@ -24,5 +26,5 @@ pub mod server;
 pub mod sql_parser;
 pub mod tunnel;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mysql"))]
 pub mod test_helpers;

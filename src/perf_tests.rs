@@ -1,7 +1,7 @@
-/// Performance tests for mysql-mcp.
+/// Performance tests for sql-mcp.
 ///
 /// Run with: cargo test perf_ -- --nocapture
-/// (or against real DB): MYSQL_HOST=... cargo test perf_ -- --nocapture
+/// (or against real DB): DB_HOST=... cargo test perf_ -- --nocapture
 ///
 /// These tests always produce output; use --nocapture to see it.
 /// Assertions catch gross regressions (not tight latency SLOs).
@@ -94,10 +94,10 @@ pub mod perf_impl {
         // so concurrent perf tests (pool_saturation) can connect without being starved.
         const N: usize = 20;
 
-        let parsed_select1 = crate::sql_parser::parse_sql("SELECT 1").unwrap();
+        let parsed_select1 = crate::sql_parser::parse_sql("SELECT 1", "MySQL").unwrap();
 
         // Warm-up connections — hold semaphore permit while the pool creates new TCP+SSL
-        // connections so that concurrent perf/integration tests don't overwhelm MySQL's
+        // connections so that concurrent perf/integration tests don't overwhelm the database's
         // connection handler (server connect_timeout=10s).
         {
             let _permit = crate::test_helpers::db_semaphore()
@@ -170,7 +170,7 @@ pub mod perf_impl {
                    JOIN users u ON o.user_id = u.id \
                    JOIN products p ON o.product_id = p.id";
 
-        let parsed_join = crate::sql_parser::parse_sql(sql).unwrap();
+        let parsed_join = crate::sql_parser::parse_sql(sql, "MySQL").unwrap();
 
         let cfg = perf_config();
         let wall = Instant::now();
@@ -208,12 +208,12 @@ pub mod perf_impl {
 
         // Pre-warm the pool: acquire CONCURRENCY connections sequentially while
         // holding them all, forcing the pool to create them one at a time.
-        // Each creation takes 1 RTT for TCP + TLS + MySQL auth; on a remote DB
+        // Each creation takes 1 RTT for TCP + TLS + database auth; on a remote DB
         // this can be seconds per connection, so we establish them all before
         // the timed test to avoid connection-creation delays inflating results.
         // Each acquire is throttled through the shared semaphore so that the
         // total simultaneous connection-creation attempts across all tests stays
-        // within MySQL's connection-handler capacity (server connect_timeout=10s).
+        // within the database's connection-handler capacity (server connect_timeout=10s).
         {
             let mut warm_conns: Vec<_> = Vec::with_capacity(CONCURRENCY);
             for _ in 0..CONCURRENCY {
@@ -231,7 +231,7 @@ pub mod perf_impl {
             // Drop releases all connections back to the pool as idle.
         }
 
-        let parsed_select1 = crate::sql_parser::parse_sql("SELECT 1").unwrap();
+        let parsed_select1 = crate::sql_parser::parse_sql("SELECT 1", "MySQL").unwrap();
 
         let wall = Instant::now();
         let mut set = JoinSet::new();

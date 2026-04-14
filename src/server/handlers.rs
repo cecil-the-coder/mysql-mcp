@@ -1,11 +1,3 @@
-//! MCP tool handler implementations.
-//!
-//! This module contains the MCP tool handler implementations (mysql_query,
-//! mysql_schema_info, mysql_connect, mysql_explain_plan, etc.) that bridge the
-//! rmcp protocol layer to the underlying query, schema, and session logic.
-//! Handlers validate input parameters, resolve sessions, execute operations,
-//! and serialize responses.
-
 use rmcp::model::CallToolResult;
 use serde_json::json;
 
@@ -13,7 +5,7 @@ use super::sessions::{validate_identifier, SessionStore};
 use super::tool_schemas::serialize_response;
 use crate::tool_error;
 
-/// Maximum SQL statement length (1 MB). Enforced in both mysql_query and mysql_explain_plan.
+/// Maximum SQL statement length (1 MB). Enforced in both query and explain_plan.
 const MAX_SQL_LEN: usize = 1_000_000;
 /// Number of SQL characters shown in parse-error messages to give context without flooding output.
 const SQL_ERROR_PREVIEW_LEN: usize = 120;
@@ -26,7 +18,7 @@ fn check_sql_length(sql: &str) -> Result<(), CallToolResult> {
     }
     if sql.len() > MAX_SQL_LEN {
         Err(crate::server::error::error_response(format!(
-            "SQL statement exceeds maximum size: {} bytes (limit: {} bytes / 1 MB)",
+            "SQL too large: {} bytes (max {} bytes / 1 MB)",
             sql.len(),
             MAX_SQL_LEN
         )))
@@ -37,7 +29,7 @@ fn check_sql_length(sql: &str) -> Result<(), CallToolResult> {
 
 impl SessionStore {
     // ------------------------------------------------------------------
-    // Tool handler: mysql_schema_info
+    // Tool handler: schema_info
     // ------------------------------------------------------------------
     pub(crate) async fn handle_schema_info(
         &self,
@@ -111,7 +103,7 @@ impl SessionStore {
     }
 
     // ------------------------------------------------------------------
-    // Tool handler: mysql_server_info
+    // Tool handler: server_info
     // ------------------------------------------------------------------
     pub(crate) async fn handle_server_info(
         &self,
@@ -122,99 +114,18 @@ impl SessionStore {
             Err(e) => return Ok(e),
         };
 
-        let rows = sqlx::query(
-            "SELECT VERSION() AS mysql_version,
-                    CURRENT_USER() AS `current_user`,
-                    DATABASE() AS current_database,
-                    @@sql_mode AS sql_mode,
-                    @@character_set_connection AS character_set,
-                    @@collation_connection AS collation,
-                    @@time_zone AS time_zone,
-                    @@read_only AS read_only",
-        )
-        .fetch_all(&ctx.pool)
-        .await;
-
-        match rows {
-            Ok(rows) if !rows.is_empty() => {
-                use sqlx::Row;
-                let row = &rows[0];
-                let version: String = row.try_get("mysql_version").unwrap_or_else(|e| {
-                    tracing::debug!("Failed to get mysql_version: {}", e);
-                    String::new()
-                });
-                let user: String = row.try_get("current_user").unwrap_or_else(|e| {
-                    tracing::debug!("Failed to get current_user: {}", e);
-                    String::new()
-                });
-                let db: Option<String> = row.try_get("current_database").ok().flatten();
-                let sql_mode: String = row.try_get("sql_mode").unwrap_or_else(|e| {
-                    tracing::debug!("Failed to get sql_mode: {}", e);
-                    String::new()
-                });
-                let character_set: String = row.try_get("character_set").unwrap_or_else(|e| {
-                    tracing::debug!("Failed to get character_set: {}", e);
-                    String::new()
-                });
-                let collation: String = row.try_get("collation").unwrap_or_else(|e| {
-                    tracing::debug!("Failed to get collation: {}", e);
-                    String::new()
-                });
-                let time_zone: String = row.try_get("time_zone").unwrap_or_else(|e| {
-                    tracing::debug!("Failed to get time_zone: {}", e);
-                    String::new()
-                });
-                let read_only: bool = match row.try_get::<i32, _>("read_only") {
-                    Ok(val) => val != 0,
-                    Err(e) => {
-                        tracing::debug!("Failed to get read_only as integer: {}", e);
-                        // Fallback: try as string for edge cases
-                        row.try_get::<String, _>("read_only")
-                            .map(|s| s.eq_ignore_ascii_case("ON") || s == "1")
-                            .unwrap_or(false)
-                    }
-                };
-
-                let mut accessible_features = vec!["SELECT", "SHOW", "EXPLAIN"];
-                let sec = &self.config.security;
-                for (enabled, name) in [
-                    (sec.allow_insert, "INSERT"),
-                    (sec.allow_update, "UPDATE"),
-                    (sec.allow_delete, "DELETE"),
-                    (sec.allow_ddl, "DDL (CREATE/ALTER/DROP)"),
-                ] {
-                    if enabled {
-                        accessible_features.push(name);
-                    }
-                }
-
-                let info = json!({
-                    "mysql_version": version,
-                    "current_user": user,
-                    "current_database": db,
-                    "sql_mode": sql_mode,
-                    "character_set": character_set,
-                    "collation": collation,
-                    "time_zone": time_zone,
-                    "read_only": read_only,
-                    "accessible_features": accessible_features,
-                });
-
-                // Add security warnings if any
-                let mut response = info;
-                let warnings = self.config.security.security_warnings();
-                if !warnings.is_empty() {
-                    response["security_warnings"] = json!(warnings);
-                }
-                Ok(serialize_response(&response))
-            }
-            Ok(_) => tool_error!("No response from server"),
+        match self
+            .backend
+            .fetch_server_info(&ctx.pool, &self.config.security)
+            .await
+        {
+            Ok(info) => Ok(serialize_response(&info)),
             Err(e) => tool_error!("Server info error: {}", e),
         }
     }
 
     // ------------------------------------------------------------------
-    // Tool handler: mysql_list_tables
+    // Tool handler: list_tables
     // ------------------------------------------------------------------
     pub(crate) async fn handle_list_tables(
         &self,
@@ -236,28 +147,12 @@ impl SessionStore {
             Err(e) => return Ok(e),
         };
 
-        // Determine which database to query
         let Some(target_db) = database.as_deref().or(ctx.database.as_deref()) else {
             return tool_error!("No database specified and no default database for this session");
         };
 
-        // Note: TABLE_NAME in information_schema is VARBINARY, so we cast to CHAR
-        // to get a proper string. Without this cast, sqlx would fail with
-        // "mismatched types; Rust type `String` is not compatible with SQL type `VARBINARY`"
-        let rows = sqlx::query(
-            "SELECT CAST(TABLE_NAME AS CHAR) AS TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? ORDER BY TABLE_NAME",
-        )
-        .bind(target_db)
-        .fetch_all(&ctx.pool)
-        .await;
-
-        match rows {
-            Ok(rows) => {
-                use sqlx::Row;
-                let tables: Vec<String> = rows
-                    .iter()
-                    .filter_map(|row| row.try_get("TABLE_NAME").ok())
-                    .collect();
+        match self.backend.fetch_list_tables(&ctx.pool, target_db).await {
+            Ok(tables) => {
                 let output = json!({
                     "tables": tables,
                     "database": target_db,
@@ -269,7 +164,7 @@ impl SessionStore {
     }
 
     // ------------------------------------------------------------------
-    // Tool handler: mysql_explain_plan
+    // Tool handler: explain_plan
     // ------------------------------------------------------------------
     pub(crate) async fn handle_explain_plan(
         &self,
@@ -285,7 +180,7 @@ impl SessionStore {
         if let Err(e) = check_sql_length(&sql) {
             return Ok(e);
         }
-        let parsed = match crate::sql_parser::parse_sql(&sql) {
+        let parsed = match crate::sql_parser::parse_sql(&sql, self.backend.sql_dialect()) {
             Ok(p) => p,
             Err(e) => {
                 return tool_error!("SQL parse error: {}", e);
@@ -293,7 +188,7 @@ impl SessionStore {
         };
         if parsed.statement_type != crate::sql_parser::StatementType::Select {
             return tool_error!(
-                "mysql_explain_plan only supports SELECT statements, got: {}",
+                "explain_plan only supports SELECT statements, got: {}",
                 parsed.statement_type.name()
             );
         }
@@ -304,13 +199,10 @@ impl SessionStore {
         };
 
         let explain_start = std::time::Instant::now();
-        let query_timeout_ms = self.config.pool.query_timeout_ms;
-        match crate::query::explain::run_explain(
-            &ctx.pool,
-            &parsed.serialized_sql,
-            query_timeout_ms,
-        )
-        .await
+        match self
+            .backend
+            .run_explain(&ctx.pool, &sql, self.config.pool.query_timeout_ms)
+            .await
         {
             Ok(plan) => {
                 let elapsed = explain_start.elapsed().as_millis() as u64;
@@ -330,7 +222,7 @@ impl SessionStore {
     }
 
     // ------------------------------------------------------------------
-    // Tool handler: mysql_query
+    // Tool handler: query
     // ------------------------------------------------------------------
     pub(crate) async fn handle_query(
         &self,
@@ -357,12 +249,10 @@ impl SessionStore {
         let session_db = ctx.database.clone();
 
         // Parse and check permissions
-        let parsed = match crate::sql_parser::parse_sql(&sql) {
+        let parsed = match crate::sql_parser::parse_sql(&sql, self.backend.sql_dialect()) {
             Ok(p) => p,
             Err(e) => {
                 let cut = sql.len() > SQL_ERROR_PREVIEW_LEN;
-                // Walk back from the byte limit to a valid UTF-8 char boundary so
-                // that slicing doesn't panic on multi-byte characters.
                 let mut preview_end = SQL_ERROR_PREVIEW_LEN.min(sql.len());
                 while preview_end > 0 && !sql.is_char_boundary(preview_end) {
                     preview_end -= 1;
@@ -378,9 +268,6 @@ impl SessionStore {
 
         if let Err(e) = crate::permissions::check_all_permissions(&self.config, &parsed) {
             let perm_type = parsed.statement_type.permission_category();
-            // StatementType::Other carries a full human-readable message rather than a
-            // short category name, so bypass the generic wrapper which would produce
-            // "this operation operation denied ... Set MYSQL_ALLOW_this operation ...".
             if perm_type == "this operation" {
                 return tool_error!("{}", e);
             }
@@ -388,11 +275,17 @@ impl SessionStore {
                 .target_schema
                 .as_deref()
                 .unwrap_or("(default database)");
-            return tool_error!("{} operation denied on '{}': {}", perm_type, schema_hint, e);
+            return tool_error!(
+                "{} operation denied on '{}': {}. Set DB_ALLOW_{} env var to enable.",
+                perm_type,
+                schema_hint,
+                e,
+                perm_type
+            );
         }
 
         if parsed.statement_type.is_read_only() {
-            match crate::query::read::execute_read_query(
+            match crate::query::read::execute_read_query_pool(
                 &query_pool,
                 &sql,
                 &parsed,
@@ -401,28 +294,40 @@ impl SessionStore {
             .await
             {
                 Ok(result) => {
-                    // Generate schema-aware index suggestions when EXPLAIN detected a full
-                    // table scan with no index used.
+                    // Run EXPLAIN via the backend for performance hints
+                    let (plan, explain_error) = self
+                        .maybe_run_explain(
+                            &query_pool,
+                            &sql,
+                            &parsed,
+                            &self.config.pool,
+                            &result,
+                        )
+                        .await;
+
+                    // Generate schema-aware index suggestions
                     let mut suggestions: Vec<String> = vec![];
-                    if let Some(tname) = parsed.target_table.as_deref() {
-                        let needs_suggestions = result.plan.as_ref().is_some_and(|p| {
-                            p.get("full_table_scan")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                                && p.get("index_used").map(|v| v.is_null()).unwrap_or(true)
-                        }) && !parsed.where_columns.is_empty();
-                        if needs_suggestions {
-                            suggestions = query_introspector
-                                .generate_index_suggestions(
-                                    tname,
-                                    session_db.as_deref(),
-                                    &parsed.where_columns,
-                                )
-                                .await;
-                        }
+                    let needs_suggestions = plan.as_ref().is_some_and(|p| {
+                        p.get("full_table_scan")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                            && p.get("index_used").map(|v| v.is_null()).unwrap_or(true)
+                    }) && parsed.target_table.is_some()
+                        && !parsed.where_columns.is_empty();
+                    if needs_suggestions {
+                        let tname = parsed
+                            .target_table
+                            .as_deref()
+                            .expect("target_table checked for Some above");
+                        suggestions = query_introspector
+                            .generate_index_suggestions(
+                                tname,
+                                session_db.as_deref(),
+                                &parsed.where_columns,
+                            )
+                            .await;
                     }
 
-                    // Structured performance log
                     log_query_result(
                         &sql,
                         &result,
@@ -438,28 +343,19 @@ impl SessionStore {
                     });
                     if result.capped {
                         output["capped"] = json!(true);
-                        if result.show_capped {
-                            output["capped_hint"] = json!(format!(
-                                "Result truncated to {} rows. SHOW statements do not support LIMIT/OFFSET. \
-                                 Use a more specific SHOW filter (e.g. SHOW TABLES LIKE 'prefix%%') \
-                                 or query information_schema directly with a SELECT + LIMIT.",
-                                result.row_count
-                            ));
-                        } else {
-                            output["next_offset"] = json!(result.row_count);
-                            output["capped_hint"] = json!(format!(
-                                "Result truncated to {} rows. Add 'LIMIT {} OFFSET {}' to your query to fetch the next page.",
-                                result.row_count, result.row_count, result.row_count
-                            ));
-                        }
+                        output["next_offset"] = json!(result.row_count);
+                        output["capped_hint"] = json!(format!(
+                            "Result truncated to {} rows. Add 'LIMIT {} OFFSET {}' to your query to fetch the next page.",
+                            result.row_count, result.row_count, result.row_count
+                        ));
                     }
                     if !result.parse_warnings.is_empty() {
                         output["parse_warnings"] = json!(result.parse_warnings);
                     }
-                    if let Some(plan) = result.plan {
+                    if let Some(plan) = plan {
                         output["plan"] = plan;
                     }
-                    if let Some(ref explain_error) = result.explain_error {
+                    if let Some(ref explain_error) = explain_error {
                         output["explain_error"] = json!(explain_error);
                     }
                     if !suggestions.is_empty() {
@@ -470,7 +366,7 @@ impl SessionStore {
                 Err(e) => tool_error!("Query error: {}", e),
             }
         } else if parsed.statement_type.is_ddl() {
-            match crate::query::write::execute_ddl_query(
+            match crate::query::write::execute_ddl_query_pool(
                 &query_pool,
                 &sql,
                 self.config.pool.query_timeout_ms,
@@ -479,8 +375,6 @@ impl SessionStore {
             .await
             {
                 Ok(mut result) => {
-                    // Invalidate the schema cache so subsequent mysql_schema_info /
-                    // list_resources calls reflect the DDL change immediately.
                     if let Some(tname) = &parsed.target_table {
                         query_introspector
                             .invalidate_table(tname, parsed.target_schema.as_deref())
@@ -489,16 +383,13 @@ impl SessionStore {
                         query_introspector.invalidate_all().await;
                     }
 
-                    // TRUNCATE generates a "deletes ALL rows" safety warning.
-                    // execute_ddl_query doesn't accept a ParsedStatement, so we
-                    // propagate warnings here at the handler level.
                     result.parse_warnings = crate::sql_parser::parse_write_warnings(&parsed);
                     Ok(serialize_response(&write_result_content(&result)))
                 }
                 Err(e) => tool_error!("Query error: {}", e),
             }
         } else {
-            match crate::query::write::execute_write_query(
+            match crate::query::write::execute_write_query_pool(
                 &query_pool,
                 &sql,
                 &parsed,
@@ -512,6 +403,47 @@ impl SessionStore {
             }
         }
     }
+
+    /// Optionally run EXPLAIN based on performance_hints settings.
+    /// Returns (plan, explain_error).
+    async fn maybe_run_explain(
+        &self,
+        pool: &crate::backend::PoolHandle,
+        sql: &str,
+        parsed: &crate::sql_parser::ParsedStatement,
+        pool_config: &crate::config::PoolConfig,
+        result: &crate::query::read::QueryResult,
+    ) -> (Option<serde_json::Value>, Option<String>) {
+        let run_explain =
+            matches!(parsed.statement_type, crate::sql_parser::StatementType::Select)
+                && match pool_config.performance_hints.as_str() {
+                    "always" => true,
+                    "auto" => result.execution_time_ms >= pool_config.slow_query_threshold_ms,
+                    _ => false,
+                };
+
+        if !run_explain {
+            return (None, None);
+        }
+
+        match self
+            .backend
+            .run_explain(pool, sql, pool_config.query_timeout_ms)
+            .await
+        {
+            Ok(explain_result) => (serde_json::to_value(explain_result).ok(), None),
+            Err(e) => {
+                let msg = e.to_string();
+                let mut preview_end = sql.len().min(200);
+                while preview_end > 0 && !sql.is_char_boundary(preview_end) {
+                    preview_end -= 1;
+                }
+                let sql_preview = sql.get(..preview_end).unwrap_or("");
+                tracing::warn!(sql = %sql_preview, error = %msg, "EXPLAIN failed; continuing without plan");
+                (None, Some(msg))
+            }
+        }
+    }
 }
 
 fn log_query_result(
@@ -520,11 +452,7 @@ fn log_query_result(
     suggestions: &[String],
     slow_threshold_ms: u64,
 ) {
-    let mut sql_trunc_end = 200.min(sql.len());
-    while sql_trunc_end > 0 && !sql.is_char_boundary(sql_trunc_end) {
-        sql_trunc_end -= 1;
-    }
-    let sql_truncated = &sql[..sql_trunc_end];
+    let sql_truncated = sql.get(..200).unwrap_or(sql);
     let plan_tier = result
         .plan
         .as_ref()
@@ -590,42 +518,25 @@ mod tests {
         let result = check_sql_length("");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        // Verify it's an error response (CallToolResult with is_error=Some(true))
         assert_eq!(err.is_error, Some(true));
-        // Verify error message contains expected text
-        let text = err.content.get(0).and_then(|c| c.raw.as_text());
-        assert!(
-            text.is_some(),
-            "expected text content in error response, got: {:?}",
-            err.content.get(0).map(|c| &c.raw)
-        );
-        let text = text.unwrap();
+        let text = err.content[0].raw.as_text().expect("expected text content");
         assert!(text.text.contains("SQL cannot be empty"));
     }
 
     #[test]
     fn test_check_sql_length_exceeds_limit_returns_error() {
-        // Create a SQL string larger than 1MB
         let large_sql = "x".repeat(1_000_001);
         let result = check_sql_length(&large_sql);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.is_error, Some(true));
-        // Verify error message mentions size limit
-        let text = err.content.get(0).and_then(|c| c.raw.as_text());
-        assert!(
-            text.is_some(),
-            "expected text content in error response, got: {:?}",
-            err.content.get(0).map(|c| &c.raw)
-        );
-        let text = text.unwrap();
-        assert!(text.text.contains("exceeds maximum size"));
+        let text = err.content[0].raw.as_text().expect("expected text content");
+        assert!(text.text.contains("SQL too large"));
         assert!(text.text.contains("1 MB"));
     }
 
     #[test]
     fn test_check_sql_length_within_limits_returns_ok() {
-        // Valid SQL within limits
         let valid_sql = "SELECT * FROM users";
         let result = check_sql_length(valid_sql);
         assert!(result.is_ok());

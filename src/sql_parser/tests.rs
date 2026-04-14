@@ -1,22 +1,27 @@
 use super::*;
 
+/// Helper that calls parse_sql with the MySQL dialect (the default for tests).
+fn parse(sql: &str) -> crate::sql_parser::Result<crate::sql_parser::ParsedStatement> {
+    crate::sql_parser::parse_sql(sql, "MySQL")
+}
+
 #[test]
 fn test_select() {
-    let p = parse_sql("SELECT * FROM users").unwrap();
+    let p = parse("SELECT * FROM users").unwrap();
     assert_eq!(p.statement_type, StatementType::Select);
     assert!(p.statement_type.is_read_only());
 }
 
 #[test]
 fn test_select_with_schema() {
-    let p = parse_sql("SELECT * FROM mydb.users").unwrap();
+    let p = parse("SELECT * FROM mydb.users").unwrap();
     assert_eq!(p.statement_type, StatementType::Select);
     // schema extraction is from INSERT/UPDATE/DELETE/DDL, not SELECT
 }
 
 #[test]
 fn test_insert() {
-    let p = parse_sql("INSERT INTO mydb.users (id, name) VALUES (1, 'Alice')").unwrap();
+    let p = parse("INSERT INTO mydb.users (id, name) VALUES (1, 'Alice')").unwrap();
     assert_eq!(p.statement_type, StatementType::Insert);
     assert_eq!(p.target_schema, Some("mydb".to_string()));
     assert!(p.statement_type.is_write());
@@ -24,21 +29,21 @@ fn test_insert() {
 
 #[test]
 fn test_update() {
-    let p = parse_sql("UPDATE mydb.users SET name = 'Bob' WHERE id = 1").unwrap();
+    let p = parse("UPDATE mydb.users SET name = 'Bob' WHERE id = 1").unwrap();
     assert_eq!(p.statement_type, StatementType::Update);
     assert_eq!(p.target_schema, Some("mydb".to_string()));
 }
 
 #[test]
 fn test_delete() {
-    let p = parse_sql("DELETE FROM mydb.orders WHERE id = 5").unwrap();
+    let p = parse("DELETE FROM mydb.orders WHERE id = 5").unwrap();
     assert_eq!(p.statement_type, StatementType::Delete);
     assert_eq!(p.target_schema, Some("mydb".to_string()));
 }
 
 #[test]
 fn test_create_table() {
-    let p = parse_sql("CREATE TABLE mydb.t (id INT)").unwrap();
+    let p = parse("CREATE TABLE mydb.t (id INT)").unwrap();
     assert_eq!(p.statement_type, StatementType::Create);
     assert!(p.statement_type.is_ddl());
     assert_eq!(p.target_schema, Some("mydb".to_string()));
@@ -46,54 +51,54 @@ fn test_create_table() {
 
 #[test]
 fn test_alter_table() {
-    let p = parse_sql("ALTER TABLE mydb.users ADD COLUMN age INT").unwrap();
+    let p = parse("ALTER TABLE mydb.users ADD COLUMN age INT").unwrap();
     assert_eq!(p.statement_type, StatementType::Alter);
     assert_eq!(p.target_schema, Some("mydb".to_string()));
 }
 
 #[test]
 fn test_drop_table() {
-    let p = parse_sql("DROP TABLE mydb.users").unwrap();
+    let p = parse("DROP TABLE mydb.users").unwrap();
     assert_eq!(p.statement_type, StatementType::Drop);
     assert_eq!(p.target_schema, Some("mydb".to_string()));
 }
 
 #[test]
 fn test_truncate() {
-    let p = parse_sql("TRUNCATE TABLE mydb.logs").unwrap();
+    let p = parse("TRUNCATE TABLE mydb.logs").unwrap();
     assert_eq!(p.statement_type, StatementType::Truncate);
     assert_eq!(p.target_schema, Some("mydb".to_string()));
 }
 
 #[test]
 fn test_use() {
-    let p = parse_sql("USE mydb").unwrap();
+    let p = parse("USE mydb").unwrap();
     assert_eq!(p.statement_type, StatementType::Use);
 }
 
 #[test]
 fn test_show_tables() {
-    let p = parse_sql("SHOW TABLES").unwrap();
+    let p = parse("SHOW TABLES").unwrap();
     assert_eq!(p.statement_type, StatementType::Show);
     assert!(p.statement_type.is_read_only());
 }
 
 #[test]
 fn test_explain() {
-    let p = parse_sql("EXPLAIN SELECT * FROM users").unwrap();
+    let p = parse("EXPLAIN SELECT * FROM users").unwrap();
     assert_eq!(p.statement_type, StatementType::Explain);
     assert!(p.statement_type.is_read_only());
 }
 
 #[test]
 fn test_set_variable() {
-    let p = parse_sql("SET @x = 1").unwrap();
+    let p = parse("SET @x = 1").unwrap();
     assert_eq!(p.statement_type, StatementType::Set);
 }
 
 #[test]
 fn test_empty_sql() {
-    assert!(parse_sql("").is_err());
+    assert!(parse("").is_err());
 }
 
 #[test]
@@ -105,69 +110,69 @@ fn test_names() {
 
 #[test]
 fn test_insert_no_schema() {
-    let parsed = parse_sql("INSERT INTO users (name) VALUES ('test')").unwrap();
+    let parsed = parse("INSERT INTO users (name) VALUES ('test')").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Insert);
     assert!(parsed.target_schema.is_none());
 }
 
 #[test]
 fn test_update_no_schema() {
-    let parsed = parse_sql("UPDATE users SET name='new' WHERE id=1").unwrap();
+    let parsed = parse("UPDATE users SET name='new' WHERE id=1").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Update);
     assert!(parsed.target_schema.is_none());
 }
 
 #[test]
 fn test_delete_no_schema() {
-    let parsed = parse_sql("DELETE FROM users WHERE id=1").unwrap();
+    let parsed = parse("DELETE FROM users WHERE id=1").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Delete);
     assert!(parsed.target_schema.is_none());
 }
 
 #[test]
 fn test_create_table_no_schema() {
-    let parsed = parse_sql("CREATE TABLE foo (id INT PRIMARY KEY)").unwrap();
+    let parsed = parse("CREATE TABLE foo (id INT PRIMARY KEY)").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Create);
     assert!(parsed.target_schema.is_none());
 }
 
 #[test]
 fn test_alter_table_no_schema() {
-    let parsed = parse_sql("ALTER TABLE foo ADD COLUMN bar VARCHAR(255)").unwrap();
+    let parsed = parse("ALTER TABLE foo ADD COLUMN bar VARCHAR(255)").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Alter);
     assert!(parsed.target_schema.is_none());
 }
 
 #[test]
 fn test_drop_table_no_schema() {
-    let parsed = parse_sql("DROP TABLE foo").unwrap();
+    let parsed = parse("DROP TABLE foo").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Drop);
     assert!(parsed.target_schema.is_none());
 }
 
 #[test]
 fn test_truncate_no_schema() {
-    let parsed = parse_sql("TRUNCATE TABLE foo").unwrap();
+    let parsed = parse("TRUNCATE TABLE foo").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Truncate);
     assert!(parsed.target_schema.is_none());
 }
 
 #[test]
 fn test_select_no_schema() {
-    let parsed = parse_sql("SELECT * FROM users").unwrap();
+    let parsed = parse("SELECT * FROM users").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Select);
     assert!(parsed.target_schema.is_none());
 }
 
 #[test]
 fn test_invalid_sql() {
-    let result = parse_sql("NOT VALID SQL !!!");
+    let result = parse("NOT VALID SQL !!!");
     assert!(result.is_err());
 }
 
 #[test]
 fn test_schema_detection_qualified() {
-    let parsed = parse_sql("INSERT INTO mydb.users (name) VALUES ('test')").unwrap();
+    let parsed = parse("INSERT INTO mydb.users (name) VALUES ('test')").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Insert);
     assert_eq!(parsed.target_schema, Some("mydb".to_string()));
 }
@@ -209,39 +214,39 @@ fn test_is_ddl_comprehensive() {
 #[test]
 fn test_use_database() {
     // USE parses successfully (permission check blocks it, not the parser)
-    let parsed = parse_sql("USE mydb").unwrap();
+    let parsed = parse("USE mydb").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Use);
 }
 
 #[test]
 fn test_show_databases() {
-    let parsed = parse_sql("SHOW DATABASES").unwrap();
+    let parsed = parse("SHOW DATABASES").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Show);
     assert!(parsed.statement_type.is_read_only());
 }
 
 #[test]
 fn test_explain_select() {
-    let parsed = parse_sql("EXPLAIN SELECT * FROM users WHERE id = 1").unwrap();
+    let parsed = parse("EXPLAIN SELECT * FROM users WHERE id = 1").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Explain);
     assert!(parsed.statement_type.is_read_only());
 }
 
 #[test]
 fn test_set_statement() {
-    let parsed = parse_sql("SET @x = 1").unwrap();
+    let parsed = parse("SET @x = 1").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Set);
 }
 
 #[test]
 fn test_create_database() {
-    let parsed = parse_sql("CREATE DATABASE mydb").unwrap();
+    let parsed = parse("CREATE DATABASE mydb").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Create);
 }
 
 #[test]
 fn test_drop_qualified_schema() {
-    let parsed = parse_sql("DROP TABLE mydb.users").unwrap();
+    let parsed = parse("DROP TABLE mydb.users").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Drop);
     assert_eq!(parsed.target_schema, Some("mydb".to_string()));
 }
@@ -250,7 +255,7 @@ fn test_drop_qualified_schema() {
 
 #[test]
 fn test_write_warnings_update_no_where() {
-    let parsed = parse_sql("UPDATE users SET name = 'x'").unwrap();
+    let parsed = parse("UPDATE users SET name = 'x'").unwrap();
     let warnings = parse_write_warnings(&parsed);
     assert_eq!(warnings.len(), 1);
     assert!(
@@ -262,7 +267,7 @@ fn test_write_warnings_update_no_where() {
 
 #[test]
 fn test_write_warnings_update_with_where() {
-    let parsed = parse_sql("UPDATE users SET name = 'x' WHERE id = 1").unwrap();
+    let parsed = parse("UPDATE users SET name = 'x' WHERE id = 1").unwrap();
     let warnings = parse_write_warnings(&parsed);
     assert!(
         warnings.is_empty(),
@@ -272,7 +277,7 @@ fn test_write_warnings_update_with_where() {
 
 #[test]
 fn test_write_warnings_delete_no_where() {
-    let parsed = parse_sql("DELETE FROM users").unwrap();
+    let parsed = parse("DELETE FROM users").unwrap();
     let warnings = parse_write_warnings(&parsed);
     assert_eq!(warnings.len(), 1);
     assert!(
@@ -284,7 +289,7 @@ fn test_write_warnings_delete_no_where() {
 
 #[test]
 fn test_write_warnings_delete_with_where() {
-    let parsed = parse_sql("DELETE FROM users WHERE id = 1").unwrap();
+    let parsed = parse("DELETE FROM users WHERE id = 1").unwrap();
     let warnings = parse_write_warnings(&parsed);
     assert!(
         warnings.is_empty(),
@@ -294,7 +299,7 @@ fn test_write_warnings_delete_with_where() {
 
 #[test]
 fn test_write_warnings_truncate() {
-    let parsed = parse_sql("TRUNCATE TABLE users").unwrap();
+    let parsed = parse("TRUNCATE TABLE users").unwrap();
     let warnings = parse_write_warnings(&parsed);
     assert_eq!(warnings.len(), 1);
     assert!(
@@ -306,14 +311,14 @@ fn test_write_warnings_truncate() {
 
 #[test]
 fn test_write_warnings_insert_no_warnings() {
-    let parsed = parse_sql("INSERT INTO users (name) VALUES ('Alice')").unwrap();
+    let parsed = parse("INSERT INTO users (name) VALUES ('Alice')").unwrap();
     let warnings = parse_write_warnings(&parsed);
     assert!(warnings.is_empty(), "Expected no warnings for INSERT");
 }
 
 #[test]
 fn test_write_warnings_select_no_warnings() {
-    let parsed = parse_sql("SELECT * FROM users").unwrap();
+    let parsed = parse("SELECT * FROM users").unwrap();
     let warnings = parse_write_warnings(&parsed);
     assert!(warnings.is_empty(), "Expected no warnings for SELECT");
 }
@@ -323,7 +328,7 @@ fn test_multi_statement_rejected() {
     // A multi-statement input must be rejected, regardless of what the
     // first statement is — otherwise "SELECT 1; DROP TABLE t" would be
     // misclassified as a read-only SELECT while MySQL would execute both.
-    let err = parse_sql("SELECT 1; DROP TABLE t").unwrap_err();
+    let err = parse("SELECT 1; DROP TABLE t").unwrap_err();
     let msg = err.to_string();
     assert!(
         msg.contains("Multi-statement"),
@@ -331,7 +336,7 @@ fn test_multi_statement_rejected() {
     );
 
     // Two harmless SELECTs are also forbidden.
-    let err2 = parse_sql("SELECT 1; SELECT 2").unwrap_err();
+    let err2 = parse("SELECT 1; SELECT 2").unwrap_err();
     assert!(err2.to_string().contains("Multi-statement"));
 }
 
@@ -339,7 +344,7 @@ fn test_multi_statement_rejected() {
 
 #[test]
 fn test_parse_warnings_leading_wildcard_like() {
-    let parsed = parse_sql("SELECT id FROM users WHERE name LIKE '%foo'").unwrap();
+    let parsed = parse("SELECT id FROM users WHERE name LIKE '%foo'").unwrap();
     assert!(
         parsed.has_leading_wildcard_like,
         "Expected has_leading_wildcard_like=true"
@@ -356,7 +361,7 @@ fn test_parse_warnings_leading_wildcard_like() {
 
 #[test]
 fn test_parse_warnings_no_leading_wildcard() {
-    let parsed = parse_sql("SELECT id FROM users WHERE name LIKE 'foo%' LIMIT 10").unwrap();
+    let parsed = parse("SELECT id FROM users WHERE name LIKE 'foo%' LIMIT 10").unwrap();
     assert!(
         !parsed.has_leading_wildcard_like,
         "Expected has_leading_wildcard_like=false for trailing wildcard"
@@ -373,9 +378,9 @@ fn test_parse_warnings_no_leading_wildcard() {
 
 #[test]
 fn test_parse_warnings_no_reparse() {
-    // Warnings are pre-computed by parse_sql() and stored in parsed.warnings —
+    // Warnings are pre-computed by parse() and stored in parsed.warnings —
     // verify that parse_sql populates the field correctly for a simple SELECT.
-    let parsed = parse_sql("SELECT * FROM users").unwrap();
+    let parsed = parse("SELECT * FROM users").unwrap();
     // SELECT * with no LIMIT and no WHERE triggers specific warnings.
     assert!(
         parsed.warnings.iter().any(|w| w.contains("SELECT *")),
@@ -396,7 +401,7 @@ fn test_parse_warnings_no_reparse() {
 
 #[test]
 fn test_union_query_gets_compound_warning() {
-    let parsed = parse_sql("SELECT 1 UNION SELECT 2").unwrap();
+    let parsed = parse("SELECT 1 UNION SELECT 2").unwrap();
     assert_eq!(
         parsed.statement_type,
         StatementType::Select,
@@ -412,7 +417,7 @@ fn test_union_query_gets_compound_warning() {
 #[test]
 fn test_select_for_update_rejected() {
     // FOR UPDATE is a locking read — classified via query.locks AST field, not raw string.
-    let parsed = parse_sql("SELECT id FROM users WHERE id = 1 FOR UPDATE").unwrap();
+    let parsed = parse("SELECT id FROM users WHERE id = 1 FOR UPDATE").unwrap();
     assert!(
         matches!(parsed.statement_type, StatementType::Other(_)),
         "SELECT FOR UPDATE should be classified as Other, got: {:?}",
@@ -422,7 +427,7 @@ fn test_select_for_update_rejected() {
 
 #[test]
 fn test_select_for_share_rejected() {
-    let parsed = parse_sql("SELECT id FROM users WHERE id = 1 FOR SHARE").unwrap();
+    let parsed = parse("SELECT id FROM users WHERE id = 1 FOR SHARE").unwrap();
     assert!(
         matches!(parsed.statement_type, StatementType::Other(_)),
         "SELECT FOR SHARE should be classified as Other"
@@ -432,7 +437,7 @@ fn test_select_for_share_rejected() {
 #[test]
 fn test_select_plain_not_falsely_rejected_for_update() {
     // A column alias containing "update" must NOT be rejected as a locking read.
-    let parsed = parse_sql("SELECT count(*) AS total_for_update_review FROM t").unwrap();
+    let parsed = parse("SELECT count(*) AS total_for_update_review FROM t").unwrap();
     assert_eq!(
         parsed.statement_type,
         StatementType::Select,
@@ -443,7 +448,7 @@ fn test_select_plain_not_falsely_rejected_for_update() {
 #[test]
 fn test_create_index_classified_as_create() {
     // CREATE INDEX must go through the explicit arm, not the debug-string catchall.
-    let parsed = parse_sql("CREATE INDEX idx_name ON users (email)").unwrap();
+    let parsed = parse("CREATE INDEX idx_name ON users (email)").unwrap();
     assert_eq!(
         parsed.statement_type,
         StatementType::Create,
@@ -456,7 +461,7 @@ fn test_create_index_classified_as_create() {
 fn test_union_with_limit_has_limit_set() {
     // query.limit is a top-level field on Query, so it applies to UNION bodies too.
     // Verify has_limit=true so max_rows injection is not incorrectly applied.
-    let parsed = parse_sql("SELECT 1 UNION SELECT 2 LIMIT 5").unwrap();
+    let parsed = parse("SELECT 1 UNION SELECT 2 LIMIT 5").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Select);
     assert!(
         parsed.has_limit,
@@ -468,7 +473,7 @@ fn test_union_with_limit_has_limit_set() {
 fn test_into_outfile_is_rejected() {
     // Core security check: SELECT INTO OUTFILE writes to the server filesystem and
     // must be blocked, regardless of the file path.
-    let result = parse_sql("SELECT * FROM users INTO OUTFILE '/tmp/out.csv'");
+    let result = parse("SELECT * FROM users INTO OUTFILE '/tmp/out.csv'");
     assert!(result.is_err(), "SELECT INTO OUTFILE must be rejected");
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -479,7 +484,7 @@ fn test_into_outfile_is_rejected() {
 
 #[test]
 fn test_into_dumpfile_is_rejected() {
-    let result = parse_sql("SELECT id FROM t INTO DUMPFILE '/tmp/dump.bin'");
+    let result = parse("SELECT id FROM t INTO DUMPFILE '/tmp/dump.bin'");
     assert!(result.is_err(), "SELECT INTO DUMPFILE must be rejected");
 }
 
@@ -487,7 +492,7 @@ fn test_into_dumpfile_is_rejected() {
 fn test_select_comment_not_false_positive_for_outfile() {
     // A SQL comment containing "INTO OUTFILE" must not cause a false rejection.
     // The normalized check uses AST Display which strips comments.
-    let parsed = parse_sql("SELECT id FROM t -- INTO OUTFILE '/tmp/out'").unwrap();
+    let parsed = parse("SELECT id FROM t -- INTO OUTFILE '/tmp/out'").unwrap();
     assert_eq!(
         parsed.statement_type,
         StatementType::Select,
@@ -499,45 +504,45 @@ fn test_select_comment_not_false_positive_for_outfile() {
 fn test_set_global_blocked() {
     // sqlparser rejects `SET GLOBAL var = val` syntax at parse time,
     // so SET GLOBAL is blocked regardless of our post-parse check.
-    let result = parse_sql("SET GLOBAL max_connections = 1000");
+    let result = parse("SET GLOBAL max_connections = 1000");
     assert!(result.is_err(), "SET GLOBAL must be rejected");
 }
 
 #[test]
 fn test_set_persist_blocked() {
     // sqlparser rejects `SET PERSIST var = val` syntax at parse time.
-    let result = parse_sql("SET PERSIST max_connections = 1000");
+    let result = parse("SET PERSIST max_connections = 1000");
     assert!(result.is_err(), "SET PERSIST must be rejected");
 }
 
 #[test]
 fn test_set_global_variable_syntax_blocked() {
-    let result = parse_sql("SET @@GLOBAL.max_connections = 1000");
+    let result = parse("SET @@GLOBAL.max_connections = 1000");
     assert!(result.is_err(), "SET @@GLOBAL.var must be rejected");
 }
 
 #[test]
 fn test_set_persist_variable_syntax_blocked() {
-    let result = parse_sql("SET @@PERSIST.max_connections = 1000");
+    let result = parse("SET @@PERSIST.max_connections = 1000");
     assert!(result.is_err(), "SET @@PERSIST.var must be rejected");
 }
 
 #[test]
 fn test_set_session_allowed() {
-    let parsed = parse_sql("SET SESSION sql_mode = ''").unwrap();
+    let parsed = parse("SET SESSION sql_mode = ''").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Set);
 }
 
 #[test]
 fn test_set_user_variable_allowed() {
-    let parsed = parse_sql("SET @my_var = 42").unwrap();
+    let parsed = parse("SET @my_var = 42").unwrap();
     assert_eq!(parsed.statement_type, StatementType::Set);
 }
 
 #[test]
 fn test_select_string_literal_into_outfile_not_false_positive() {
     // A string literal containing "INTO OUTFILE" must not cause a false rejection.
-    let parsed = parse_sql("SELECT 'INTO OUTFILE /tmp/x' FROM t").unwrap();
+    let parsed = parse("SELECT 'INTO OUTFILE /tmp/x' FROM t").unwrap();
     assert_eq!(
         parsed.statement_type,
         StatementType::Select,
@@ -548,7 +553,7 @@ fn test_select_string_literal_into_outfile_not_false_positive() {
 #[test]
 fn test_select_string_literal_into_dumpfile_not_false_positive() {
     // A string literal containing "INTO DUMPFILE" must not cause a false rejection.
-    let parsed = parse_sql("SELECT 'INTO DUMPFILE /tmp/x' FROM t").unwrap();
+    let parsed = parse("SELECT 'INTO DUMPFILE /tmp/x' FROM t").unwrap();
     assert_eq!(
         parsed.statement_type,
         StatementType::Select,
@@ -581,7 +586,7 @@ fn test_strip_single_quoted_literals() {
 
 #[test]
 fn test_delete_single_table_schema() {
-    let p = parse_sql("DELETE FROM db1.orders WHERE id = 5").unwrap();
+    let p = parse("DELETE FROM db1.orders WHERE id = 5").unwrap();
     assert_eq!(p.statement_type, StatementType::Delete);
     assert_eq!(p.target_schema, Some("db1".to_string()));
     assert_eq!(p.all_target_schemas, vec!["db1".to_string()]);
@@ -589,7 +594,7 @@ fn test_delete_single_table_schema() {
 
 #[test]
 fn test_delete_single_table_no_schema() {
-    let p = parse_sql("DELETE FROM orders WHERE id = 5").unwrap();
+    let p = parse("DELETE FROM orders WHERE id = 5").unwrap();
     assert_eq!(p.statement_type, StatementType::Delete);
     assert!(p.target_schema.is_none());
     assert!(p.all_target_schemas.is_empty());
@@ -598,7 +603,7 @@ fn test_delete_single_table_no_schema() {
 #[test]
 fn test_delete_multi_table_collects_all_schemas() {
     // Multi-table DELETE with two different schemas in FROM clause.
-    let p = parse_sql("DELETE db1.t1, db2.t2 FROM db1.t1 JOIN db2.t2 ON db1.t1.id = db2.t2.id")
+    let p = parse("DELETE db1.t1, db2.t2 FROM db1.t1 JOIN db2.t2 ON db1.t1.id = db2.t2.id")
         .unwrap();
     assert_eq!(p.statement_type, StatementType::Delete);
     // target_schema is the first table's schema (backward compat)
@@ -612,7 +617,7 @@ fn test_delete_multi_table_collects_all_schemas() {
 #[test]
 fn test_delete_multi_table_deduplicates_schemas() {
     // Both tables are in the same schema — should only appear once.
-    let p = parse_sql("DELETE db1.t1, db1.t2 FROM db1.t1 JOIN db1.t2 ON db1.t1.id = db1.t2.id")
+    let p = parse("DELETE db1.t1, db1.t2 FROM db1.t1 JOIN db1.t2 ON db1.t1.id = db1.t2.id")
         .unwrap();
     assert_eq!(p.statement_type, StatementType::Delete);
     assert_eq!(p.all_target_schemas, vec!["db1".to_string()]);
@@ -621,7 +626,7 @@ fn test_delete_multi_table_deduplicates_schemas() {
 #[test]
 fn test_delete_multi_table_case_insensitive_dedup() {
     // Schema names differing only in case should be deduplicated.
-    let p = parse_sql("DELETE DB1.t1, db1.t2 FROM DB1.t1 JOIN db1.t2 ON DB1.t1.id = db1.t2.id")
+    let p = parse("DELETE DB1.t1, db1.t2 FROM DB1.t1 JOIN db1.t2 ON DB1.t1.id = db1.t2.id")
         .unwrap();
     assert_eq!(p.statement_type, StatementType::Delete);
     // Should have only one entry (the first occurrence's casing is preserved)

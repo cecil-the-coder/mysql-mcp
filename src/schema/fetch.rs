@@ -1,58 +1,27 @@
+//! MySQL information_schema query functions (legacy, kept for backward compatibility).
+//!
+//! These functions operate on `MySqlPool` directly. The backend trait
+//! implementations in `backend::mysql` are now the primary path for
+//! schema metadata queries, but these are kept for any code that
+//! needs direct pool access.
+
+#![allow(dead_code)]
+//!
+//! These functions are the low-level MySQL-specific queries for fetching
+//! schema metadata. They operate on `MySqlPool` directly and are used by
+//! the MySQL backend implementation in `backend::mysql`.
+//!
+//! Kept for backward compatibility with code that directly calls these functions.
+
 use anyhow::Result;
 use sqlx::MySqlPool;
 
 use super::{ColumnInfo, IndexDef, TableInfo};
 
-// MySQL information_schema columns (TABLE_NAME, DATA_TYPE, COLUMN_KEY, etc.) are
-// sometimes returned as binary blobs by sqlx. These helpers try String first,
-// then fall back to Vec<u8> -> UTF-8 so callers always get a usable value.
-pub(crate) fn is_col_str(row: &sqlx::mysql::MySqlRow, col: &str) -> String {
-    use sqlx::Row;
-    row.try_get::<String, _>(col)
-        .or_else(|_| {
-            row.try_get::<Vec<u8>, _>(col)
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
-        })
-        .unwrap_or_else(|e| {
-            tracing::warn!(
-                "Failed to extract column '{}' from row as String or binary: {}",
-                col,
-                e
-            );
-            String::new()
-        })
-}
-
-pub(crate) fn is_col_str_opt(row: &sqlx::mysql::MySqlRow, col: &str) -> Option<String> {
-    use sqlx::Row;
-    let s = row
-        .try_get::<Option<String>, _>(col)
-        .ok()
-        .flatten()
-        .or_else(|| {
-            row.try_get::<Option<Vec<u8>>, _>(col)
-                .ok()
-                .flatten()
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
-        })?;
-    // Avoid allocation if no trimming is needed (common case)
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        None
-    } else if trimmed.len() == s.len() {
-        // No whitespace to trim, return original string
-        Some(s)
-    } else {
-        // Trimming was needed, create new string
-        Some(trimmed.to_string())
-    }
-}
-
-/// Escape a MySQL identifier for use in backtick-quoted contexts.
-/// Doubles any backtick characters within the name.
-pub(crate) fn escape_mysql_identifier(name: &str) -> String {
-    name.replace('`', "``")
-}
+// Re-export from backend::mysql for backward compatibility
+pub(crate) use crate::backend::mysql::escape_mysql_identifier;
+pub(crate) use crate::backend::mysql::is_col_str;
+pub(crate) use crate::backend::mysql::is_col_str_opt;
 
 pub(crate) async fn fetch_tables(
     pool: &MySqlPool,
@@ -193,8 +162,6 @@ pub(crate) async fn fetch_indexed_columns(
         ),
         None => format!("`{}`", escape_mysql_identifier(table)),
     };
-    // SHOW INDEX FROM does not support bound parameters in MySQL; identifiers
-    // must be escaped and interpolated directly (see escape_mysql_identifier).
     let sql = format!("SHOW INDEX FROM {}", qualified);
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();

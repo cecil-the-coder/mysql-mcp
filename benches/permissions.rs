@@ -7,9 +7,9 @@
 //! (HashMap), string lowercasing, and several match branches.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use mysql_mcp::config::{Config, SchemaPermissions};
-use mysql_mcp::permissions::check_permission;
-use mysql_mcp::sql_parser::StatementType;
+use sql_mcp::config::{Config, SchemaPermissions};
+use sql_mcp::permissions::check_permission;
+use sql_mcp::sql_parser::StatementType;
 
 fn make_config_allow_all() -> Config {
     let mut c = Config::default();

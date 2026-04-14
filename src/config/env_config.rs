@@ -77,57 +77,72 @@ fn parse_bool_env(key: &str) -> Option<bool> {
 /// Only sets fields where the env var is actually present.
 pub fn load_env_config() -> EnvConfig {
     EnvConfig {
-        host: std::env::var("MYSQL_HOST").ok(),
-        port: parse_env_num::<u16>("MYSQL_PORT"),
-        socket: std::env::var("MYSQL_SOCKET_PATH").ok(),
-        user: std::env::var("MYSQL_USER").ok(),
-        password: std::env::var("MYSQL_PASS").ok(),
-        database: std::env::var("MYSQL_DB").ok().filter(|s| !s.is_empty()),
-        connection_string: std::env::var("MYSQL_CONNECTION_STRING").ok(),
-        pool_size: parse_env_num::<u32>("MYSQL_POOL_SIZE"),
-        query_timeout_ms: parse_env_num::<u64>("MYSQL_QUERY_TIMEOUT"),
-        connect_timeout_ms: parse_env_num::<u64>("MYSQL_CONNECT_TIMEOUT"),
-        cache_ttl_secs: parse_env_num::<u64>("MYSQL_CACHE_TTL"),
-        allow_insert: parse_bool_env("MYSQL_ALLOW_INSERT"),
-        allow_update: parse_bool_env("MYSQL_ALLOW_UPDATE"),
-        allow_delete: parse_bool_env("MYSQL_ALLOW_DELETE"),
-        allow_ddl: parse_bool_env("MYSQL_ALLOW_DDL"),
-        ssl: parse_bool_env("MYSQL_SSL"),
-        ssl_accept_invalid_certs: parse_bool_env("MYSQL_SSL_ACCEPT_INVALID_CERTS"),
-        ssl_ca: std::env::var("MYSQL_SSL_CA").ok().filter(|s| !s.is_empty()),
-        allow_runtime_connections: parse_bool_env("MYSQL_ALLOW_RUNTIME_CONNECTIONS"),
+        backend: std::env::var("DB_BACKEND").ok().and_then(|v| {
+            match v.to_lowercase().as_str() {
+                "mysql" => Some(crate::backend::BackendKind::MySql),
+                "postgres" | "postgresql" => Some(crate::backend::BackendKind::Postgres),
+                "sqlite" => Some(crate::backend::BackendKind::Sqlite),
+                _ => {
+                    eprintln!(
+                        "Warning: DB_BACKEND is set to {:?} but is not a recognized backend (mysql, postgres, sqlite); using default",
+                        v
+                    );
+                    None
+                }
+            }
+        }),
+        host: std::env::var("DB_HOST").ok(),
+        port: parse_env_num::<u16>("DB_PORT"),
+        socket: std::env::var("DB_SOCKET_PATH").ok(),
+        user: std::env::var("DB_USER").ok(),
+        password: std::env::var("DB_PASS").ok(),
+        database: std::env::var("DB_DATABASE").ok().filter(|s| !s.is_empty()),
+        path: std::env::var("DB_PATH").ok().filter(|s| !s.is_empty()),
+        connection_string: std::env::var("DB_CONNECTION_STRING").ok(),
+        pool_size: parse_env_num::<u32>("DB_POOL_SIZE"),
+        query_timeout_ms: parse_env_num::<u64>("DB_QUERY_TIMEOUT"),
+        connect_timeout_ms: parse_env_num::<u64>("DB_CONNECT_TIMEOUT"),
+        cache_ttl_secs: parse_env_num::<u64>("DB_CACHE_TTL"),
+        allow_insert: parse_bool_env("DB_ALLOW_INSERT"),
+        allow_update: parse_bool_env("DB_ALLOW_UPDATE"),
+        allow_delete: parse_bool_env("DB_ALLOW_DELETE"),
+        allow_ddl: parse_bool_env("DB_ALLOW_DDL"),
+        ssl: parse_bool_env("DB_SSL"),
+        ssl_accept_invalid_certs: parse_bool_env("DB_SSL_ACCEPT_INVALID_CERTS"),
+        ssl_ca: std::env::var("DB_SSL_CA").ok().filter(|s| !s.is_empty()),
+        allow_runtime_connections: parse_bool_env("DB_ALLOW_RUNTIME_CONNECTIONS"),
         schema_permissions: parse_schema_permissions(),
-        performance_hints: std::env::var("MYSQL_PERFORMANCE_HINTS").ok(),
-        slow_query_threshold_ms: parse_env_num::<u64>("MYSQL_SLOW_QUERY_THRESHOLD_MS"),
-        max_rows: parse_env_num::<u32>("MYSQL_MAX_ROWS"),
-        max_sessions: parse_env_num::<u32>("MYSQL_MAX_SESSIONS"),
-        max_total_connections: parse_env_num::<u32>("MYSQL_MAX_TOTAL_CONNECTIONS"),
-        retry_attempts: parse_env_num::<u32>("MYSQL_RETRY_ATTEMPTS"),
-        max_result_memory_mb: parse_env_num::<u32>("MYSQL_MAX_RESULT_MEMORY_MB"),
-        ssh_host: std::env::var("MYSQL_SSH_HOST")
+        performance_hints: std::env::var("DB_PERFORMANCE_HINTS").ok(),
+        slow_query_threshold_ms: parse_env_num::<u64>("DB_SLOW_QUERY_THRESHOLD_MS"),
+        max_rows: parse_env_num::<u32>("DB_MAX_ROWS"),
+        max_sessions: parse_env_num::<u32>("DB_MAX_SESSIONS"),
+        max_total_connections: parse_env_num::<u32>("DB_MAX_TOTAL_CONNECTIONS"),
+        retry_attempts: parse_env_num::<u32>("DB_RETRY_ATTEMPTS"),
+        max_result_memory_mb: parse_env_num::<u32>("DB_MAX_RESULT_MEMORY_MB"),
+        ssh_host: std::env::var("DB_SSH_HOST")
             .ok()
             .filter(|s| !s.is_empty()),
-        ssh_port: parse_env_num::<u16>("MYSQL_SSH_PORT"),
-        ssh_user: std::env::var("MYSQL_SSH_USER")
+        ssh_port: parse_env_num::<u16>("DB_SSH_PORT"),
+        ssh_user: std::env::var("DB_SSH_USER")
             .ok()
             .filter(|s| !s.is_empty()),
-        ssh_private_key: std::env::var("MYSQL_SSH_PRIVATE_KEY")
+        ssh_private_key: std::env::var("DB_SSH_PRIVATE_KEY")
             .ok()
             .filter(|s| !s.is_empty()),
-        ssh_known_hosts_check: std::env::var("MYSQL_SSH_KNOWN_HOSTS_CHECK")
+        ssh_known_hosts_check: std::env::var("DB_SSH_KNOWN_HOSTS_CHECK")
             .ok()
             .filter(|s| !s.is_empty()),
-        ssh_known_hosts_file: std::env::var("MYSQL_SSH_KNOWN_HOSTS_FILE")
+        ssh_known_hosts_file: std::env::var("DB_SSH_KNOWN_HOSTS_FILE")
             .ok()
             .filter(|s| !s.is_empty()),
     }
 }
 
-/// Parse MYSQL_SCHEMA_<NAME>_PERMISSIONS env vars.
-/// Format: MYSQL_SCHEMA_mydb_PERMISSIONS=insert,update (comma-separated allowed ops)
+/// Parse DB_SCHEMA_<NAME>_PERMISSIONS env vars.
+/// Format: DB_SCHEMA_mydb_PERMISSIONS=insert,update (comma-separated allowed ops)
 fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
     let mut map = HashMap::new();
-    const PREFIX: &str = "MYSQL_SCHEMA_";
+    const PREFIX: &str = "DB_SCHEMA_";
     const SUFFIX: &str = "_PERMISSIONS";
 
     for (key, val) in std::env::vars() {
@@ -142,7 +157,7 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
         {
             let schema_name = schema_name.to_lowercase();
             if schema_name.is_empty() {
-                eprintln!("Warning: {key} has an empty schema name (double underscore?); expected MYSQL_SCHEMA_<name>_PERMISSIONS — skipping");
+                eprintln!("Warning: {key} has an empty schema name (double underscore?); expected DB_SCHEMA_<name>_PERMISSIONS — skipping");
                 continue;
             }
             if schema_name.chars().count() > 64 {
@@ -167,7 +182,7 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
             if ops.is_empty() {
                 eprintln!(
                     "Warning: {key} has an empty permissions list; skipping \
-                     (use e.g. MYSQL_SCHEMA_{}_PERMISSIONS=insert,update to allow writes)",
+                     (use e.g. DB_SCHEMA_{}_PERMISSIONS=insert,update to allow writes)",
                     schema_name.to_uppercase()
                 );
                 continue;
@@ -198,12 +213,14 @@ fn parse_schema_permissions() -> HashMap<String, SchemaPermissions> {
 /// All env var overrides (None = not set, don't override).
 #[derive(Debug, Default)]
 pub struct EnvConfig {
+    pub backend: Option<crate::backend::BackendKind>,
     pub host: Option<String>,
     pub port: Option<u16>,
     pub socket: Option<String>,
     pub user: Option<String>,
     pub password: Option<String>,
     pub database: Option<String>,
+    pub path: Option<String>,
     pub connection_string: Option<String>,
     pub pool_size: Option<u32>,
     pub query_timeout_ms: Option<u64>,
@@ -236,11 +253,14 @@ pub struct EnvConfig {
 impl EnvConfig {
     /// Apply env var overrides onto a base Config, returning the merged result.
     pub fn apply_to(self, mut base: Config) -> Config {
+        if let Some(v) = self.backend {
+            base.backend = v;
+        }
         if let Some(v) = self.host {
             base.connection.host = v;
         }
         if let Some(v) = self.port {
-            base.connection.port = v;
+            base.connection.port = Some(v);
         }
         if let Some(v) = self.socket {
             base.connection.socket = Some(v);
@@ -253,6 +273,9 @@ impl EnvConfig {
         }
         if let Some(v) = self.database {
             base.connection.database = Some(v);
+        }
+        if let Some(v) = self.path {
+            base.connection.path = Some(v);
         }
         if let Some(v) = self.connection_string {
             base.connection.connection_string = Some(v);
@@ -322,7 +345,7 @@ impl EnvConfig {
         if let Some(v) = self.max_result_memory_mb {
             base.pool.max_result_memory_mb = v;
         }
-        // SSH tunnel config: if any MYSQL_SSH_* env var is set, build/update the SshConfig
+        // SSH tunnel config: if any DB_SSH_* env var is set, build/update the SshConfig
         let any_ssh = self.ssh_host.is_some()
             || self.ssh_user.is_some()
             || self.ssh_port.is_some()

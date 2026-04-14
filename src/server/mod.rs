@@ -1,36 +1,3 @@
-//! MCP server implementation for the MySQL MCP bridge.
-//!
-//! This module implements the Model Context Protocol (MCP) server that exposes
-//! MySQL databases to LLM clients. It provides MCP tool handlers, session management,
-//! and security features like host validation to ensure safe database access.
-//!
-//! # Architecture
-//!
-//! The module is organized into submodules:
-//!
-//! - `handlers` — Individual MCP tool implementations (query, schema info, etc.)
-//! - `sessions` — Named session management and connection pooling
-//! - `tool_schemas` — JSON schema definitions for MCP tool inputs
-//! - `error` — Error handling utilities for MCP responses
-//!
-//! # Key Components
-//!
-//! - [`McpServer`] — The main server struct implementing the MCP protocol
-//! - [`SessionStore`] — Manages named database sessions with automatic cleanup
-//! - [`validate_host_with_dns`] — Async host validation with DNS resolution
-//! - [`is_blocked_ip`] — IP address filtering for security
-//!
-//! # Security Features
-//!
-//! The server includes several security mechanisms:
-//!
-//! - **Host validation**: Blocks connections to loopback, link-local, multicast,
-//!   and broadcast addresses (both IPv4 and IPv6, including IPv4-mapped IPv6)
-//! - **DNS resolution**: Validates hostnames by resolving them and checking all
-//!   returned IPs against the blocked list
-//! - **Session limits**: Configurable maximum sessions and total connections
-//! - **Idle cleanup**: Automatically reaps sessions idle for >10 minutes
-
 use anyhow::Result;
 use rmcp::{
     model::{
@@ -46,8 +13,9 @@ use std::net::IpAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::Mutex;
 
+use crate::backend::{Backend, PoolHandle};
 use crate::config::Config;
 use crate::schema::SchemaIntrospector;
 
@@ -60,9 +28,6 @@ use sessions::SessionStore;
 use tool_schemas::*;
 
 /// Check if an IP address is in a blocked range.
-/// When `allow_loopback` is true, loopback addresses are permitted (for hostname
-/// resolution where localhost is legitimate). When false, loopback is blocked
-/// (for direct IP connections).
 fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
     match ip {
         IpAddr::V4(v4) => {
@@ -74,10 +39,6 @@ fn is_blocked_ip(ip: IpAddr, allow_loopback: bool) -> bool {
                 || v4.is_multicast()
         }
         IpAddr::V6(v6) => {
-            // Check IPv4-mapped addresses (::ffff:a.b.c.d)
-            // Use to_ipv4_mapped() — NOT to_ipv4() — because to_ipv4()
-            // also converts "IPv4-compatible" addresses like ::1 into
-            // Some(0.0.0.1), which would bypass the IPv6 loopback check.
             if let Some(v4) = v6.to_ipv4_mapped() {
                 let loopback_blocked = !allow_loopback && v4.is_loopback();
                 return loopback_blocked
@@ -103,7 +64,6 @@ pub(crate) struct HostValidation {
 
 /// Validate a host string, resolving hostnames via DNS.
 pub(crate) async fn validate_host_with_dns(host: &str) -> HostValidation {
-    // Fast path: literal IP address (no DNS lookup needed)
     if let Ok(ip) = host.parse::<IpAddr>() {
         let blocked = is_blocked_ip(ip, false);
         return HostValidation {
@@ -119,7 +79,6 @@ pub(crate) async fn validate_host_with_dns(host: &str) -> HostValidation {
         };
     }
 
-    // Hostname: resolve via DNS and check all IPs
     let hostname = host.to_lowercase();
     if hostname.is_empty() {
         return HostValidation {
@@ -133,9 +92,7 @@ pub(crate) async fn validate_host_with_dns(host: &str) -> HostValidation {
     let result = tokio::time::timeout(std::time::Duration::from_secs(5), lookup_future).await;
     match result {
         Ok(Ok(addrs)) => {
-            let mut found_any = false;
             for ip in addrs.map(|a| a.ip()) {
-                found_any = true;
                 if is_blocked_ip(ip, true) {
                     return HostValidation {
                         allowed: false,
@@ -145,12 +102,6 @@ pub(crate) async fn validate_host_with_dns(host: &str) -> HostValidation {
                         )),
                     };
                 }
-            }
-            if !found_any {
-                return HostValidation {
-                    allowed: false,
-                    reason: Some(format!("Hostname '{}' resolved to no addresses", hostname)),
-                };
             }
             HostValidation {
                 allowed: true,
@@ -168,98 +119,75 @@ pub(crate) async fn validate_host_with_dns(host: &str) -> HostValidation {
     }
 }
 
-/// Check whether a host string is a blocked IP address.
-/// This is a helper for testing `is_blocked_ip` logic.
-/// For async operations with DNS caching, use `validate_host_with_dns`.
 #[cfg(test)]
 fn is_private_host(host: &str) -> bool {
     if let Ok(ip) = host.parse::<IpAddr>() {
         is_blocked_ip(ip, false)
     } else {
-        false // hostname — allowed (DNS validation happens in async path)
+        false
     }
 }
 
 pub struct McpServer {
     pub config: Arc<Config>,
-    pub db: Arc<sqlx::MySqlPool>,
+    pub db: PoolHandle,
     pub introspector: Arc<SchemaIntrospector>,
+    pub backend: Arc<dyn Backend>,
     store: SessionStore,
     /// Holds the SSH tunnel for the default session alive for the server's lifetime.
-    /// None when not using SSH tunneling.
     _default_tunnel: Option<crate::tunnel::TunnelHandle>,
-    /// When dropped, signals the session reaper task to shut down.
-    _shutdown_tx: oneshot::Sender<()>,
 }
 
 impl McpServer {
     pub fn new(
         config: Arc<Config>,
-        db: Arc<sqlx::MySqlPool>,
+        db: PoolHandle,
+        backend: Arc<dyn Backend>,
         tunnel: Option<crate::tunnel::TunnelHandle>,
     ) -> Self {
-        let introspector = Arc::new(SchemaIntrospector::new(
+        let introspector = Arc::new(SchemaIntrospector::new_with_backend(
             db.clone(),
+            backend.clone(),
             config.pool.cache_ttl_secs,
         ));
         let sessions: Arc<Mutex<HashMap<String, sessions::Session>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        // Total connections counter shared between session store and reaper
-        let total_connections: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+        let total_connections: Arc<AtomicU32> = Arc::new(AtomicU32::new(config.pool.size));
 
-        // Shutdown channel for graceful termination of the session reaper task.
-        // When McpServer is dropped, the sender is dropped, causing receivers to get
-        // a Closed error, which signals the reaper to exit.
-        let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
-
-        // Background task: drop sessions idle for > 10 minutes (600 s).
-        // "default" is never dropped. SSH tunnels are explicitly closed so the
-        // subprocess is reaped rather than relying on Drop's non-blocking start_kill().
-        // The task exits when _shutdown_tx is dropped (server shutdown).
+        // Background task: drop sessions idle for > 10 minutes
         let sessions_reaper = sessions.clone();
         let reaper_total_connections = total_connections.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             loop {
-                tokio::select! {
-                    // Prioritize shutdown signal over interval tick
-                    _ = &mut shutdown_rx => break,
-                    _ = interval.tick() => {}
-                }
-                // Use a single lock scope for both identifying and removing stale sessions
-                // to avoid TOCTOU race conditions between collection and removal.
+                interval.tick().await;
                 let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(600);
-                let reaped: Vec<sessions::Session> = {
-                    let mut map = sessions_reaper.lock().await;
-                    let stale_names: Vec<String> = map
-                        .iter()
+                let stale: Vec<String> = {
+                    let map = sessions_reaper.lock().await;
+                    map.iter()
                         .filter(|(_, s)| s.last_used <= cutoff)
                         .map(|(name, _)| name.clone())
-                        .collect();
-                    let mut reaped = Vec::with_capacity(stale_names.len());
-                    for name in stale_names {
-                        if let Some(session) = map.remove(&name) {
-                            // Decrement total connections counter for reaped session
-                            // Use saturating_sub to prevent underflow in edge cases
-                            let _ = reaper_total_connections.fetch_update(
-                                Ordering::AcqRel,
-                                Ordering::Acquire,
-                                |current| {
-                                    Some(current.saturating_sub(sessions::NAMED_SESSION_POOL_SIZE))
-                                },
-                            );
-                            reaped.push(session);
+                        .collect()
+                };
+                for name in stale {
+                    let mut map = sessions_reaper.lock().await;
+                    let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(600);
+                    if let Some(session) = map.get(&name) {
+                        if session.last_used > cutoff {
+                            continue;
                         }
                     }
-                    reaped
-                };
-                // Perform async cleanup outside the lock
-                for session in reaped {
-                    if let Some(tunnel) = session.tunnel {
-                        sessions::close_tunnel_with_timeout(tunnel, "during session reap").await;
+                    if let Some(session) = map.remove(&name) {
+                        reaper_total_connections
+                            .fetch_sub(sessions::NAMED_SESSION_POOL_SIZE, Ordering::Release);
+                        drop(map);
+                        if let Some(tunnel) = session.tunnel {
+                            sessions::close_tunnel_with_timeout(tunnel, "during session reap")
+                                .await;
+                        }
+                        session.pool.close().await;
                     }
-                    session.pool.close().await;
                 }
             }
         });
@@ -269,6 +197,7 @@ impl McpServer {
             config: config.clone(),
             db: db.clone(),
             introspector: introspector.clone(),
+            backend: backend.clone(),
             total_connections,
         };
 
@@ -276,9 +205,9 @@ impl McpServer {
             config,
             db,
             introspector,
+            backend,
             store,
             _default_tunnel: tunnel,
-            _shutdown_tx: shutdown_tx,
         }
     }
 
@@ -295,45 +224,18 @@ impl ServerHandler for McpServer {
             protocol_version: ProtocolVersion::default(),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation {
-                name: "mysql-mcp".to_string(),
-                title: Some("MySQL MCP Server".to_string()),
+                name: "sql-mcp".to_string(),
+                title: Some("SQL MCP Server".to_string()),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 description: Some(
-                    "Expose MySQL databases via the Model Context Protocol".to_string(),
+                    "Multi-backend database MCP server (MySQL, PostgreSQL, SQLite)".to_string(),
                 ),
                 icons: None,
                 website_url: None,
             },
             instructions: Some(
-                concat!(
-                    "You are connected to a MySQL database via the Model Context Protocol. ",
-                    "Available tools and recommended workflows:",
-                    "\n\n",
-                    "1. INITIAL SETUP: Use mysql_server_info to check the MySQL version, ",
-                    "current database, user permissions, and which features are enabled. ",
-                    "This helps you understand what operations are allowed and the environment context.",
-                    "\n\n",
-                    "2. SCHEMA DISCOVERY: Before querying unknown tables, use mysql_list_tables ",
-                    "to see available tables, then use mysql_schema_info to inspect table structure, ",
-                    "columns, indexes, foreign keys, and table sizes. This helps write correct queries ",
-                    "and understand relationships.",
-                    "\n\n",
-                    "3. QUERY PLANNING: For complex or potentially expensive queries, use mysql_explain_plan ",
-                    "to check the execution plan before running. This shows if indexes will be used, ",
-                    "estimated rows to scan, and whether a full table scan will occur.",
-                    "\n\n",
-                    "4. EXECUTION: Use mysql_query to run SELECT, INSERT, UPDATE, DELETE, or DDL statements. ",
-                    "The query tool returns results, timing, and may include warnings about missing LIMITs ",
-                    "or full table scans. Enable explain:true for automatic execution plan inclusion.",
-                    "\n\n",
-                    "5. SESSION MANAGEMENT: Use mysql_connect to create named sessions for different ",
-                    "databases or hosts (requires MYSQL_ALLOW_RUNTIME_CONNECTIONS). Use mysql_list_sessions ",
-                    "to see active sessions and mysql_disconnect to close unused ones. Idle sessions ",
-                    "are automatically cleaned up after 10 minutes.",
-                    "\n\n",
-                    "RECOMMENDED WORKFLOW: server_info → list_tables → schema_info → (explain_plan for expensive queries) → mysql_query"
-                )
-                .to_string(),
+                "Use query to execute SQL queries against the connected database."
+                    .to_string(),
             ),
         }
     }
@@ -346,9 +248,9 @@ impl ServerHandler for McpServer {
         {
             let tools = vec![
                 Tool::new(
-                    "mysql_query",
+                    "query",
                     concat!(
-                        "Execute a SQL query against MySQL. ",
+                        "Execute a SQL query against the database. ",
                         "Always returned: rows, row_count, execution_time_ms, serialization_time_ms. ",
                         "Optional: plan (only when explain:true or server auto-triggers for slow queries), ",
                         "capped+next_offset+capped_hint (only when result was truncated to max_rows limit), ",
@@ -356,10 +258,10 @@ impl ServerHandler for McpServer {
                         "parse_warnings (only when non-empty — hints about missing LIMIT, leading wildcards, etc.). ",
                         "Supports SELECT, SHOW, EXPLAIN, and (if configured) INSERT, UPDATE, DELETE, DDL.",
                     ),
-                    mysql_query_schema(),
+                    query_schema(),
                 ),
                 Tool::new(
-                    "mysql_schema_info",
+                    "schema_info",
                     concat!(
                         "Get schema metadata for a table. ",
                         "Default (no include): column names, types, nullability only. ",
@@ -368,44 +270,44 @@ impl ServerHandler for McpServer {
                         "include:[size]: also returns estimated row count and byte sizes. ",
                         "Combine any subset, e.g. include:[indexes,foreign_keys,size] for full detail.",
                     ),
-                    mysql_schema_info_schema(),
+                    schema_info_schema(),
                 ),
                 Tool::new(
-                    "mysql_server_info",
-                    "Get MySQL server metadata: version, current_database, current_user, sql_mode, character_set, collation, time_zone, read_only flag, accessible_features (list of enabled operation types), and which write operations are enabled by server config. Use to understand the environment before writing queries or when diagnosing connection issues.",
-                    mysql_server_info_schema(),
+                    "server_info",
+                    "Get database server metadata: version, current_database, current_user, sql_mode, character_set, collation, time_zone, read_only flag, accessible_features (list of enabled operation types), and which write operations are enabled by server config. Use to understand the environment before writing queries or when diagnosing connection issues.",
+                    server_info_schema(),
                 ),
                 Tool::new(
-                    "mysql_connect",
+                    "connect",
                     concat!(
-                        "Create a named session to a different MySQL server or database. ",
-                        "Use this to: (1) access a different MySQL host, (2) connect with different credentials, ",
+                        "Create a named session to a different database server or database. ",
+                        "Use this to: (1) access a different host, (2) connect with different credentials, ",
                         "(3) route queries to a read replica, (4) work with a different database on the same server. ",
-                        "Requires MYSQL_ALLOW_RUNTIME_CONNECTIONS=true. ",
+                        "Requires DB_ALLOW_RUNTIME_CONNECTIONS=true. ",
                         "Sessions idle for >10 minutes are automatically closed. ",
                         "Pass the session name to other tools via the 'session' parameter.",
                     ),
-                    mysql_connect_schema(),
+                    connect_schema(),
                 ),
                 Tool::new(
-                    "mysql_disconnect",
+                    "disconnect",
                     "Explicitly close a named database session. The default session cannot be closed.",
-                    mysql_disconnect_schema(),
+                    disconnect_schema(),
                 ),
                 Tool::new(
-                    "mysql_list_sessions",
+                    "list_sessions",
                     "List all active named database sessions with host, database, and idle time. The default session is always shown first.",
-                    mysql_list_sessions_schema(),
+                    list_sessions_schema(),
                 ),
                 Tool::new(
-                    "mysql_explain_plan",
+                    "explain_plan",
                     "Get the execution plan for a SELECT query without running it. Returns index_used, rows_examined_estimate, optimization tier, full_table_scan (bool), extra_flags (array of optimizer notes), and note. Use this before executing a potentially expensive query to check efficiency.",
-                    mysql_explain_plan_schema(),
+                    explain_plan_schema(),
                 ),
                 Tool::new(
-                    "mysql_list_tables",
+                    "list_tables",
                     "List all tables in the current or specified database. More discoverable than querying information_schema directly.",
-                    mysql_list_tables_schema(),
+                    list_tables_schema(),
                 ),
             ];
 
@@ -425,14 +327,14 @@ impl ServerHandler for McpServer {
         {
             let args = request.arguments.unwrap_or_default();
             match request.name.as_ref() {
-                "mysql_connect" => self.store.handle_connect(args).await,
-                "mysql_disconnect" => self.store.handle_disconnect(args).await,
-                "mysql_list_sessions" => self.store.handle_list_sessions(args).await,
-                "mysql_schema_info" => self.store.handle_schema_info(args).await,
-                "mysql_server_info" => self.store.handle_server_info(args).await,
-                "mysql_explain_plan" => self.store.handle_explain_plan(args).await,
-                "mysql_list_tables" => self.store.handle_list_tables(args).await,
-                "mysql_query" => self.store.handle_query(args).await,
+                "connect" => self.store.handle_connect(args).await,
+                "disconnect" => self.store.handle_disconnect(args).await,
+                "list_sessions" => self.store.handle_list_sessions(args).await,
+                "schema_info" => self.store.handle_schema_info(args).await,
+                "server_info" => self.store.handle_server_info(args).await,
+                "explain_plan" => self.store.handle_explain_plan(args).await,
+                "list_tables" => self.store.handle_list_tables(args).await,
+                "query" => self.store.handle_query(args).await,
                 name => Err(McpError::new(
                     ErrorCode::METHOD_NOT_FOUND,
                     format!("Unknown tool: {}", name),
@@ -482,46 +384,30 @@ mod tests {
 
     #[test]
     fn ipv4_multicast_is_blocked() {
-        assert!(
-            is_private_host("224.0.0.1"),
-            "224.0.0.1 (IPv4 multicast) must be blocked"
-        );
+        assert!(is_private_host("224.0.0.1"), "224.0.0.1 (IPv4 multicast) must be blocked");
     }
 
     #[test]
     fn ipv6_multicast_is_blocked() {
-        assert!(
-            is_private_host("ff02::1"),
-            "ff02::1 (IPv6 multicast) must be blocked"
-        );
+        assert!(is_private_host("ff02::1"), "ff02::1 (IPv6 multicast) must be blocked");
     }
 
     #[test]
     fn ipv4_private_rfc1918_is_allowed() {
         assert!(!is_private_host("10.0.0.1"), "10.0.0.1 must be allowed");
         assert!(!is_private_host("172.16.0.1"), "172.16.0.1 must be allowed");
-        assert!(
-            !is_private_host("192.168.1.1"),
-            "192.168.1.1 must be allowed"
-        );
+        assert!(!is_private_host("192.168.1.1"), "192.168.1.1 must be allowed");
     }
-
-    // Tests for is_blocked_ip function
-    // allow_loopback=false: used for direct IP connections (loopback blocked)
-    // allow_loopback=true: used for hostname resolution (loopback allowed for localhost)
 
     #[test]
     fn test_is_blocked_ip_ipv4_loopback() {
-        // Direct IP: loopback blocked
         assert!(is_blocked_ip("127.0.0.1".parse().unwrap(), false));
         assert!(is_blocked_ip("127.255.255.255".parse().unwrap(), false));
-        // Hostname resolution: loopback allowed
         assert!(!is_blocked_ip("127.0.0.1".parse().unwrap(), true));
     }
 
     #[test]
     fn test_is_blocked_ip_ipv4_link_local() {
-        // Link-local always blocked
         assert!(is_blocked_ip("169.254.0.1".parse().unwrap(), false));
         assert!(is_blocked_ip("169.254.169.254".parse().unwrap(), false));
         assert!(is_blocked_ip("169.254.0.1".parse().unwrap(), true));
@@ -555,9 +441,7 @@ mod tests {
 
     #[test]
     fn test_is_blocked_ip_ipv6_loopback() {
-        // Direct IP: loopback blocked
         assert!(is_blocked_ip("::1".parse().unwrap(), false));
-        // Hostname resolution: loopback allowed
         assert!(!is_blocked_ip("::1".parse().unwrap(), true));
     }
 

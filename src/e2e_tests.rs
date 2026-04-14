@@ -1,4 +1,4 @@
-//! E2E tests that spawn the compiled mysql-mcp binary and test the full MCP protocol.
+//! E2E tests that spawn the compiled sql-mcp binary and test the full MCP protocol.
 //! These tests require the binary to be compiled first (cargo build).
 //! MySQL is provided via testcontainers (Docker) or env vars — no manual setup needed.
 
@@ -93,13 +93,13 @@ mod tests {
             .expect("tools should be an array");
         let tool_names: Vec<&str> = tool_arr.iter().filter_map(|t| t["name"].as_str()).collect();
         for expected in [
-            "mysql_query",
-            "mysql_schema_info",
-            "mysql_server_info",
-            "mysql_connect",
-            "mysql_disconnect",
-            "mysql_list_sessions",
-            "mysql_explain_plan",
+            "query",
+            "schema_info",
+            "server_info",
+            "connect",
+            "disconnect",
+            "list_sessions",
+            "explain_plan",
         ] {
             assert!(
                 tool_names.contains(&expected),
@@ -177,7 +177,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 4 (error path): mysql_query called without the required `sql` param
+    // Test 4 (error path): query called without the required `sql` param
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn test_mcp_missing_required_params() {
@@ -197,7 +197,7 @@ mod tests {
 
         do_handshake(&mut stdin, &mut reader).await;
 
-        // Call mysql_query without the required `sql` argument.
+        // Call query without the required `sql` argument.
         send_message(
             &mut stdin,
             &json!({
@@ -205,7 +205,7 @@ mod tests {
                 "id": 3,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {}
                 }
             }),
@@ -272,7 +272,7 @@ mod tests {
                 "id": 4,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": "SELECT * FROM nonexistent_table_xyz_999"
                     }
@@ -308,7 +308,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 6 (permission): INSERT is denied when MYSQL_ALLOW_INSERT is not set
+    // Test 6 (permission): INSERT is denied when DB_ALLOW_INSERT is not set
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn test_mcp_insert_denied_without_permission() {
@@ -320,7 +320,7 @@ mod tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        // Spawn with default permissions (MYSQL_ALLOW_INSERT not set → denied).
+        // Spawn with default permissions (DB_ALLOW_INSERT not set → denied).
         let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
             return;
         };
@@ -336,7 +336,7 @@ mod tests {
                 "id": 5,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": "INSERT INTO _e2e_perm_test (id) VALUES (1)"
                     }
@@ -352,7 +352,7 @@ mod tests {
         let result = resp.get("result").expect("Expected a result object");
         assert_eq!(
             result["isError"], true,
-            "INSERT should be denied when MYSQL_ALLOW_INSERT is not set, got: {}",
+            "INSERT should be denied when DB_ALLOW_INSERT is not set, got: {}",
             resp
         );
         let text = result["content"][0]["text"].as_str().unwrap_or("");
@@ -367,7 +367,7 @@ mod tests {
 
     // -------------------------------------------------------------------------
     // Test 7 (write + DDL): CREATE TABLE → INSERT → SELECT → DROP succeeds
-    //         when MYSQL_ALLOW_INSERT and MYSQL_ALLOW_DDL are enabled.
+    //         when DB_ALLOW_INSERT and DB_ALLOW_DDL are enabled.
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn test_mcp_write_and_ddl_allowed() {
@@ -386,7 +386,7 @@ mod tests {
         let Some(mut child) = spawn_server(
             &binary,
             &test_db,
-            &[("MYSQL_ALLOW_INSERT", "true"), ("MYSQL_ALLOW_DDL", "true")],
+            &[("DB_ALLOW_INSERT", "true"), ("DB_ALLOW_DDL", "true")],
         ) else {
             return;
         };
@@ -399,7 +399,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 5, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": format!(
                             "CREATE TABLE `{}` (id INT PRIMARY KEY AUTO_INCREMENT, val VARCHAR(50))",
@@ -425,7 +425,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 6, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": format!("INSERT INTO `{}` (val) VALUES ('hello_e2e')", table)
                     }
@@ -438,7 +438,7 @@ mod tests {
             .expect("no response to INSERT");
         assert_ne!(
             r["result"]["isError"], true,
-            "INSERT should succeed when MYSQL_ALLOW_INSERT=true, got: {}",
+            "INSERT should succeed when DB_ALLOW_INSERT=true, got: {}",
             r
         );
         let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
@@ -454,7 +454,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 7, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": { "sql": format!("SELECT val FROM `{}`", table) }
                 }
             }),
@@ -481,7 +481,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 8, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": { "sql": format!("DROP TABLE `{}`", table) }
                 }
             }),
@@ -500,7 +500,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 8: mysql_schema_info returns column metadata for an existing table
+    // Test 8: schema_info returns column metadata for an existing table
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn test_mcp_schema_info_call() {
@@ -512,7 +512,7 @@ mod tests {
             return;
         };
         let table = format!("_e2e_si{}", std::process::id());
-        let Some(mut child) = spawn_server(&binary, &test_db, &[("MYSQL_ALLOW_DDL", "true")])
+        let Some(mut child) = spawn_server(&binary, &test_db, &[("DB_ALLOW_DDL", "true")])
         else {
             return;
         };
@@ -525,7 +525,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 10, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": format!(
                             "CREATE TABLE `{}` (id INT PRIMARY KEY, name VARCHAR(100))",
@@ -541,13 +541,13 @@ mod tests {
             .expect("no CREATE response");
         assert_ne!(r["result"]["isError"], true, "CREATE TABLE failed: {}", r);
 
-        // Call mysql_schema_info
+        // Call schema_info
         send_message(
             &mut stdin,
             &json!({
                 "jsonrpc": "2.0", "id": 11, "method": "tools/call",
                 "params": {
-                    "name": "mysql_schema_info",
+                    "name": "schema_info",
                     "arguments": { "table": table }
                 }
             }),
@@ -558,7 +558,7 @@ mod tests {
             .expect("no schema_info response");
         assert_ne!(
             r["result"]["isError"], true,
-            "mysql_schema_info failed: {}",
+            "schema_info failed: {}",
             r
         );
         let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
@@ -574,7 +574,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 12, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": { "sql": format!("DROP TABLE `{}`", table) }
                 }
             }),
@@ -585,7 +585,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 9: mysql_server_info returns version and current database fields
+    // Test 9: server_info returns version and current database fields
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn test_mcp_server_info_call() {
@@ -606,7 +606,7 @@ mod tests {
             &mut stdin,
             &json!({
                 "jsonrpc": "2.0", "id": 20, "method": "tools/call",
-                "params": { "name": "mysql_server_info", "arguments": {} }
+                "params": { "name": "server_info", "arguments": {} }
             }),
         )
         .await;
@@ -617,7 +617,7 @@ mod tests {
 
         assert_ne!(
             r["result"]["isError"], true,
-            "mysql_server_info failed: {}",
+            "server_info failed: {}",
             r
         );
         let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
@@ -629,7 +629,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 10: mysql_explain_plan returns a plan for a simple SELECT
+    // Test 10: explain_plan returns a plan for a simple SELECT
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn test_mcp_explain_plan_call() {
@@ -651,7 +651,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 30, "method": "tools/call",
                 "params": {
-                    "name": "mysql_explain_plan",
+                    "name": "explain_plan",
                     "arguments": { "sql": "SELECT 1 + 1" }
                 }
             }),
@@ -664,7 +664,7 @@ mod tests {
 
         assert_ne!(
             r["result"]["isError"], true,
-            "mysql_explain_plan failed: {}",
+            "explain_plan failed: {}",
             r
         );
         let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
@@ -676,7 +676,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 11: mysql_explain_plan with non-SELECT returns an error
+    // Test 11: explain_plan with non-SELECT returns an error
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn test_mcp_explain_plan_non_select_rejected() {
@@ -693,13 +693,13 @@ mod tests {
         let (mut stdin, mut reader) = setup_io(&mut child);
         do_handshake(&mut stdin, &mut reader).await;
 
-        // Call mysql_explain_plan with an INSERT statement
+        // Call explain_plan with an INSERT statement
         send_message(
             &mut stdin,
             &json!({
                 "jsonrpc": "2.0", "id": 31, "method": "tools/call",
                 "params": {
-                    "name": "mysql_explain_plan",
+                    "name": "explain_plan",
                     "arguments": { "sql": "INSERT INTO some_table (col) VALUES (1)" }
                 }
             }),
@@ -713,7 +713,7 @@ mod tests {
         // Should return an error indicating only SELECT is supported
         assert_eq!(
             r["result"]["isError"], true,
-            "mysql_explain_plan with INSERT should return isError:true, got: {}",
+            "explain_plan with INSERT should return isError:true, got: {}",
             r
         );
         let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
@@ -725,7 +725,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 12 (permission): UPDATE is denied when MYSQL_ALLOW_UPDATE is not set
+    // Test 12 (permission): UPDATE is denied when DB_ALLOW_UPDATE is not set
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn test_mcp_update_denied_without_permission() {
@@ -737,7 +737,7 @@ mod tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        // Spawn with default permissions (MYSQL_ALLOW_UPDATE not set -> denied).
+        // Spawn with default permissions (DB_ALLOW_UPDATE not set -> denied).
         let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
             return;
         };
@@ -753,7 +753,7 @@ mod tests {
                 "id": 6,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": "UPDATE _e2e_perm_test SET id = 2 WHERE id = 1"
                     }
@@ -769,7 +769,7 @@ mod tests {
         let result = resp.get("result").expect("Expected a result object");
         assert_eq!(
             result["isError"], true,
-            "UPDATE should be denied when MYSQL_ALLOW_UPDATE is not set, got: {}",
+            "UPDATE should be denied when DB_ALLOW_UPDATE is not set, got: {}",
             resp
         );
         let text = result["content"][0]["text"].as_str().unwrap_or("");
@@ -799,10 +799,10 @@ mod tests {
             &binary,
             &test_db,
             &[
-                ("MYSQL_ALLOW_DDL", "true"),
-                ("MYSQL_ALLOW_INSERT", "true"),
-                ("MYSQL_ALLOW_UPDATE", "true"),
-                ("MYSQL_ALLOW_DELETE", "true"),
+                ("DB_ALLOW_DDL", "true"),
+                ("DB_ALLOW_INSERT", "true"),
+                ("DB_ALLOW_UPDATE", "true"),
+                ("DB_ALLOW_DELETE", "true"),
             ],
         ) else {
             return;
@@ -816,7 +816,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 40, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": format!(
                             "CREATE TABLE `{}` (id INT PRIMARY KEY, val INT)",
@@ -838,7 +838,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 41, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": format!("INSERT INTO `{}` (id, val) VALUES (1, 10)", table)
                     }
@@ -857,7 +857,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 42, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": format!("UPDATE `{}` SET val = 20 WHERE id = 1", table)
                     }
@@ -882,7 +882,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 43, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": format!("DELETE FROM `{}` WHERE id = 1", table)
                     }
@@ -907,7 +907,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 44, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": { "sql": format!("DROP TABLE `{}`", table) }
                 }
             }),
@@ -934,9 +934,9 @@ mod tests {
             &binary,
             &test_db,
             &[
-                ("MYSQL_ALLOW_DDL", "true"),
-                ("MYSQL_ALLOW_INSERT", "true"),
-                ("MYSQL_MAX_ROWS", "3"),
+                ("DB_ALLOW_DDL", "true"),
+                ("DB_ALLOW_INSERT", "true"),
+                ("DB_MAX_ROWS", "3"),
             ],
         ) else {
             return;
@@ -950,7 +950,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 50, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": format!("CREATE TABLE `{}` (n INT)", table)
                     }
@@ -969,7 +969,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 51, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": format!(
                             "INSERT INTO `{}` (n) VALUES (1),(2),(3),(4),(5)",
@@ -991,7 +991,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 52, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": { "sql": format!("SELECT n FROM `{}` ORDER BY n", table) }
                 }
             }),
@@ -1019,7 +1019,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 53, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": { "sql": format!("DROP TABLE `{}`", table) }
                 }
             }),
@@ -1030,7 +1030,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 13 (permission): DELETE is denied when MYSQL_ALLOW_DELETE is not set
+    // Test 13 (permission): DELETE is denied when DB_ALLOW_DELETE is not set
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn test_mcp_delete_denied_without_permission() {
@@ -1042,7 +1042,7 @@ mod tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        // Spawn with default permissions (MYSQL_ALLOW_DELETE not set → denied).
+        // Spawn with default permissions (DB_ALLOW_DELETE not set → denied).
         let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
             return;
         };
@@ -1058,7 +1058,7 @@ mod tests {
                 "id": 5,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": "DELETE FROM _e2e_perm_test WHERE id = 1"
                     }
@@ -1074,7 +1074,7 @@ mod tests {
         let result = resp.get("result").expect("Expected a result object");
         assert_eq!(
             result["isError"], true,
-            "DELETE should be denied when MYSQL_ALLOW_DELETE is not set, got: {}",
+            "DELETE should be denied when DB_ALLOW_DELETE is not set, got: {}",
             resp
         );
         let text = result["content"][0]["text"].as_str().unwrap_or("");
@@ -1088,7 +1088,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 14: mysql_list_tables returns a tables array for the database
+    // Test 14: list_tables returns a tables array for the database
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn test_mcp_list_tables_call() {
@@ -1100,7 +1100,7 @@ mod tests {
             return;
         };
         let table = format!("_e2e_lt{}", std::process::id());
-        let Some(mut child) = spawn_server(&binary, &test_db, &[("MYSQL_ALLOW_DDL", "true")])
+        let Some(mut child) = spawn_server(&binary, &test_db, &[("DB_ALLOW_DDL", "true")])
         else {
             return;
         };
@@ -1122,7 +1122,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 70, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": format!(
                             "CREATE TABLE `{}`.`{}` (id INT PRIMARY KEY)",
@@ -1138,13 +1138,13 @@ mod tests {
             .expect("no CREATE response");
         assert_ne!(r["result"]["isError"], true, "CREATE TABLE failed: {}", r);
 
-        // Call mysql_list_tables with explicit database
+        // Call list_tables with explicit database
         send_message(
             &mut stdin,
             &json!({
                 "jsonrpc": "2.0", "id": 71, "method": "tools/call",
                 "params": {
-                    "name": "mysql_list_tables",
+                    "name": "list_tables",
                     "arguments": {
                         "database": db_name
                     }
@@ -1157,7 +1157,7 @@ mod tests {
             .expect("no list_tables response");
         assert_ne!(
             r["result"]["isError"], true,
-            "mysql_list_tables failed: {}",
+            "list_tables failed: {}",
             r
         );
         let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
@@ -1187,7 +1187,7 @@ mod tests {
             &json!({
                 "jsonrpc": "2.0", "id": 72, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": { "sql": format!("DROP TABLE `{}`.`{}`", db_name, table) }
                 }
             }),
@@ -1198,7 +1198,7 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
-    // Test 15 (permission): DDL is denied when MYSQL_ALLOW_DDL is not set
+    // Test 15 (permission): DDL is denied when DB_ALLOW_DDL is not set
     // -------------------------------------------------------------------------
     #[tokio::test]
     async fn test_mcp_ddl_denied_without_permission() {
@@ -1210,7 +1210,7 @@ mod tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        // Spawn with default permissions (MYSQL_ALLOW_DDL not set → denied).
+        // Spawn with default permissions (DB_ALLOW_DDL not set → denied).
         let Some(mut child) = spawn_server(&binary, &test_db, &[]) else {
             return;
         };
@@ -1226,7 +1226,7 @@ mod tests {
                 "id": 60,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": "CREATE TABLE _e2e_ddl_denied_test (id INT PRIMARY KEY)"
                     }
@@ -1242,7 +1242,7 @@ mod tests {
         let result = resp.get("result").expect("Expected a result object");
         assert_eq!(
             result["isError"], true,
-            "DDL should be denied when MYSQL_ALLOW_DDL is not set, got: {}",
+            "DDL should be denied when DB_ALLOW_DDL is not set, got: {}",
             resp
         );
         let text = result["content"][0]["text"].as_str().unwrap_or("");
