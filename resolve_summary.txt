@@ -1,0 +1,21 @@
+Merge Conflict Resolution Summary for src/config/mod.rs
+=====================================================
+
+Issue: Merge conflict between HEAD (with documentation) and origin/main (with code)
+
+Resolution Strategy:
+- Combined the excellent documentation from HEAD with the complete code structure from origin/main
+- Added missing imports and dependencies from origin/main
+- Ensured all required fields and methods were present
+
+Key Changes:
+1. Added missing import: `use crate::backend::BackendKind;`
+2. Added `backend` field to `Config` struct
+3. Added explicit `Default` implementation for `Config` with proper defaults
+4. Added `path` field to `ConnectionConfig` (SQLite support)
+5. Added `Default` implementation for `ConnectionConfig`
+6. Implemented comprehensive `validate()` method with all validation logic
+7. Added helper functions for SSH key validation
+8. Implemented `load_toml_config()` and `load_config()` functions
+
+The resolved file should now compile successfully and maintain all functionality.

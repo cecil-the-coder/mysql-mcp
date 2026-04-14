@@ -67,7 +67,7 @@ pub fn check_permission(
         StatementType::Use => bail!(
             "USE is not supported with connection pooling — the database change would be lost on the next query. \
              Instead, specify the database in your SQL (e.g., SELECT * FROM mydb.table) or \
-             use mysql_connect to create a session with a different default database."
+             use connect to create a session with a different default database."
         ),
         _ => {}
     }
@@ -79,21 +79,21 @@ pub fn check_permission(
                 .and_then(|p| p.allow_insert)
                 .unwrap_or(sec.allow_insert),
             "INSERT".to_string(),
-            "MYSQL_ALLOW_INSERT",
+            "DB_ALLOW_INSERT",
         )),
         StatementType::Update => Some((
             schema_perms
                 .and_then(|p| p.allow_update)
                 .unwrap_or(sec.allow_update),
             "UPDATE".to_string(),
-            "MYSQL_ALLOW_UPDATE",
+            "DB_ALLOW_UPDATE",
         )),
         StatementType::Delete => Some((
             schema_perms
                 .and_then(|p| p.allow_delete)
                 .unwrap_or(sec.allow_delete),
             "DELETE".to_string(),
-            "MYSQL_ALLOW_DELETE",
+            "DB_ALLOW_DELETE",
         )),
         StatementType::Create
         | StatementType::Alter
@@ -103,7 +103,7 @@ pub fn check_permission(
                 .and_then(|p| p.allow_ddl)
                 .unwrap_or(sec.allow_ddl),
             format!("DDL ({})", stmt_type.name()),
-            "MYSQL_ALLOW_DDL",
+            "DB_ALLOW_DDL",
         )),
         _ => None,
     } {

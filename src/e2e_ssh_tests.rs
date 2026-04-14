@@ -1,16 +1,16 @@
 //! E2E tests for SSH tunnel support.
 //!
-//! These tests spawn the mysql-mcp binary as a subprocess and exercise
+//! These tests spawn the sql-mcp binary as a subprocess and exercise
 //! the SSH tunnel feature end-to-end via JSON-RPC over stdio.
 //!
 //! Required environment variables (tests skip if not set):
-//!   MYSQL_SSH_E2E_HOST        — SSH bastion hostname (e.g., 192.168.1.2)
-//!   MYSQL_SSH_E2E_USER        — SSH user (default: root)
-//!   MYSQL_SSH_E2E_DB_HOST     — MySQL host as seen from the bastion
-//!   MYSQL_SSH_E2E_DB_USER     — MySQL user
-//!   MYSQL_SSH_E2E_DB_PASS     — MySQL password
-//!   MYSQL_SSH_E2E_DB_DB       — MySQL database name
-//!   MYSQL_SSH_E2E_DB_SSL_CA   — Path to SSL CA cert (optional)
+//!   DB_SSH_E2E_HOST        — SSH bastion hostname (e.g., 192.168.1.2)
+//!   DB_SSH_E2E_USER        — SSH user (default: root)
+//!   DB_SSH_E2E_DB_HOST     — Database host as seen from the bastion
+//!   DB_SSH_E2E_DB_USER     — Database user
+//!   DB_SSH_E2E_DB_PASS     — Database password
+//!   DB_SSH_E2E_DB_DB       — Database name
+//!   DB_SSH_E2E_DB_SSL_CA   — Path to SSL CA cert (optional)
 
 #[cfg(test)]
 mod ssh_tests {
@@ -33,17 +33,17 @@ mod ssh_tests {
     }
 
     fn get_ssh_e2e_config() -> Option<SshE2eConfig> {
-        let ssh_host = std::env::var("MYSQL_SSH_E2E_HOST").ok()?;
-        let ssh_user = std::env::var("MYSQL_SSH_E2E_USER").unwrap_or_else(|_| "root".to_string());
-        let db_host = std::env::var("MYSQL_SSH_E2E_DB_HOST").ok()?;
-        let db_port = std::env::var("MYSQL_SSH_E2E_DB_PORT")
+        let ssh_host = std::env::var("DB_SSH_E2E_HOST").ok()?;
+        let ssh_user = std::env::var("DB_SSH_E2E_USER").unwrap_or_else(|_| "root".to_string());
+        let db_host = std::env::var("DB_SSH_E2E_DB_HOST").ok()?;
+        let db_port = std::env::var("DB_SSH_E2E_DB_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(3306u16);
-        let db_user = std::env::var("MYSQL_SSH_E2E_DB_USER").ok()?;
-        let db_pass = std::env::var("MYSQL_SSH_E2E_DB_PASS").ok()?;
-        let db_name = std::env::var("MYSQL_SSH_E2E_DB_DB").ok()?;
-        let db_ssl_ca = std::env::var("MYSQL_SSH_E2E_DB_SSL_CA")
+        let db_user = std::env::var("DB_SSH_E2E_DB_USER").ok()?;
+        let db_pass = std::env::var("DB_SSH_E2E_DB_PASS").ok()?;
+        let db_name = std::env::var("DB_SSH_E2E_DB_DB").ok()?;
+        let db_ssl_ca = std::env::var("DB_SSH_E2E_DB_SSL_CA")
             .ok()
             .filter(|s| !s.is_empty());
         Some(SshE2eConfig {
@@ -58,45 +58,45 @@ mod ssh_tests {
         })
     }
 
-    /// Spawn the mysql-mcp binary configured to use an SSH tunnel for its default session.
+    /// Spawn the sql-mcp binary configured to use an SSH tunnel for its default session.
     fn spawn_ssh_server(binary: &std::path::Path, cfg: &SshE2eConfig) -> tokio::process::Child {
         let mut cmd = Command::new(binary);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            // MySQL connection — point at DB host as seen from bastion
-            .env("MYSQL_HOST", &cfg.db_host)
-            .env("MYSQL_PORT", cfg.db_port.to_string())
-            .env("MYSQL_USER", &cfg.db_user)
-            .env("MYSQL_PASS", &cfg.db_pass)
-            .env("MYSQL_DB", &cfg.db_name)
-            .env("MYSQL_CONNECT_TIMEOUT", "60000")
+            // DB connection — point at DB host as seen from bastion
+            .env("DB_HOST", &cfg.db_host)
+            .env("DB_PORT", cfg.db_port.to_string())
+            .env("DB_USER", &cfg.db_user)
+            .env("DB_PASS", &cfg.db_pass)
+            .env("DB_DATABASE", &cfg.db_name)
+            .env("DB_CONNECT_TIMEOUT", "60000")
             // SSH tunnel config
-            .env("MYSQL_SSH_HOST", &cfg.ssh_host)
-            .env("MYSQL_SSH_USER", &cfg.ssh_user)
-            .env("MYSQL_SSH_KNOWN_HOSTS_CHECK", "accept-new");
+            .env("DB_SSH_HOST", &cfg.ssh_host)
+            .env("DB_SSH_USER", &cfg.ssh_user)
+            .env("DB_SSH_KNOWN_HOSTS_CHECK", "accept-new");
         if let Some(ref ca) = cfg.db_ssl_ca {
-            cmd.env("MYSQL_SSL", "true").env("MYSQL_SSL_CA", ca);
+            cmd.env("DB_SSL", "true").env("DB_SSL_CA", ca);
         }
-        cmd.spawn().expect("Failed to spawn mysql-mcp")
+        cmd.spawn().expect("Failed to spawn sql-mcp")
     }
 
     /// Test 1: Default session uses SSH tunnel.
-    /// The binary is started with MYSQL_SSH_HOST configured for the default session.
-    /// We verify that mysql_query works and mysql_list_sessions shows ssh_host.
+    /// The binary is started with DB_SSH_HOST configured for the default session.
+    /// We verify that query works and list_sessions shows ssh_host.
     ///
-    /// NOTE: This test requires that the SSH bastion (MYSQL_SSH_E2E_HOST) can reach
-    /// the MySQL DB (MYSQL_SSH_E2E_DB_HOST:MYSQL_SSH_E2E_DB_PORT). If the bastion
+    /// NOTE: This test requires that the SSH bastion (DB_SSH_E2E_HOST) can reach
+    /// the database (DB_SSH_E2E_DB_HOST:DB_SSH_E2E_DB_PORT). If the bastion
     /// cannot reach the DB, the binary will fail to start and the test will skip
     /// with a diagnostic message.
     #[tokio::test]
     async fn test_default_session_via_ssh_tunnel() {
         let Some(cfg) = get_ssh_e2e_config() else {
-            eprintln!("[skip] MYSQL_SSH_E2E_HOST or DB env vars not set");
+            eprintln!("[skip] DB_SSH_E2E_HOST or DB env vars not set");
             return;
         };
         let Some(binary) = binary_path() else {
-            eprintln!("[skip] mysql-mcp binary not found; run cargo build first");
+            eprintln!("[skip] sql-mcp binary not found; run cargo build first");
             return;
         };
 
@@ -117,7 +117,7 @@ mod ssh_tests {
             &json!({
                 "jsonrpc": "2.0", "id": 10, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {"sql": "SELECT 1 AS n"}
                 }
             }),
@@ -128,7 +128,7 @@ mod ssh_tests {
             eprintln!(
                 "[skip] test_default_session_via_ssh_tunnel: binary did not respond — \
                  likely the SSH bastion ({}) cannot reach the DB ({}:{}). \
-                 Set MYSQL_SSH_E2E_DB_HOST to a host reachable from the bastion.",
+                 Set DB_SSH_E2E_DB_HOST to a host reachable from the bastion.",
                 cfg.ssh_host, cfg.db_host, cfg.db_port
             );
             return;
@@ -149,14 +149,14 @@ mod ssh_tests {
             text
         );
 
-        // mysql_list_sessions should include ssh_host for the default session.
+        // list_sessions should include ssh_host for the default session.
         // The ssh_host field may be null (if this binary predates ssh_host support in
         // session listing) or contain the bastion hostname. Accept either form.
         send_message(
             &mut stdin,
             &json!({
                 "jsonrpc": "2.0", "id": 11, "method": "tools/call",
-                "params": {"name": "mysql_list_sessions", "arguments": {}}
+                "params": {"name": "list_sessions", "arguments": {}}
             }),
         )
         .await;
@@ -177,7 +177,7 @@ mod ssh_tests {
         if !has_ssh_indicator {
             eprintln!(
                 "[warn] sessions output does not include ssh_host field; \
-                 the binary may predate ssh_host support in mysql_list_sessions. \
+                 the binary may predate ssh_host support in list_sessions. \
                  Sessions text: {}",
                 sessions_text
             );
@@ -186,41 +186,41 @@ mod ssh_tests {
         let _ = child.kill().await;
     }
 
-    /// Test 2: mysql_connect with SSH params creates a tunneled named session.
-    /// The default session connects directly (no SSH). We then call mysql_connect
+    /// Test 2: connect with SSH params creates a tunneled named session.
+    /// The default session connects directly (no SSH). We then call connect
     /// with SSH params to create a tunneled named session, run a query, and disconnect.
     #[tokio::test]
-    async fn test_mysql_connect_with_ssh_tunnel() {
+    async fn test_connect_with_ssh_tunnel() {
         let Some(cfg) = get_ssh_e2e_config() else {
-            eprintln!("[skip] MYSQL_SSH_E2E_HOST or DB env vars not set");
+            eprintln!("[skip] DB_SSH_E2E_HOST or DB env vars not set");
             return;
         };
         let Some(binary) = binary_path() else {
-            eprintln!("[skip] mysql-mcp binary not found; run cargo build first");
+            eprintln!("[skip] sql-mcp binary not found; run cargo build first");
             return;
         };
 
         // Start with a direct default connection (using the real DB from local machine)
-        let local_db_host = std::env::var("MYSQL_HOST").unwrap_or_else(|_| cfg.db_host.clone());
-        let local_db_user = std::env::var("MYSQL_USER").unwrap_or_else(|_| cfg.db_user.clone());
-        let local_db_pass = std::env::var("MYSQL_PASS").unwrap_or_else(|_| cfg.db_pass.clone());
-        let local_db_name = std::env::var("MYSQL_DB").unwrap_or_else(|_| cfg.db_name.clone());
-        let local_db_ssl_ca = std::env::var("MYSQL_SSL_CA").ok().filter(|s| !s.is_empty());
+        let local_db_host = std::env::var("DB_HOST").unwrap_or_else(|_| cfg.db_host.clone());
+        let local_db_user = std::env::var("DB_USER").unwrap_or_else(|_| cfg.db_user.clone());
+        let local_db_pass = std::env::var("DB_PASS").unwrap_or_else(|_| cfg.db_pass.clone());
+        let local_db_name = std::env::var("DB_DATABASE").unwrap_or_else(|_| cfg.db_name.clone());
+        let local_db_ssl_ca = std::env::var("DB_SSL_CA").ok().filter(|s| !s.is_empty());
 
         let mut cmd = Command::new(&binary);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .env("MYSQL_HOST", &local_db_host)
-            .env("MYSQL_USER", &local_db_user)
-            .env("MYSQL_PASS", &local_db_pass)
-            .env("MYSQL_DB", &local_db_name)
-            .env("MYSQL_CONNECT_TIMEOUT", "60000")
-            .env("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true");
+            .env("DB_HOST", &local_db_host)
+            .env("DB_USER", &local_db_user)
+            .env("DB_PASS", &local_db_pass)
+            .env("DB_DATABASE", &local_db_name)
+            .env("DB_CONNECT_TIMEOUT", "60000")
+            .env("DB_ALLOW_RUNTIME_CONNECTIONS", "true");
         if let Some(ref ca) = local_db_ssl_ca {
-            cmd.env("MYSQL_SSL", "true").env("MYSQL_SSL_CA", ca);
+            cmd.env("DB_SSL", "true").env("DB_SSL_CA", ca);
         }
-        let mut child = cmd.spawn().expect("Failed to spawn mysql-mcp");
+        let mut child = cmd.spawn().expect("Failed to spawn sql-mcp");
         let (mut stdin, mut reader) = {
             let stdin = child.stdin.take().unwrap();
             let stdout = child.stdout.take().unwrap();
@@ -229,7 +229,7 @@ mod ssh_tests {
 
         do_handshake(&mut stdin, &mut reader).await;
 
-        // mysql_connect with SSH params for the named session
+        // connect with SSH params for the named session
         let mut connect_args = json!({
             "name": "ssh_session",
             "host": cfg.db_host,
@@ -250,7 +250,7 @@ mod ssh_tests {
             &mut stdin,
             &json!({
                 "jsonrpc": "2.0", "id": 20, "method": "tools/call",
-                "params": {"name": "mysql_connect", "arguments": connect_args}
+                "params": {"name": "connect", "arguments": connect_args}
             }),
         )
         .await;
@@ -263,7 +263,7 @@ mod ssh_tests {
                 .get("isError")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
-            "mysql_connect should succeed; got: {}",
+            "connect should succeed; got: {}",
             connect_text
         );
         assert!(
@@ -278,7 +278,7 @@ mod ssh_tests {
             &json!({
                 "jsonrpc": "2.0", "id": 21, "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {"sql": "SELECT 2 AS n", "session": "ssh_session"}
                 }
             }),
@@ -297,12 +297,12 @@ mod ssh_tests {
             query_text
         );
 
-        // mysql_disconnect cleans up the session
+        // disconnect cleans up the session
         send_message(
             &mut stdin,
             &json!({
                 "jsonrpc": "2.0", "id": 22, "method": "tools/call",
-                "params": {"name": "mysql_disconnect", "arguments": {"name": "ssh_session"}}
+                "params": {"name": "disconnect", "arguments": {"name": "ssh_session"}}
             }),
         )
         .await;

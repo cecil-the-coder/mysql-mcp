@@ -1,4 +1,4 @@
-//! Shared helpers for E2E tests that spawn the mysql-mcp binary over stdio.
+//! Shared helpers for E2E tests that spawn the sql-mcp binary over stdio.
 //! All items are `pub(crate)` so they can be used from any `#[cfg(test)]` module.
 
 use serde_json::{json, Value};
@@ -12,7 +12,7 @@ pub(crate) fn binary_path() -> Option<std::path::PathBuf> {
     // rebuilds debug) and `cargo build --release` (which rebuilds release) are
     // handled correctly. Preferring one profile unconditionally causes E2E tests
     // to run against a stale binary when only the other profile was rebuilt.
-    ["./target/release/mysql-mcp", "./target/debug/mysql-mcp"]
+    ["./target/release/sql-mcp", "./target/debug/sql-mcp"]
         .iter()
         .filter_map(|p| {
             let path = std::path::Path::new(p);
@@ -39,11 +39,11 @@ pub(crate) async fn read_response(
     }
 }
 
-/// Spawns the mysql-mcp binary with the given test DB credentials.
+/// Spawns the sql-mcp binary with the given test DB credentials.
 /// `extra_env` is a slice of `(key, value)` pairs applied after
-/// the standard MySQL connection env vars.
+/// the standard database connection env vars.
 ///
-/// All permission/behaviour MYSQL_* env vars that might be set in the
+/// All permission/behaviour DB_* env vars that might be set in the
 /// parent process (e.g. CI job env) are explicitly removed before
 /// `extra_env` is applied, so each test starts from a known baseline.
 pub(crate) fn spawn_server(
@@ -56,52 +56,52 @@ pub(crate) fn spawn_server(
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
-        .env("MYSQL_HOST", &cfg.connection.host)
-        .env("MYSQL_PORT", cfg.connection.port.to_string())
-        .env("MYSQL_USER", &cfg.connection.user)
-        .env("MYSQL_PASS", &cfg.connection.password)
-        .env("MYSQL_SSL", if cfg.security.ssl { "true" } else { "false" })
+        .env("DB_HOST", &cfg.connection.host)
+        .env("DB_PORT", cfg.connection.port.unwrap_or(3306).to_string())
+        .env("DB_USER", &cfg.connection.user)
+        .env("DB_PASS", &cfg.connection.password)
+        .env("DB_SSL", if cfg.security.ssl { "true" } else { "false" })
         .env(
-            "MYSQL_SSL_ACCEPT_INVALID_CERTS",
+            "DB_SSL_ACCEPT_INVALID_CERTS",
             if cfg.security.ssl_accept_invalid_certs {
                 "true"
             } else {
                 "false"
             },
         );
-    // Only set MYSQL_DB/MYSQL_SSL_CA when non-empty: the env_config reader treats
+    // Only set DB_DATABASE/DB_SSL_CA when non-empty: the env_config reader treats
     // Some("") as a database/CA override, which would fail at connect time.
     if let Some(db) = cfg.connection.database.as_deref().filter(|s| !s.is_empty()) {
-        cmd.env("MYSQL_DB", db);
+        cmd.env("DB_DATABASE", db);
     }
     if let Some(ca) = cfg.security.ssl_ca.as_deref().filter(|s| !s.is_empty()) {
-        cmd.env("MYSQL_SSL_CA", ca);
+        cmd.env("DB_SSL_CA", ca);
     }
     cmd
         // Give the binary generous connection headroom: the production
         // default (10 s) can be exhausted on high-latency remote DBs when
         // other tests are simultaneously establishing connections.
-        .env("MYSQL_CONNECT_TIMEOUT", "120000");
+        .env("DB_CONNECT_TIMEOUT", "120000");
 
     // Scrub all permission/behaviour vars that the CI job (or local shell) might
     // have set. This ensures tests that rely on default-deny behaviour are not
     // accidentally passing because the parent exported these vars.
     for var in &[
-        "MYSQL_ALLOW_INSERT",
-        "MYSQL_ALLOW_UPDATE",
-        "MYSQL_ALLOW_DELETE",
-        "MYSQL_ALLOW_DDL",
-        "MYSQL_ALLOW_RUNTIME_CONNECTIONS",
-        "MYSQL_MAX_ROWS",
-        "MYSQL_MAX_SESSIONS",
-        "MYSQL_CACHE_TTL",
+        "DB_ALLOW_INSERT",
+        "DB_ALLOW_UPDATE",
+        "DB_ALLOW_DELETE",
+        "DB_ALLOW_DDL",
+        "DB_ALLOW_RUNTIME_CONNECTIONS",
+        "DB_MAX_ROWS",
+        "DB_MAX_SESSIONS",
+        "DB_CACHE_TTL",
         // Pool/performance vars: scrub so tests are not affected by the parent
-        // process environment (e.g. CI jobs that set MYSQL_QUERY_TIMEOUT).
-        // Note: MYSQL_CONNECT_TIMEOUT is set explicitly above, not scrubbed.
-        "MYSQL_QUERY_TIMEOUT",
-        "MYSQL_POOL_SIZE",
-        "MYSQL_SLOW_QUERY_THRESHOLD_MS",
-        "MYSQL_PERFORMANCE_HINTS",
+        // process environment (e.g. CI jobs that set DB_QUERY_TIMEOUT).
+        // Note: DB_CONNECT_TIMEOUT is set explicitly above, not scrubbed.
+        "DB_QUERY_TIMEOUT",
+        "DB_POOL_SIZE",
+        "DB_SLOW_QUERY_THRESHOLD_MS",
+        "DB_PERFORMANCE_HINTS",
     ] {
         cmd.env_remove(var);
     }
@@ -112,7 +112,7 @@ pub(crate) fn spawn_server(
     match cmd.spawn() {
         Ok(child) => Some(child),
         Err(e) => {
-            eprintln!("Failed to spawn mysql-mcp binary: {}", e);
+            eprintln!("Failed to spawn sql-mcp binary: {}", e);
             None
         }
     }

@@ -823,17 +823,17 @@ mod integration_tests {
     use crate::config::SshConfig;
 
     /// Build an SshConfig from environment variables.
-    /// Returns None (causing test to skip) if MYSQL_SSH_TEST_HOST is not set.
+    /// Returns None (causing test to skip) if DB_SSH_TEST_HOST is not set.
     fn get_test_ssh_config() -> Option<(SshConfig, String, u16)> {
-        let host = std::env::var("MYSQL_SSH_TEST_HOST").ok()?;
-        let user = std::env::var("MYSQL_SSH_TEST_USER").unwrap_or_else(|_| "root".to_string());
-        let private_key = std::env::var("MYSQL_SSH_TEST_KEY")
+        let host = std::env::var("DB_SSH_TEST_HOST").ok()?;
+        let user = std::env::var("DB_SSH_TEST_USER").unwrap_or_else(|_| "root".to_string());
+        let private_key = std::env::var("DB_SSH_TEST_KEY")
             .ok()
             .filter(|s| !s.is_empty());
         // Default: tunnel to the SSH server's own port 22 (always reachable if SSH works)
         let db_host =
-            std::env::var("MYSQL_SSH_TEST_DB_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-        let db_port: u16 = std::env::var("MYSQL_SSH_TEST_DB_PORT")
+            std::env::var("DB_SSH_TEST_DB_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let db_port: u16 = std::env::var("DB_SSH_TEST_DB_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(22);
@@ -853,7 +853,7 @@ mod integration_tests {
     #[tokio::test]
     async fn test_tunnel_establishes_and_port_connectable() {
         let Some((ssh, db_host, db_port)) = get_test_ssh_config() else {
-            eprintln!("[skip] MYSQL_SSH_TEST_HOST not set — skipping SSH integration test");
+            eprintln!("[skip] DB_SSH_TEST_HOST not set — skipping SSH integration test");
             return;
         };
         eprintln!(
@@ -946,7 +946,7 @@ mod integration_tests {
     /// Verify that a bad/unreachable SSH host fails within the timeout, not hanging forever.
     #[tokio::test]
     async fn test_tunnel_fails_on_unreachable_host() {
-        if std::env::var("MYSQL_SSH_TEST_HOST").is_err() {
+        if std::env::var("DB_SSH_TEST_HOST").is_err() {
             return; // only run this when SSH testing is active
         }
         let ssh = SshConfig {

@@ -69,7 +69,7 @@
 //! ```
 
 use anyhow::{bail, Result};
-use sqlparser::dialect::MySqlDialect;
+use sqlparser::dialect::{Dialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
 
 mod classify;
@@ -203,11 +203,17 @@ pub struct ParsedStatement {
 }
 
 /// Parse a SQL string and return the statement type and target schema.
+/// `dialect` selects the sqlparser dialect (e.g. `"MySQL"`, `"PostgreSQL"`, `"SQLite"`).
+/// Unrecognised values fall back to MySQL.
 /// Returns an error if the SQL is invalid or cannot be parsed.
-pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
-    let dialect = MySqlDialect {};
+pub fn parse_sql(sql: &str, dialect: &str) -> Result<ParsedStatement> {
+    let dialect: Box<dyn Dialect> = match dialect {
+        "PostgreSQL" | "postgres" | "postgresql" => Box::new(PostgreSqlDialect {}),
+        "SQLite" | "sqlite" => Box::new(SQLiteDialect {}),
+        _ => Box::new(MySqlDialect {}),
+    };
     let statements =
-        Parser::parse_sql(&dialect, sql).map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
+        Parser::parse_sql(&*dialect, sql).map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
 
     if statements.is_empty() {
         bail!("Empty SQL statement");
