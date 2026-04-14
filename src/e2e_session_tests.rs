@@ -1,6 +1,6 @@
 //! E2E session tests: named session lifecycle, routing, and reserved-name rejection.
-//! Requires the compiled mysql-mcp binary and a real (non-container) MySQL DB because
-//! mysql_connect cannot accept self-signed certificates used by testcontainers.
+//! Requires the compiled sql-mcp binary and a real (non-container) MySQL DB because
+//! connect cannot accept self-signed certificates used by testcontainers.
 
 #[cfg(test)]
 mod session_tests {
@@ -39,7 +39,7 @@ mod session_tests {
                 "id": 5,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": "SELECT 1; DROP TABLE t"
                     }
@@ -84,19 +84,19 @@ mod session_tests {
             return;
         };
 
-        // The mysql_connect tool in the subprocess does not accept
+        // The connect tool in the subprocess does not accept
         // ssl_accept_invalid_certs, so it cannot connect to testcontainers
         // (which use self-signed certificates).  Skip when running against a
         // Docker container; this test is meaningful against a real DB server.
         if test_db.using_container {
-            eprintln!("Skipping test_session_connect_and_disconnect: testcontainer uses self-signed cert incompatible with mysql_connect");
+            eprintln!("Skipping test_session_connect_and_disconnect: testcontainer uses self-signed cert incompatible with connect");
             return;
         }
 
         let Some(mut child) = spawn_server(
             &binary,
             &test_db,
-            &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],
+            &[("DB_ALLOW_RUNTIME_CONNECTIONS", "true")],
         ) else {
             return;
         };
@@ -105,7 +105,7 @@ mod session_tests {
 
         do_handshake(&mut stdin, &mut reader).await;
 
-        // --- mysql_connect ---
+        // --- connect ---
         let cfg = &test_db.config;
         send_message(
             &mut stdin,
@@ -114,11 +114,11 @@ mod session_tests {
                 "id": 10,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_connect",
+                    "name": "connect",
                     "arguments": {
                         "name": "test_sess",
                         "host": cfg.connection.host,
-                        "port": cfg.connection.port,
+                        "port": cfg.connection.port.unwrap_or(3306),
                         "user": cfg.connection.user,
                         "password": cfg.connection.password,
                         "database": cfg.connection.database,
@@ -132,20 +132,20 @@ mod session_tests {
 
         let connect_resp = read_response(&mut reader)
             .await
-            .expect("No response to mysql_connect");
+            .expect("No response to connect");
         assert_eq!(connect_resp["id"], 10);
         assert!(
             connect_resp.get("result").is_some(),
-            "mysql_connect should return a result, got: {}",
+            "connect should return a result, got: {}",
             connect_resp
         );
         assert_ne!(
             connect_resp["result"]["isError"], true,
-            "mysql_connect should succeed, got: {}",
+            "connect should succeed, got: {}",
             connect_resp
         );
 
-        // --- mysql_list_sessions: "test_sess" should appear ---
+        // --- list_sessions: "test_sess" should appear ---
         send_message(
             &mut stdin,
             &json!({
@@ -153,7 +153,7 @@ mod session_tests {
                 "id": 11,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_list_sessions",
+                    "name": "list_sessions",
                     "arguments": {}
                 }
             }),
@@ -162,7 +162,7 @@ mod session_tests {
 
         let list_resp = read_response(&mut reader)
             .await
-            .expect("No response to mysql_list_sessions");
+            .expect("No response to list_sessions");
         assert_eq!(list_resp["id"], 11);
         let list_text = list_resp["result"]["content"][0]["text"]
             .as_str()
@@ -178,7 +178,7 @@ mod session_tests {
             list_text
         );
 
-        // --- mysql_query via named session ---
+        // --- query via named session ---
         send_message(
             &mut stdin,
             &json!({
@@ -186,7 +186,7 @@ mod session_tests {
                 "id": 12,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": {
                         "sql": "SELECT 1 AS n",
                         "session": "test_sess"
@@ -198,16 +198,16 @@ mod session_tests {
 
         let query_resp = read_response(&mut reader)
             .await
-            .expect("No response to mysql_query via test_sess");
+            .expect("No response to query via test_sess");
         assert_eq!(query_resp["id"], 12);
         assert!(
             query_resp.get("result").is_some(),
-            "mysql_query (test_sess) should return a result, got: {}",
+            "query (test_sess) should return a result, got: {}",
             query_resp
         );
         assert_ne!(
             query_resp["result"]["isError"], true,
-            "mysql_query (test_sess) should succeed, got: {}",
+            "query (test_sess) should succeed, got: {}",
             query_resp
         );
         let query_text = query_resp["result"]["content"][0]["text"]
@@ -220,7 +220,7 @@ mod session_tests {
             query_text
         );
 
-        // --- mysql_disconnect ---
+        // --- disconnect ---
         send_message(
             &mut stdin,
             &json!({
@@ -228,7 +228,7 @@ mod session_tests {
                 "id": 13,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_disconnect",
+                    "name": "disconnect",
                     "arguments": { "name": "test_sess" }
                 }
             }),
@@ -237,15 +237,15 @@ mod session_tests {
 
         let disconnect_resp = read_response(&mut reader)
             .await
-            .expect("No response to mysql_disconnect");
+            .expect("No response to disconnect");
         assert_eq!(disconnect_resp["id"], 13);
         assert_ne!(
             disconnect_resp["result"]["isError"], true,
-            "mysql_disconnect should succeed, got: {}",
+            "disconnect should succeed, got: {}",
             disconnect_resp
         );
 
-        // --- mysql_list_sessions: "test_sess" should be gone ---
+        // --- list_sessions: "test_sess" should be gone ---
         send_message(
             &mut stdin,
             &json!({
@@ -253,7 +253,7 @@ mod session_tests {
                 "id": 14,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_list_sessions",
+                    "name": "list_sessions",
                     "arguments": {}
                 }
             }),
@@ -262,7 +262,7 @@ mod session_tests {
 
         let list_resp2 = read_response(&mut reader)
             .await
-            .expect("No response to second mysql_list_sessions");
+            .expect("No response to second list_sessions");
         assert_eq!(list_resp2["id"], 14);
         let list_text2 = list_resp2["result"]["content"][0]["text"]
             .as_str()
@@ -296,16 +296,16 @@ mod session_tests {
         };
 
         // See comment in test_session_connect_and_disconnect: skip on testcontainers
-        // because mysql_connect cannot accept self-signed certs.
+        // because connect cannot accept self-signed certs.
         if test_db.using_container {
-            eprintln!("Skipping test_session_routing_default_vs_named: testcontainer uses self-signed cert incompatible with mysql_connect");
+            eprintln!("Skipping test_session_routing_default_vs_named: testcontainer uses self-signed cert incompatible with connect");
             return;
         }
 
         let Some(mut child) = spawn_server(
             &binary,
             &test_db,
-            &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],
+            &[("DB_ALLOW_RUNTIME_CONNECTIONS", "true")],
         ) else {
             return;
         };
@@ -314,7 +314,7 @@ mod session_tests {
 
         do_handshake(&mut stdin, &mut reader).await;
 
-        // --- mysql_connect: create "sess2" ---
+        // --- connect: create "sess2" ---
         let cfg = &test_db.config;
         send_message(
             &mut stdin,
@@ -323,11 +323,11 @@ mod session_tests {
                 "id": 20,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_connect",
+                    "name": "connect",
                     "arguments": {
                         "name": "sess2",
                         "host": cfg.connection.host,
-                        "port": cfg.connection.port,
+                        "port": cfg.connection.port.unwrap_or(3306),
                         "user": cfg.connection.user,
                         "password": cfg.connection.password,
                         "database": cfg.connection.database,
@@ -340,14 +340,14 @@ mod session_tests {
         .await;
         let connect_resp = read_response(&mut reader)
             .await
-            .expect("No response to mysql_connect for sess2");
+            .expect("No response to connect for sess2");
         assert_ne!(
             connect_resp["result"]["isError"], true,
-            "mysql_connect (sess2) should succeed, got: {}",
+            "connect (sess2) should succeed, got: {}",
             connect_resp
         );
 
-        // --- mysql_query: no session param → routes to default ---
+        // --- query: no session param → routes to default ---
         send_message(
             &mut stdin,
             &json!({
@@ -355,7 +355,7 @@ mod session_tests {
                 "id": 21,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": { "sql": "SELECT 2 AS n" }
                 }
             }),
@@ -368,11 +368,11 @@ mod session_tests {
         assert_eq!(default_resp["id"], 21);
         assert_ne!(
             default_resp["result"]["isError"], true,
-            "mysql_query without session should succeed on default, got: {}",
+            "query without session should succeed on default, got: {}",
             default_resp
         );
 
-        // --- mysql_query: session="sess2" → routes to named session ---
+        // --- query: session="sess2" → routes to named session ---
         send_message(
             &mut stdin,
             &json!({
@@ -380,7 +380,7 @@ mod session_tests {
                 "id": 22,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": { "sql": "SELECT 3 AS n", "session": "sess2" }
                 }
             }),
@@ -393,11 +393,11 @@ mod session_tests {
         assert_eq!(named_resp["id"], 22);
         assert_ne!(
             named_resp["result"]["isError"], true,
-            "mysql_query with session='sess2' should succeed, got: {}",
+            "query with session='sess2' should succeed, got: {}",
             named_resp
         );
 
-        // --- mysql_query: session="nonexistent" → must return an error ---
+        // --- query: session="nonexistent" → must return an error ---
         send_message(
             &mut stdin,
             &json!({
@@ -405,7 +405,7 @@ mod session_tests {
                 "id": 23,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_query",
+                    "name": "query",
                     "arguments": { "sql": "SELECT 4 AS n", "session": "nonexistent" }
                 }
             }),
@@ -418,7 +418,7 @@ mod session_tests {
         assert_eq!(notfound_resp["id"], 23);
         assert_eq!(
             notfound_resp["result"]["isError"], true,
-            "mysql_query with session='nonexistent' should return isError:true, got: {}",
+            "query with session='nonexistent' should return isError:true, got: {}",
             notfound_resp
         );
         let err_text = notfound_resp["result"]["content"][0]["text"]
@@ -449,7 +449,7 @@ mod session_tests {
         let Some(mut child) = spawn_server(
             &binary,
             &test_db,
-            &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],
+            &[("DB_ALLOW_RUNTIME_CONNECTIONS", "true")],
         ) else {
             return;
         };
@@ -467,11 +467,11 @@ mod session_tests {
                 "id": 30,
                 "method": "tools/call",
                 "params": {
-                    "name": "mysql_connect",
+                    "name": "connect",
                     "arguments": {
                         "name": "default",
                         "host": cfg.connection.host,
-                        "port": cfg.connection.port,
+                        "port": cfg.connection.port.unwrap_or(3306),
                         "user": cfg.connection.user,
                         "password": cfg.connection.password,
                     }
@@ -482,11 +482,11 @@ mod session_tests {
 
         let reserved_resp = read_response(&mut reader)
             .await
-            .expect("No response to mysql_connect with name=default");
+            .expect("No response to connect with name=default");
         assert_eq!(reserved_resp["id"], 30);
         assert_eq!(
             reserved_resp["result"]["isError"], true,
-            "mysql_connect with name='default' should return isError:true, got: {}",
+            "connect with name='default' should return isError:true, got: {}",
             reserved_resp
         );
         let err_text = reserved_resp["result"]["content"][0]["text"]
@@ -519,8 +519,8 @@ mod session_tests {
             &binary,
             &test_db,
             &[
-                ("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true"),
-                ("MYSQL_MAX_SESSIONS", "1"),
+                ("DB_ALLOW_RUNTIME_CONNECTIONS", "true"),
+                ("DB_MAX_SESSIONS", "1"),
             ],
         ) else {
             return;
@@ -537,11 +537,11 @@ mod session_tests {
             &json!({
                 "jsonrpc": "2.0", "id": 40, "method": "tools/call",
                 "params": {
-                    "name": "mysql_connect",
+                    "name": "connect",
                     "arguments": {
                         "name": "sess_a",
                         "host": cfg.connection.host,
-                        "port": cfg.connection.port,
+                        "port": cfg.connection.port.unwrap_or(3306),
                         "user": cfg.connection.user,
                         "password": cfg.connection.password,
                         "database": cfg.connection.database,
@@ -554,7 +554,7 @@ mod session_tests {
         .await;
         let resp1 = read_response(&mut reader)
             .await
-            .expect("No response to first mysql_connect");
+            .expect("No response to first connect");
         assert_ne!(
             resp1["result"]["isError"], true,
             "First session should succeed, got: {}",
@@ -567,11 +567,11 @@ mod session_tests {
             &json!({
                 "jsonrpc": "2.0", "id": 41, "method": "tools/call",
                 "params": {
-                    "name": "mysql_connect",
+                    "name": "connect",
                     "arguments": {
                         "name": "sess_b",
                         "host": cfg.connection.host,
-                        "port": cfg.connection.port,
+                        "port": cfg.connection.port.unwrap_or(3306),
                         "user": cfg.connection.user,
                         "password": cfg.connection.password,
                         "database": cfg.connection.database,
@@ -584,7 +584,7 @@ mod session_tests {
         .await;
         let resp2 = read_response(&mut reader)
             .await
-            .expect("No response to second mysql_connect");
+            .expect("No response to second connect");
         assert_eq!(
             resp2["result"]["isError"], true,
             "Second session should fail when limit reached, got: {}",
@@ -614,16 +614,16 @@ mod session_tests {
             return;
         };
 
-        // The mysql_connect tool cannot accept self-signed certs from testcontainers.
+        // The connect tool cannot accept self-signed certs from testcontainers.
         if test_db.using_container {
-            eprintln!("Skipping test_session_duplicate_name_rejected: testcontainer cert incompatible with mysql_connect");
+            eprintln!("Skipping test_session_duplicate_name_rejected: testcontainer cert incompatible with connect");
             return;
         }
 
         let Some(mut child) = spawn_server(
             &binary,
             &test_db,
-            &[("MYSQL_ALLOW_RUNTIME_CONNECTIONS", "true")],
+            &[("DB_ALLOW_RUNTIME_CONNECTIONS", "true")],
         ) else {
             return;
         };
@@ -639,11 +639,11 @@ mod session_tests {
             &json!({
                 "jsonrpc": "2.0", "id": 50, "method": "tools/call",
                 "params": {
-                    "name": "mysql_connect",
+                    "name": "connect",
                     "arguments": {
                         "name": "dup_sess",
                         "host": cfg.connection.host,
-                        "port": cfg.connection.port,
+                        "port": cfg.connection.port.unwrap_or(3306),
                         "user": cfg.connection.user,
                         "password": cfg.connection.password,
                         "database": cfg.connection.database,
@@ -656,7 +656,7 @@ mod session_tests {
         .await;
         let resp1 = read_response(&mut reader)
             .await
-            .expect("no response to first mysql_connect");
+            .expect("no response to first connect");
         assert_ne!(
             resp1["result"]["isError"], true,
             "first connect should succeed, got: {}",
@@ -669,11 +669,11 @@ mod session_tests {
             &json!({
                 "jsonrpc": "2.0", "id": 51, "method": "tools/call",
                 "params": {
-                    "name": "mysql_connect",
+                    "name": "connect",
                     "arguments": {
                         "name": "dup_sess",
                         "host": cfg.connection.host,
-                        "port": cfg.connection.port,
+                        "port": cfg.connection.port.unwrap_or(3306),
                         "user": cfg.connection.user,
                         "password": cfg.connection.password,
                         "database": cfg.connection.database,
@@ -686,7 +686,7 @@ mod session_tests {
         .await;
         let resp2 = read_response(&mut reader)
             .await
-            .expect("no response to second mysql_connect");
+            .expect("no response to second connect");
         assert_eq!(
             resp2["result"]["isError"], true,
             "duplicate session name should be rejected, got: {}",

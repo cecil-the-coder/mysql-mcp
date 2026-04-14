@@ -1,55 +1,48 @@
-//! Configuration management for the MySQL MCP server.
-//!
-//! This module provides configuration structures and loading logic for database
-//! connections, connection pooling, security settings, and SSH tunnel options.
-//! Configuration can be provided via TOML files and/or environment variables.
-//!
-//! # Key Types
-//!
-//! - [`Config`] - Top-level configuration container
-//! - [`ConnectionConfig`] - MySQL connection parameters (host, port, credentials)
-//! - [`PoolConfig`] - Connection pool sizing and timeouts
-//! - [`SecurityConfig`] - Write permissions and SSL settings
-//! - [`SshConfig`] - SSH tunnel configuration for bastion host access
-//! - [`SchemaPermissions`] - Per-schema permission overrides
-//!
-//! # Example
-//!
-//! ```ignore
-//! use config::load_config;
-//! let config = load_config()?;
-//! config.validate()?;
-//! ```
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::warn;
+
+use crate::backend::BackendKind;
 
 pub mod env_config;
 #[cfg(test)]
 mod tests;
 
 /// Top-level configuration
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
+    pub backend: BackendKind,
     pub connection: ConnectionConfig,
     pub pool: PoolConfig,
     pub security: SecurityConfig,
     pub ssh: Option<SshConfig>,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            backend: BackendKind::MySql,
+            connection: ConnectionConfig::default(),
+            pool: PoolConfig::default(),
+            security: SecurityConfig::default(),
+            ssh: None,
+        }
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ConnectionConfig {
     pub host: String,
-    pub port: u16,
+    pub port: Option<u16>,
     pub socket: Option<String>,
     pub user: String,
     pub password: String,
     pub database: Option<String>,
     /// Full connection string (overrides individual fields when set)
     pub connection_string: Option<String>,
+    /// SQLite file path (for SQLite backend only)
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -84,7 +77,7 @@ pub struct SecurityConfig {
     pub ssl_ca: Option<String>,
     /// Per-schema permission overrides: schema_name -> SchemaPermissions
     pub schema_permissions: HashMap<String, SchemaPermissions>,
-    /// Allow mysql_connect to accept raw credentials at runtime.
+    /// Allow connect to accept raw credentials at runtime.
     /// When false (default), only preset-based connections are allowed.
     pub allow_runtime_connections: bool,
     /// Maximum number of concurrent named sessions (not counting the default session).
@@ -134,12 +127,13 @@ impl Default for ConnectionConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),
-            port: 3306,
+            port: None,
             socket: None,
-            user: "root".to_string(),
+            user: String::new(),
             password: String::new(),
             database: None,
             connection_string: None,
+            path: None,
         }
     }
 }
@@ -157,6 +151,7 @@ impl std::fmt::Debug for ConnectionConfig {
                 "connection_string",
                 &self.connection_string.as_ref().map(|_| "[redacted]"),
             )
+            .field("path", &self.path)
             .finish()
     }
 }
@@ -216,19 +211,68 @@ impl Config {
         let conn = &self.connection;
         let pool = &self.pool;
         let sec = &self.security;
+        let is_sqlite = self.backend == BackendKind::Sqlite;
 
-        // -- Connection checks --
-        if conn.socket.is_none() && conn.host.is_empty() {
-            anyhow::bail!("connection.host must not be empty (unless using socket)");
-        }
-        // Note: when both connection_string and socket are set, connection_string takes precedence.
+        if !is_sqlite {
+            // -- Connection checks (network backends only) --
+            if conn.socket.is_none() && conn.host.is_empty() {
+                anyhow::bail!("connection.host must not be empty (unless using socket)");
+            }
+            // Note: when both connection_string and socket are set, connection_string takes precedence.
 
-        // -- SSL checks --
-        if sec.ssl_ca.is_some() && !sec.ssl {
-            warn!("MYSQL_SSL_CA is set but MYSQL_SSL is false; CA cert will be ignored");
+            // -- Socket validation (MySQL only) --
+            if self.backend == BackendKind::MySql {
+                if let Some(ref socket_path) = conn.socket {
+                    if !std::path::Path::new(socket_path).exists() {
+                        anyhow::bail!("connection.socket path does not exist: {}", socket_path);
+                    }
+                }
+            }
+        } else {
+            // -- SQLite path validation --
+            if let Some(ref db_path) = conn.path {
+                // Validate parent directory exists
+                if let Some(parent) = std::path::Path::new(db_path).parent() {
+                    if !parent.as_os_str().is_empty() && !parent.exists() {
+                        anyhow::bail!(
+                            "connection.path parent directory does not exist: {}",
+                            parent.display()
+                        );
+                    }
+                }
+            } else if conn.connection_string.is_none() {
+                anyhow::bail!(
+                    "connection.path or connection.connection_string must be set for SQLite backend"
+                );
+            }
         }
-        if sec.ssl_accept_invalid_certs {
-            warn!("ssl_accept_invalid_certs is enabled — TLS validation disabled");
+
+        // -- Connection string scheme validation --
+        if let Some(ref cs) = conn.connection_string {
+            let scheme = cs.split("://").next().unwrap_or("");
+            let expected_scheme = match self.backend {
+                BackendKind::MySql => "mysql",
+                BackendKind::Postgres => "postgres",
+                BackendKind::Sqlite => "sqlite",
+            };
+            if scheme != expected_scheme {
+                anyhow::bail!(
+                    "connection.connection_string scheme is '{}' but backend is {:?} (expected '{}://')",
+                    scheme,
+                    self.backend,
+                    expected_scheme
+                );
+            }
+        }
+
+        // -- SSL checks (skip for backends that don't support SSL) --
+        if !is_sqlite || sec.ssl || sec.ssl_ca.is_some() || sec.ssl_accept_invalid_certs {
+            if sec.ssl_ca.is_some() && !sec.ssl {
+                eprintln!("Warning: DB_SSL_CA is set but DB_SSL is false; CA cert will be ignored");
+            }
+            if sec.ssl_accept_invalid_certs {
+                eprintln!("Warning: ssl_accept_invalid_certs is enabled — TLS validation disabled");
+            }
         }
 
         // -- Pool bound checks --
@@ -238,18 +282,11 @@ impl Config {
         if pool.size == 0 || pool.size > 1000 {
             anyhow::bail!("pool.size must be between 1 and 1000 (got: {})", pool.size);
         }
-        // max_rows == 0 means unlimited (no row limit), which is a valid configuration
-        if pool.max_rows > 1_000_000 {
-            anyhow::bail!(
-                "pool.max_rows must be <= 1,000,000 (got: {})",
-                pool.max_rows
-            );
+        if pool.max_rows == 0 {
+            anyhow::bail!("pool.max_rows must be >= 1");
         }
-        if pool.max_result_memory_mb == 0 || pool.max_result_memory_mb > 16384 {
-            anyhow::bail!(
-                "pool.max_result_memory_mb must be between 1 and 16384 (got: {})",
-                pool.max_result_memory_mb
-            );
+        if pool.max_result_memory_mb == 0 {
+            anyhow::bail!("pool.max_result_memory_mb must be >= 1");
         }
         if pool.retry_attempts > 10 {
             anyhow::bail!(
@@ -257,42 +294,9 @@ impl Config {
                 pool.retry_attempts
             );
         }
-        if pool.query_timeout_ms == 0 {
-            warn!(
-                "pool.query_timeout_ms is 0 — query timeouts are disabled; a runaway query can block the server indefinitely"
-            );
-        }
-        // Prevent potential Duration overflow with unreasonably large timeout values
-        const MAX_TIMEOUT_MS: u64 = 86_400_000; // 24 hours in milliseconds
-        if pool.query_timeout_ms > MAX_TIMEOUT_MS {
-            anyhow::bail!(
-                "pool.query_timeout_ms exceeds maximum of 24 hours (86,400,000 ms, got: {})",
-                pool.query_timeout_ms
-            );
-        }
-        if pool.connect_timeout_ms > MAX_TIMEOUT_MS {
-            anyhow::bail!(
-                "pool.connect_timeout_ms exceeds maximum of 24 hours (86,400,000 ms, got: {})",
-                pool.connect_timeout_ms
-            );
-        }
-        if pool.slow_query_threshold_ms > 3_600_000 {
-            warn!(
-                "pool.slow_query_threshold_ms is very high ({}ms > 3,600,000ms / 1 hour); slow query logging may not trigger for most queries",
-                pool.slow_query_threshold_ms
-            );
-        }
-        const MAX_CACHE_TTL_SECS: u64 = 31_536_000; // 1 year
-        if pool.cache_ttl_secs > MAX_CACHE_TTL_SECS {
-            anyhow::bail!(
-                "pool.cache_ttl_secs must be <= {} (1 year) (got: {})",
-                MAX_CACHE_TTL_SECS,
-                pool.cache_ttl_secs
-            );
-        }
         if !matches!(pool.performance_hints.as_str(), "none" | "auto" | "always") {
             anyhow::bail!(
-                "MYSQL_PERFORMANCE_HINTS must be one of: none, auto, always (got: '{}')",
+                "DB_PERFORMANCE_HINTS must be one of: none, auto, always (got: '{}')",
                 pool.performance_hints
             );
         }
@@ -301,9 +305,6 @@ impl Config {
         if sec.max_sessions == 0 {
             anyhow::bail!("security.max_sessions must be >= 1");
         }
-        if sec.max_total_connections == 0 {
-            anyhow::bail!("security.max_total_connections must be >= 1");
-        }
         if sec.max_total_connections < pool.size {
             anyhow::bail!(
                 "security.max_total_connections ({}) must be >= pool.size ({})",
@@ -311,82 +312,55 @@ impl Config {
                 pool.size
             );
         }
-        // Warn if pool.size leaves no room for named sessions (each uses 5 connections)
-        const NAMED_SESSION_POOL_SIZE: u32 = 5;
-        if pool.size + NAMED_SESSION_POOL_SIZE > sec.max_total_connections {
-            warn!(
-                "pool.size ({}) leaves no room for named sessions: each named session requires {} connections. \
-                 Consider increasing max_total_connections (currently {}) or reducing pool.size to at least {}",
-                pool.size,
-                NAMED_SESSION_POOL_SIZE,
-                sec.max_total_connections,
-                sec.max_total_connections.saturating_sub(NAMED_SESSION_POOL_SIZE)
-            );
-        }
 
-        // -- File existence checks --
-        if let Some(ref ca) = sec.ssl_ca {
-            if let Err(e) = std::fs::File::open(ca) {
-                anyhow::bail!("MYSQL_SSL_CA path is not readable: {} ({})", ca, e);
-            }
-        }
-
-        // -- SSH validation --
-        if let Some(ref ssh) = self.ssh {
-            if ssh.host.is_empty() {
-                anyhow::bail!("ssh.host must not be empty when SSH tunnel is configured");
-            }
-            if ssh.port == 0 {
-                anyhow::bail!("ssh.port must be > 0 (got: 0)");
-            }
-            if ssh.user.is_empty() {
-                anyhow::bail!("ssh.user must not be empty when SSH tunnel is configured");
-            }
-            // Validate enum values first to ensure downstream checks work correctly
-            if !matches!(
-                ssh.known_hosts_check.as_str(),
-                "strict" | "accept-new" | "insecure"
-            ) {
-                anyhow::bail!(
-                    "ssh.known_hosts_check must be one of: strict, accept-new, insecure (got: '{}')",
-                    ssh.known_hosts_check
-                );
-            }
-            // Block dangerous combination: runtime connections + insecure SSH host key checking.
-            // Without host key verification, an attacker can MITM the SSH tunnel and
-            // intercept database credentials supplied at runtime.
-            if sec.allow_runtime_connections && ssh.known_hosts_check == "insecure" {
-                anyhow::bail!(
-                    "security.allow_runtime_connections cannot be enabled when \
-                     ssh.known_hosts_check is \"insecure\". This combination allows \
-                     arbitrary SSH tunnels without host key verification, enabling \
-                     man-in-the-middle attacks that could intercept database credentials. \
-                     Use \"strict\" or \"accept-new\" host key checking, or disable \
-                     allow_runtime_connections."
-                );
-            }
-            if let Some(ref key_path) = ssh.private_key {
-                if !std::path::Path::new(key_path).exists() {
-                    anyhow::bail!("ssh.private_key path does not exist: {}", key_path);
+        // -- File existence checks (skip SSL for SQLite) --
+        if !is_sqlite {
+            if let Some(ref ca) = sec.ssl_ca {
+                if !std::path::Path::new(ca).exists() {
+                    anyhow::bail!("DB_SSL_CA path does not exist: {}", ca);
                 }
-                check_private_key_permissions(key_path)?;
             }
-            if let Some(ref khf) = ssh.known_hosts_file {
-                let khf_path = std::path::Path::new(khf);
-                if ssh.known_hosts_check == "strict" {
-                    if !khf_path.exists() {
-                        anyhow::bail!(
-                            "ssh.known_hosts_file does not exist: {} (required for strict mode)",
-                            khf
-                        );
+        }
+
+        // -- SSH validation (skip for SQLite) --
+        if !is_sqlite {
+            if let Some(ref ssh) = self.ssh {
+                if ssh.host.is_empty() {
+                    anyhow::bail!("ssh.host must not be empty when SSH tunnel is configured");
+                }
+                if ssh.user.is_empty() {
+                    anyhow::bail!("ssh.user must not be empty when SSH tunnel is configured");
+                }
+                if !matches!(
+                    ssh.known_hosts_check.as_str(),
+                    "strict" | "accept-new" | "insecure"
+                ) {
+                    anyhow::bail!(
+                        "ssh.known_hosts_check must be one of: strict, accept-new, insecure (got: '{}')",
+                        ssh.known_hosts_check
+                    );
+                }
+                if let Some(ref key_path) = ssh.private_key {
+                    if !std::path::Path::new(key_path).exists() {
+                        anyhow::bail!("ssh.private_key path does not exist: {}", key_path);
                     }
-                    check_known_hosts_permissions(khf)?;
-                } else if let Some(parent) = khf_path.parent() {
-                    if !parent.exists() {
-                        anyhow::bail!(
-                            "ssh.known_hosts_file parent directory does not exist: {}",
-                            parent.display()
-                        );
+                }
+                if let Some(ref khf) = ssh.known_hosts_file {
+                    let khf_path = std::path::Path::new(khf);
+                    if ssh.known_hosts_check == "strict" {
+                        if !khf_path.exists() {
+                            anyhow::bail!(
+                                "ssh.known_hosts_file does not exist: {} (required for strict mode)",
+                                khf
+                            );
+                        }
+                    } else if let Some(parent) = khf_path.parent() {
+                        if !parent.exists() {
+                            anyhow::bail!(
+                                "ssh.known_hosts_file parent directory does not exist: {}",
+                                parent.display()
+                            );
+                        }
                     }
                 }
             }
@@ -394,78 +368,6 @@ impl Config {
 
         Ok(())
     }
-}
-
-/// Check that an SSH known_hosts file has safe permissions for strict mode.
-/// On Unix systems, this verifies the file is not writable by group or others.
-/// Unlike private keys, the known_hosts file may be world-readable (e.g., 0o644 is acceptable).
-pub(crate) fn check_known_hosts_permissions(path: &str) -> anyhow::Result<()> {
-    let metadata = std::fs::metadata(path)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = metadata.permissions().mode() & 0o777;
-        // In strict mode, the known_hosts file must not be writable by group or others
-        // to prevent tampering with host key mappings.
-        if mode & 0o022 != 0 {
-            anyhow::bail!(
-                "ssh.known_hosts_file {} has overly permissive permissions: {:o}. \
-                 In strict mode, the known_hosts file must not be writable by group or others. \
-                 Run: chmod 644 {}",
-                path,
-                mode,
-                path
-            );
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = &metadata;
-        tracing::warn!(
-            "ssh.known_hosts_file {} permissions cannot be validated on this platform",
-            path
-        );
-    }
-
-    Ok(())
-}
-
-/// Check that an SSH private key file has restrictive permissions (mode 0o600 or 0o400).
-/// On Unix systems, this verifies the file is not world-readable or writable by group/others.
-pub(crate) fn check_private_key_permissions(path: &str) -> anyhow::Result<()> {
-    let metadata = std::fs::metadata(path)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = metadata.permissions().mode() & 0o777;
-        // Allow 0o600 (owner read/write) or 0o400 (owner read-only)
-        // and 0o300/0o500 (owner write/owner read) in case user is root
-        if mode & 0o77 != 0 {
-            anyhow::bail!(
-                "ssh.private_key {} has overly permissive permissions: {:o}. \
-                 SSH private keys must not be readable by group or others. \
-                 Run: chmod 600 {}",
-                path,
-                mode,
-                path
-            );
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        // On non-Unix systems, just check that the file is readable
-        // and issue a warning since permissions cannot be validated
-        tracing::warn!(
-            "ssh.private_key {} permissions cannot be validated on this platform",
-            path
-        );
-    }
-
-    Ok(())
 }
 
 /// Load config from a TOML file path. Returns default config if file doesn't exist.
@@ -481,12 +383,25 @@ pub(crate) fn load_toml_config(path: &std::path::Path) -> anyhow::Result<Config>
 pub fn load_config() -> anyhow::Result<Config> {
     if std::path::Path::new(".env").exists() {
         if let Err(e) = dotenv::dotenv() {
-            warn!("failed to parse .env file: {}", e);
+            eprintln!("Warning: failed to parse .env file: {}", e);
         }
     }
     let path = std::env::var("MCP_CONFIG_FILE")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("mysql-mcp.toml"));
+        .unwrap_or_else(|_| {
+            // Try sql-mcp.toml first, fall back to mysql-mcp.toml with deprecation warning
+            let new_name = std::path::PathBuf::from("sql-mcp.toml");
+            let old_name = std::path::PathBuf::from("mysql-mcp.toml");
+            if new_name.exists() {
+                new_name
+            } else if old_name.exists() {
+                eprintln!("Warning: 'mysql-mcp.toml' is deprecated; rename to 'sql-mcp.toml'");
+                old_name
+            } else {
+                // Neither exists — use the new default so create-if-needed uses the right name
+                new_name
+            }
+        });
     let base = load_toml_config(&path)?;
     Ok(env_config::load_env_config().apply_to(base))
 }
