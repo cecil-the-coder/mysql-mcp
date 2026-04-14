@@ -231,7 +231,7 @@ If a setting is defined in multiple places, the higher priority source wins.
 | `security.ssl_accept_invalid_certs` | `MYSQL_SSL_ACCEPT_INVALID_CERTS` | bool | `false` | Skip certificate validation (not for production) |
 | `security.ssl_ca` | `MYSQL_SSL_CA` | string | — | Path to PEM CA certificate file |
 | `security.schema_permissions` | `MYSQL_SCHEMA_<NAME>_PERMISSIONS` | map | `{}` | Per-schema write permission overrides (see below) |
-| `security.allow_runtime_connections` | `MYSQL_ALLOW_RUNTIME_CONNECTIONS` | bool | `false` | Allow `mysql_connect` to accept raw credentials at runtime |
+| `security.allow_runtime_connections` | `MYSQL_ALLOW_RUNTIME_CONNECTIONS` | bool | `false` | **WARNING: Allowing runtime connections exposes your database credentials to the LLM.** Only enable `mysql_connect` if you fully understand the security risks. When `true`, raw credentials can be passed to named sessions at runtime. This should **never** be used in production with SSH tunneling or SSL verification disabled. **Requires `MYSQL_ALLOW_RUNTIME_CONNECTIONS=true`**.
 | `security.max_sessions` | `MYSQL_MAX_SESSIONS` | u32 | `50` | Maximum number of concurrent named sessions |
 | `security.max_total_connections` | `MYSQL_MAX_TOTAL_CONNECTIONS` | u32 | `100` | Maximum total database connections across all sessions (default pool + named session pools) |
 
@@ -420,6 +420,12 @@ List all tables in the current or specified database. More discoverable than que
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `database` | string | no | Database name to list tables from (uses connected database if omitted) |
+
+**Warning: This tool requires `security.allow_runtime_connections=true` to be enabled.**
+When this flag is enabled, raw database credentials can be passed to the MCP server at runtime,
+which exposes sensitive information to the LLM. This should only be enabled if you fully understand
+the security implications and have appropriate safeguards in place.
+
 | `session` | string | no | Named session to use |
 
 **Response**
@@ -543,6 +549,21 @@ allow_ddl = false
 ```
 
 Schema names in TOML are lowercase. The `MYSQL_SCHEMA_<NAME>_PERMISSIONS` env var name is case-insensitive in the `<NAME>` portion.
+
+
+**Warning: SSH tunneling should never be combined with `allow_runtime_connections=true`.**
+When using SSH tunnels, database credentials are protected by SSH authentication. Enabling
+`allow_runtime_connections` would expose these credentials to the LLM over the MCP protocol,
+defeating the security provided by SSH. If you need to use `mysql_connect` with SSH, ensure
+`allow_runtime_connections=false` (the default) and manage connections through your SSH
+configuration instead.
+
+### SSL
+
+**Warning: SSL with `allow_runtime_connections=true` exposes your database credentials to the LLM.**
+When using SSL, database connections are encrypted and (optionally) certificate-verified. Enabling
+`allow_runtime_connections` would allow the LLM to submit arbitrary SQL over these encrypted connections,
+defeating the purpose of encryption if the LLM is not trusted.
 
 ### SSL
 
