@@ -36,30 +36,46 @@ The server auto-detects the MySQL version and uses the appropriate EXPLAIN parse
 
 ## Architecture
 
-mysql-mcp follows a modular design with clear separation of concerns:
+mysql-mcp follows a modular, layered design with clear separation of concerns, enabling maintainability and focused development. Each module has a distinct responsibility and communicates through well-defined interfaces.
 
-- **`main.rs`** — Entry point that sets up the async runtime (Tokio) and initializes the MCP server.
-- **`config/`** — Configuration layer that merges TOML files, environment variables, and defaults into a unified config.
-- **`db.rs`** — MySQL connection pooling via `sqlx`, with configurable pool size and timeouts.
-- **`server/`** — MCP tool handlers (`mysql_query`, `mysql_schema_info`, etc.) and named session management.
-- **`query/`** — SQL execution engine with retry logic for transient errors, EXPLAIN parsing, and performance hints.
-- **`schema/`** — Cached schema introspection for table metadata, indexes, and foreign keys.
-- **`sql_parser/`** — SQL statement classification (SELECT, INSERT, DDL, etc.) for permission checks.
-- **`tunnel.rs`** — SSH subprocess-based tunneling for reaching databases behind bastion hosts.
+### Core Modules
 
-### Data Flow
+- **`main.rs`** — Entry point that initializes the Tokio async runtime, loads configuration, establishes the database pool, and starts the MCP server.
+- **`config/`** — Configuration layer that merges TOML files, environment variables, and built-in defaults into a unified `Config` struct, applied in order of precedence (env vars > TOML > .env file > defaults).
+- **`db.rs`** — MySQL connection pooling via `sqlx` with configurable pool size, timeouts, and SSL settings; handles both direct and tunneled connections.
+- **`server/`** — MCP tool handlers (`mysql_query`, `mysql_schema_info`, etc.), named session management, and request routing; each tool is registered with its JSON-RPC schema.
+- **`query/`** — SQL execution engine with retry logic for transient errors, EXPLAIN parsing for performance analysis, and automatic `performance_hints` evaluation.
+- **`schema/`** — Cached schema introspection for table metadata, indexes, and foreign keys; reduces repeated `SHOW CREATE TABLE` calls via an LRU cache with configurable TTL.
+- **`sql_parser/`** — SQL statement classification (SELECT, INSERT, DDL, etc.) used by permission checks; determines statement type safely without executing.
+- **`tunnel.rs`** — SSH subprocess-based tunneling for reaching databases behind bastion hosts; integrates directly with connection setup.
+
+### High-Level Data Flow
 
 ```
-MCP Request → Tool Handler → Permission Check → SQL Parser → Query Execution → JSON Response
-                              ↓
-                        Schema Cache (if needed)
+MCP Request
+    ↓
+Tool Handler → Permission Check → SQL Parser → Query Execution → JSON Response
+    ↓               ↓                  ↓
+Config        Schema Cache      Connection Pool
+    ↓               ↓                  ↓
+Configuration → Authentication → Query Execution → Result Serialization
 ```
 
 1. An MCP client sends a tool invocation (e.g., `mysql_query`)
-2. The tool handler validates parameters and resolves the target session
-3. The SQL parser classifies the statement; permissions are checked against config
-4. If allowed, the query executor runs the SQL against the connection pool
-5. Results are serialized to JSON and returned to the client
+2. The tool handler validates parameters, resolves the target session, and checks authentication
+3. Permissions are verified against configuration (global, per-schema, or role-based)
+4. The SQL parser classifies the statement type to determine allowed operations
+5. If allowed, the query executor checks the schema cache (if needed) and runs SQL against the connection pool
+6. Results are serialized to JSON, including execution plan (if `performance_hints` enabled)
+7. The response is returned to the client with metadata (row count, execution time, warnings)
+
+### Key Design Principles
+
+- **Configuration-first**: All behavior is controlled through layered configuration (env vars, TOML, .env, defaults)
+- **Connection isolation**: Each named session maintains its own connection pool and tunnel
+- **Performance-aware**: Automatic EXPLAIN analysis provides index suggestions and identifies full table scans
+- **Security-gated**: Write operations and DDL are disabled by default and must be explicitly enabled
+- **Session management**: Named sessions support multiple concurrent connections with independent configurations
 
 ---
 
