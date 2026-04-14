@@ -1,32 +1,27 @@
-# mysql-mcp example configuration file
-# Copy this to mysql-mcp.toml and customize as needed.
-#
-# Configuration precedence (highest to lowest):
-#   1. Environment variables
-#   2. TOML config file (mysql-mcp.toml)
-#   3. .env file
-#   4. Built-in defaults
+# sql-mcp example configuration file
+# Copy this to sql-mcp.toml and customize as needed.
+# Environment variables take precedence over values set here.
 
 [connection]
-# MySQL host (default: localhost)
+# Database host (default: localhost)
 host = "localhost"
 
-# MySQL port (default: 3306)
+# Database port (default: 3306)
 port = 3306
 
 # Unix socket path (takes precedence over host:port when set)
 # socket = "/var/run/mysqld/mysqld.sock"
 
-# MySQL user (default: root)
+# Database user (default: root)
 user = "root"
 
-# MySQL password
+# Database password
 password = ""
 
 # Target database (leave empty for multi-database mode)
 # database = "myapp"
 
-# Full MySQL connection URL (overrides individual connection fields when set)
+# Full database connection URL (overrides individual connection fields when set)
 # connection_string = "mysql://user:pass@host:3306/database"
 
 [pool]
@@ -45,7 +40,7 @@ cache_ttl_secs = 60
 
 # Maximum number of rows returned per query (default: 1000).
 # Acts as a safety limit to prevent runaway queries from returning huge result sets.
-# Must be >= 1 and <= 1,000,000. Set to a large number like 10000 for effectively unlimited rows.
+# Set to a large number like 10000 for effectively unlimited rows.
 # max_rows = 1000
 
 # Performance hints control automatic EXPLAIN analysis (default: "none").
@@ -58,14 +53,6 @@ cache_ttl_secs = 60
 # Threshold (ms) for automatic EXPLAIN when performance_hints = "auto" (default: 500).
 # Queries that take longer than this will have their query plan included in the response.
 # slow_query_threshold_ms = 500
-
-# Number of retry attempts for transient network errors (default: 2).
-# Set to 0 to disable retrying on transient errors like connection timeouts.
-# retry_attempts = 2
-
-# Maximum memory in MB for result sets (default: 256).
-# Prevents excessive memory usage when processing large result sets.
-# max_result_memory_mb = 256
 
 [security]
 # Allow INSERT operations (default: false)
@@ -80,22 +67,13 @@ allow_delete = false
 # Allow DDL operations (CREATE, ALTER, DROP, TRUNCATE) (default: false)
 allow_ddl = false
 
-# Require SSL for MySQL connections (default: false)
+# Require SSL for database connections (default: false)
 ssl = false
-
-# Allow runtime connections via mysql_connect tool (default: false)
-# When true, LLM assistants can create new database connections at runtime
-# with arbitrary credentials. Enable only if you need multi-database support.
-allow_runtime_connections = false
 
 # Maximum number of concurrent named sessions (not counting the default session).
 # Prevents unbounded session creation when allow_runtime_connections is true.
 # (default: 50)
 # max_sessions = 50
-
-# Maximum total database connections across all sessions (default pool + named
-# session pools). Named sessions use 5 connections each. (default: 100)
-# max_total_connections = 100
 
 # Per-schema permission overrides
 # These take precedence over the global settings above.
@@ -108,10 +86,27 @@ allow_runtime_connections = false
 # allow_delete = false
 # allow_ddl = false
 
+[monitoring]
+# Enable request logging (default: true)
+logging = true
+
+# Log level: error, warn, info, debug, trace (default: info)
+log_level = "info"
+
+# Enable Prometheus metrics (default: false)
+metrics_enabled = false
+
+# MySQL session timezone (optional)
+# Examples: "UTC", "+08:00", "America/New_York"
+# timezone = "UTC"
+
+# Return date/datetime values as strings instead of native types (default: false)
+date_strings = false
+
 # ─── SSH Tunnel ───────────────────────────────────────────────────────────────
-# Route the MySQL connection through an SSH tunnel (jump host / bastion).
+# Route the database connection through an SSH tunnel (jump host / bastion).
 # Useful when the database is not directly reachable from the machine running
-# mysql-mcp (e.g., DB is in a private VPC, accessible only via a bastion host).
+# sql-mcp (e.g., DB is in a private VPC, accessible only via a bastion host).
 #
 # Prerequisites:
 #   macOS / Linux : OpenSSH is built-in. No extra installation needed.
@@ -131,6 +126,9 @@ allow_runtime_connections = false
 #
 # # Path to PEM private key file (optional — omit to rely on SSH agent)
 # private_key = "/home/user/.ssh/id_rsa"
+#
+# # Use the system SSH agent for authentication (MYSQL_SSH_USE_AGENT=true)
+# use_agent = false
 #
 # # Host key verification mode (default: "strict")
 # #   "strict"     — fail if the host key is unknown (most secure; pre-populate

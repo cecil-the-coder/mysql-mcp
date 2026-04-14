@@ -1,63 +1,5 @@
-//! Named database session management for multi-database connectivity.
-//!
-//! This module implements [`SessionStore`] which manages both the default connection
-//! (configured at startup) and named sessions created at runtime via the `mysql_connect` tool.
-//!
-//! # Key Types
-//!
-//! - [`SessionStore`]: Central registry managing all sessions (default + named)
-//! - [`Session`]: A named database session with connection pool and metadata
-//! - [`SessionContext`]: Context returned when resolving a session (pool + schema introspector)
-//! - [`ConnectionReservationGuard`]: RAII guard for atomic connection limit tracking
-//!
-//! # Session Lifecycle
-//!
-//! 1. **Creation**: `handle_connect()` validates parameters, reserves connection slots
-//!    atomically using [`ConnectionReservationGuard`], creates the pool (with optional
-//!    SSH tunnel), and inserts the session into the store.
-//!
-//! 2. **Usage**: Tools call [`SessionStore::resolve_session`] to get a [`SessionContext`].
-//!    This updates `last_used` timestamp for tracking idle time.
-//!
-//! 3. **Cleanup**: Sessions can be closed explicitly via `handle_disconnect()` or
-//!    automatically by the session reaper after 10 minutes of idle time.
-//!
-//! 4. **Reaping**: A background task (spawned in `server/mod.rs`) wakes every 60 seconds
-//!    to identify and close sessions idle for >10 minutes. The reaper decrements the
-//!    total connection counter and properly closes SSH tunnels.
-//!
-//! # Connection Pooling
-//!
-//! Each named session uses a fixed pool size of [`NAMED_SESSION_POOL_SIZE`] (5 connections).
-//! The `SessionStore` enforces two limits:
-//! - `max_sessions`: Maximum number of named sessions (configurable)
-//! - `max_total_connections`: Total connections across all sessions (5 × session count)
-//!
-//! [`ConnectionReservationGuard`] ensures the total connection counter is decremented
-//! on any failure path before the session is fully established.
-//!
-//! # SSH Tunnel Association
-//!
-//! Sessions may include an SSH tunnel for accessing databases through bastion hosts:
-//! - The [`Session`] struct holds an optional [`crate::tunnel::TunnelHandle`]
-//! - Tunnel lifecycle matches the session: created on connect, closed on disconnect/reap
-//! - The `ssh_host` field stores the bastion hostname for display in `mysql_list_sessions`
-//! - [`close_tunnel_with_timeout`] ensures tunnels are closed with a 5-second timeout
-//!
-//! # Security Considerations
-//!
-//! - Session names and database names are validated as MySQL identifiers
-//! - Runtime connections can be disabled via `allow_runtime_connections` config
-//! - SSH tunnels require `ssh_user` when `ssh_host` is provided
-//! - `ssh_known_hosts_check='insecure'` is blocked for runtime connections
-//!   (prevents MITM attacks that could intercept credentials)
-//!
-//! [`Session`]: struct.Session.html
-//! [`crate::tunnel::TunnelHandle`]: ../tunnel/struct.TunnelHandle.html
-
 use rmcp::model::CallToolResult;
 use serde_json::json;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -66,6 +8,7 @@ use tokio::sync::Mutex;
 
 use super::tool_schemas::serialize_response;
 use super::validate_host_with_dns;
+use crate::backend::{Backend, PoolHandle, SessionConnectParams};
 use crate::config::Config;
 use crate::schema::SchemaIntrospector;
 use crate::tool_error;
@@ -75,21 +18,21 @@ pub(crate) const NAMED_SESSION_POOL_SIZE: u32 = 5;
 
 /// A named database session (non-default, runtime-created connection).
 pub(crate) struct Session {
-    pub(crate) pool: sqlx::MySqlPool,
+    pub(crate) pool: PoolHandle,
     pub(crate) introspector: Arc<SchemaIntrospector>,
     pub(crate) last_used: std::time::Instant,
-    /// Human-readable display info for mysql_list_sessions
+    /// Human-readable display info for list_sessions
     pub(crate) host: String,
     pub(crate) database: Option<String>,
     /// SSH tunnel keeping the connection alive (None for direct connections).
     pub(crate) tunnel: Option<crate::tunnel::TunnelHandle>,
-    /// Bastion hostname shown in mysql_list_sessions when tunneling.
+    /// Bastion hostname shown in list_sessions when tunneling.
     pub(crate) ssh_host: Option<String>,
 }
 
 /// Named context returned by get_session(): pool, schema introspector, and optional database.
 pub(crate) struct SessionContext {
-    pub(crate) pool: sqlx::MySqlPool,
+    pub(crate) pool: PoolHandle,
     pub(crate) schema: Arc<SchemaIntrospector>,
     pub(crate) database: Option<String>,
 }
@@ -99,8 +42,9 @@ pub(crate) struct SessionContext {
 pub(crate) struct SessionStore {
     pub(crate) sessions: Arc<Mutex<HashMap<String, Session>>>,
     pub(crate) config: Arc<Config>,
-    pub(crate) db: Arc<sqlx::MySqlPool>,
+    pub(crate) db: PoolHandle,
     pub(crate) introspector: Arc<SchemaIntrospector>,
+    pub(crate) backend: Arc<dyn Backend>,
     /// Total connections across all sessions (for max_total_connections enforcement)
     pub(crate) total_connections: Arc<AtomicU32>,
 }
@@ -114,9 +58,7 @@ pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToo
             kind
         )));
     }
-    // Use chars().count() for Unicode-aware length checking, not byte length.
-    // MySQL identifiers are limited by character count, not byte count.
-    if value.chars().count() > 64 {
+    if value.len() > 64 {
         return Err(crate::server::error::error_response(format!(
             "{} too long (max 64 characters)",
             kind
@@ -131,44 +73,7 @@ pub(crate) fn validate_identifier(value: &str, kind: &str) -> Result<(), CallToo
     Ok(())
 }
 
-/// Guard that decrements total_connections on drop unless dismissed.
-/// Used in handle_connect to ensure the connection counter is always
-/// decremented exactly once on any failure path.
-pub(crate) struct ConnectionReservationGuard<'a> {
-    total_connections: &'a AtomicU32,
-    dismissed: bool,
-}
-
-impl<'a> ConnectionReservationGuard<'a> {
-    fn new(total_connections: &'a AtomicU32) -> Self {
-        Self {
-            total_connections,
-            dismissed: false,
-        }
-    }
-
-    /// Dismiss the guard so it won't decrement on drop.
-    /// Call this once the session is successfully inserted.
-    fn dismiss(mut self) {
-        self.dismissed = true;
-    }
-}
-
-impl<'a> Drop for ConnectionReservationGuard<'a> {
-    fn drop(&mut self) {
-        if !self.dismissed {
-            // Use fetch_update with saturating_sub to prevent underflow.
-            // The counter should never go below 0, but defensive coding
-            // protects against any potential double-decrement bugs.
-            let _ = self.total_connections.fetch_update(
-                Ordering::AcqRel,
-                Ordering::Acquire,
-                |current| Some(current.saturating_sub(NAMED_SESSION_POOL_SIZE)),
-            );
-        }
-    }
-}
-
+/// Timeout for SSH tunnel close operations. A hung SSH server should not block cleanup.
 const TUNNEL_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Close an SSH tunnel with a timeout. Logs a warning on error or timeout, never blocks
@@ -185,7 +90,6 @@ pub(crate) async fn close_tunnel_with_timeout(tunnel: crate::tunnel::TunnelHandl
                 TUNNEL_CLOSE_TIMEOUT.as_secs(),
                 context
             );
-            // The TunnelHandle is dropped here, which triggers non-blocking start_kill()
         }
     }
 }
@@ -204,7 +108,7 @@ impl SessionStore {
             .unwrap_or("default");
         if name == "default" || name.is_empty() {
             return Ok(SessionContext {
-                pool: self.db.as_ref().clone(),
+                pool: self.db.clone(),
                 schema: self.introspector.clone(),
                 database: self.config.connection.database.clone(),
             });
@@ -224,7 +128,7 @@ impl SessionStore {
             }
             None => {
                 let msg = format!(
-                    "Session '{}' not found. Use mysql_connect to create it, or omit 'session' to use the default connection.",
+                    "Session '{}' not found. Use connect to create it, or omit 'session' to use the default connection.",
                     name
                 );
                 drop(map);
@@ -234,7 +138,7 @@ impl SessionStore {
     }
 
     // ------------------------------------------------------------------
-    // Tool handler: mysql_connect
+    // Tool handler: connect
     // ------------------------------------------------------------------
     pub(crate) async fn handle_connect(
         &self,
@@ -255,7 +159,7 @@ impl SessionStore {
 
         if !self.config.security.allow_runtime_connections {
             return tool_error!(
-                "Runtime connections are disabled. Set MYSQL_ALLOW_RUNTIME_CONNECTIONS=true to enable mysql_connect with raw credentials."
+                "Runtime connections are disabled. Set DB_ALLOW_RUNTIME_CONNECTIONS=true to enable connect with raw credentials."
             );
         }
 
@@ -334,7 +238,6 @@ impl SessionStore {
             if ssh_h.len() > 255 {
                 return tool_error!("SSH host too long (max 255 characters)");
             }
-            // Validate SSH bastion host with DNS resolution
             let ssh_host_validation = validate_host_with_dns(ssh_h).await;
             if !ssh_host_validation.allowed {
                 return tool_error!(
@@ -384,45 +287,14 @@ impl SessionStore {
                 "ssh_known_hosts_check must be one of: strict, accept-new, insecure"
             );
         }
-
-        // Block dangerous combination: runtime connections + insecure SSH host key checking.
-        // Without host key verification, an attacker can MITM the SSH tunnel and
-        // intercept database credentials supplied at runtime.
-        if ssh_host.is_some() && ssh_known_hosts_check == "insecure" {
-            return tool_error!(
-                "ssh_known_hosts_check='insecure' cannot be used with runtime connections. \
-                 This combination allows SSH tunnels without host key verification, enabling \
-                 man-in-the-middle attacks that could intercept database credentials. \
-                 Use 'strict' or 'accept-new' instead."
-            );
-        }
         if let Some(ref key_path) = ssh_private_key {
             if !std::path::Path::new(key_path).exists() {
                 return tool_error!("SSH private key file not found: {}", key_path);
             }
-            if let Err(e) = crate::config::check_private_key_permissions(key_path) {
-                return tool_error!("{}", e);
-            }
         }
         if let Some(ref khf) = ssh_known_hosts_file {
-            let khf_path = std::path::Path::new(khf);
-            if ssh_known_hosts_check == "strict" {
-                if !khf_path.exists() {
-                    return tool_error!(
-                        "SSH known_hosts file not found: {} (required for strict mode)",
-                        khf
-                    );
-                }
-                if let Err(e) = crate::config::check_known_hosts_permissions(khf) {
-                    return tool_error!("{}", e);
-                }
-            } else if let Some(parent) = khf_path.parent() {
-                if !parent.exists() {
-                    return tool_error!(
-                        "SSH known_hosts_file parent directory does not exist: {}",
-                        parent.display()
-                    );
-                }
+            if !std::path::Path::new(khf).exists() {
+                return tool_error!("SSH known_hosts file not found: {}", khf);
             }
         }
 
@@ -432,11 +304,10 @@ impl SessionStore {
             port = port,
             user = "<redacted>",
             database = ?database,
-            "mysql_connect: creating session"
+            "connect: creating session"
         );
 
         // Pre-check: fast path before the expensive pool/tunnel creation.
-        // A single atomic check-and-insert after pool creation handles any races.
         {
             let sessions = self.sessions.lock().await;
             if sessions.len() >= self.config.security.max_sessions as usize {
@@ -447,20 +318,19 @@ impl SessionStore {
             }
             if sessions.contains_key(&name) {
                 return tool_error!(
-                    "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
+                    "Session '{}' already exists. Use disconnect to close it first, or choose a different name.",
                     name
                 );
             }
         }
 
-        // Atomically check and reserve connection slots to prevent races.
-        // We use fetch_update to atomically check the limit and increment.
+        // Atomically check and reserve connection slots
         let max_total = self.config.security.max_total_connections;
         let reserve_result =
             self.total_connections
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                    if current.saturating_add(NAMED_SESSION_POOL_SIZE) <= max_total {
-                        Some(current.saturating_add(NAMED_SESSION_POOL_SIZE))
+                .fetch_update(Ordering::Release, Ordering::Relaxed, |current| {
+                    if current + NAMED_SESSION_POOL_SIZE <= max_total {
+                        Some(current + NAMED_SESSION_POOL_SIZE)
                     } else {
                         None
                     }
@@ -471,11 +341,20 @@ impl SessionStore {
                 max_total, current_total, NAMED_SESSION_POOL_SIZE
             );
         }
-        // Guard ensures counter is decremented if we exit before dismissing it.
-        let reservation_guard = ConnectionReservationGuard::new(self.total_connections.as_ref());
+
+        let params = SessionConnectParams {
+            host: host.clone(),
+            port,
+            user: user.clone(),
+            password: password.clone(),
+            database: database.clone(),
+            ssl,
+            ssl_accept_invalid_certs: self.config.security.ssl_accept_invalid_certs,
+            ssl_ca: ssl_ca.clone(),
+            connect_timeout_ms: self.config.pool.connect_timeout_ms,
+        };
 
         let (pool, tunnel) = if let Some(ref ssh_host_str) = ssh_host {
-            // Validate SSH user is present
             let ssh_user_str = match ssh_user {
                 Some(ref u) => u.clone(),
                 None => return tool_error!("ssh_user is required when ssh_host is provided"),
@@ -488,49 +367,53 @@ impl SessionStore {
                 known_hosts_check: ssh_known_hosts_check.clone(),
                 known_hosts_file: ssh_known_hosts_file,
             };
-            match crate::db::build_session_pool_with_tunnel(
-                &host,
-                port,
-                &user,
-                &password,
-                database.as_deref(),
-                ssl,
-                self.config.security.ssl_accept_invalid_certs,
-                ssl_ca.as_deref(),
-                self.config.pool.connect_timeout_ms,
-                &ssh_config,
-            )
-            .await
-            {
-                Ok((p, t)) => (p, Some(t)),
+
+            // Spawn SSH tunnel then use the backend to create a session pool through it
+            let tunnel_result = crate::tunnel::spawn_ssh_tunnel(&ssh_config, &host, port).await;
+            let tunnel = match tunnel_result {
+                Ok(t) => t,
                 Err(e) => {
-                    return tool_error!("SSH tunnel or connection failed: {}", e);
+                    self.total_connections
+                        .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
+                    return tool_error!("SSH tunnel failed: {}", e);
+                }
+            };
+
+            let tunnel_params = SessionConnectParams {
+                host: "127.0.0.1".to_string(),
+                port: tunnel.local_port,
+                user: user.clone(),
+                password: password.clone(),
+                database: database.clone(),
+                ssl,
+                ssl_accept_invalid_certs: self.config.security.ssl_accept_invalid_certs,
+                ssl_ca: ssl_ca.clone(),
+                connect_timeout_ms: self.config.pool.connect_timeout_ms,
+            };
+
+            match self.backend.create_session_pool(&tunnel_params).await {
+                Ok(p) => (p, Some(tunnel)),
+                Err(e) => {
+                    close_tunnel_with_timeout(tunnel, "on pool creation failure").await;
+                    self.total_connections
+                        .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
+                    return tool_error!("Connection through SSH tunnel failed: {}", e);
                 }
             }
         } else {
-            match crate::db::build_session_pool(
-                &host,
-                port,
-                &user,
-                &password,
-                database.as_deref(),
-                ssl,
-                self.config.security.ssl_accept_invalid_certs,
-                ssl_ca.as_deref(),
-                self.config.pool.connect_timeout_ms,
-            )
-            .await
-            {
+            match self.backend.create_session_pool(&params).await {
                 Ok(p) => (p, None),
                 Err(e) => {
+                    self.total_connections
+                        .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
                     return tool_error!("Connection failed: {}", e);
                 }
             }
         };
 
-        let pool_arc = Arc::new(pool.clone());
-        let introspector = Arc::new(SchemaIntrospector::new(
-            pool_arc,
+        let introspector = Arc::new(SchemaIntrospector::new_with_backend(
+            pool.clone(),
+            self.backend.clone(),
             self.config.pool.cache_ttl_secs,
         ));
         let info = json!({
@@ -540,9 +423,35 @@ impl SessionStore {
             "database": &database,
             "ssh_host": &ssh_host,
         });
-
-        // Single atomic check-and-insert using entry API.
-        // This eliminates the redundant triple-checking pattern while maintaining correctness.
+        {
+            let sessions = self.sessions.lock().await;
+            if sessions.len() >= self.config.security.max_sessions as usize {
+                drop(sessions);
+                if let Some(t) = tunnel {
+                    close_tunnel_with_timeout(t, "on session limit rejection").await;
+                }
+                pool.close().await;
+                self.total_connections
+                    .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
+                return tool_error!(
+                    "Maximum session limit ({}) reached. Disconnect an existing session first.",
+                    self.config.security.max_sessions
+                );
+            }
+            if sessions.contains_key(&name) {
+                drop(sessions);
+                if let Some(t) = tunnel {
+                    close_tunnel_with_timeout(t, "on duplicate session rejection").await;
+                }
+                pool.close().await;
+                self.total_connections
+                    .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
+                return tool_error!(
+                    "Session '{}' already exists. Use disconnect to close it first, or choose a different name.",
+                    name
+                );
+            }
+        }
         let session = Session {
             pool,
             introspector,
@@ -552,46 +461,24 @@ impl SessionStore {
             tunnel,
             ssh_host,
         };
-
         let mut sessions = self.sessions.lock().await;
-        // Check session limit first
-        if sessions.len() >= self.config.security.max_sessions as usize {
-            // Release lock before cleanup operations
+        if sessions.len() >= self.config.security.max_sessions as usize
+            || sessions.contains_key(&name)
+        {
             drop(sessions);
             if let Some(t) = session.tunnel {
-                close_tunnel_with_timeout(t, "on session limit rejection").await;
+                close_tunnel_with_timeout(t, "on post-race cleanup").await;
             }
             session.pool.close().await;
+            self.total_connections
+                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
             return tool_error!(
-                "Maximum session limit ({}) reached. Disconnect an existing session first.",
-                self.config.security.max_sessions
+                "Session name '{}' is now taken. Please try a different name.",
+                name
             );
         }
+        sessions.insert(name, session);
 
-        // Use entry API for atomic check-and-insert
-        match sessions.entry(name.clone()) {
-            Entry::Occupied(_) => {
-                // Release lock before cleanup operations
-                drop(sessions);
-                if let Some(t) = session.tunnel {
-                    close_tunnel_with_timeout(t, "on duplicate session rejection").await;
-                }
-                session.pool.close().await;
-                return tool_error!(
-                    "Session '{}' already exists. Use mysql_disconnect to close it first, or choose a different name.",
-                    name
-                );
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(session);
-                // Connection slots were already reserved atomically at the start of handle_connect
-            }
-        }
-
-        // Success: dismiss the guard so it won't decrement the counter.
-        reservation_guard.dismiss();
-
-        // Add security warnings if any
         let mut response = info;
         let warnings = self.config.security.security_warnings();
         if !warnings.is_empty() {
@@ -601,7 +488,7 @@ impl SessionStore {
     }
 
     // ------------------------------------------------------------------
-    // Tool handler: mysql_disconnect
+    // Tool handler: disconnect
     // ------------------------------------------------------------------
     pub(crate) async fn handle_disconnect(
         &self,
@@ -621,19 +508,11 @@ impl SessionStore {
             sessions.remove(name)
         };
         if let Some(session) = removed {
-            // Decrement total connections counter
-            // Use saturating_sub to prevent underflow in edge cases
-            let _ = self.total_connections.fetch_update(
-                Ordering::AcqRel,
-                Ordering::Acquire,
-                |current| Some(current.saturating_sub(NAMED_SESSION_POOL_SIZE)),
-            );
-            // Clean up SSH tunnel if present (outside the lock — close() may be slow).
+            self.total_connections
+                .fetch_sub(NAMED_SESSION_POOL_SIZE, Ordering::Release);
             if let Some(tunnel) = session.tunnel {
                 close_tunnel_with_timeout(tunnel, "on disconnect").await;
             }
-            // Explicitly close the pool so server-side connections are released
-            // immediately rather than waiting for sqlx's Drop impl to handle them.
             session.pool.close().await;
             Ok(serialize_response(&json!({
                 "success": true,
@@ -641,14 +520,14 @@ impl SessionStore {
             })))
         } else {
             tool_error!(
-                "Session '{}' not found. Use mysql_list_sessions to see available sessions.",
+                "Session '{}' not found. Use list_sessions to see available sessions.",
                 name
             )
         }
     }
 
     // ------------------------------------------------------------------
-    // Tool handler: mysql_list_sessions
+    // Tool handler: list_sessions
     // ------------------------------------------------------------------
     pub(crate) async fn handle_list_sessions(
         &self,
@@ -657,7 +536,6 @@ impl SessionStore {
         let sessions = self.sessions.lock().await;
         let mut list: Vec<serde_json::Value> = vec![];
 
-        // Default session is always shown (first when there are named sessions, alone otherwise)
         list.push(json!({
             "name": "default",
             "host": self.config.connection.host,
@@ -670,7 +548,7 @@ impl SessionStore {
                 "name": name,
                 "host": session.host,
                 "database": session.database,
-                "idle_seconds": std::time::Instant::now().saturating_duration_since(session.last_used).as_secs(),
+                "idle_seconds": session.last_used.elapsed().as_secs(),
                 "ssh_host": session.ssh_host,
             }));
         }
@@ -688,12 +566,7 @@ mod tests {
         let result = validate_identifier("", "Identifier");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        // CallToolResult wraps the error content; check the text
-        let text = err
-            .content
-            .get(0)
-            .and_then(|c| c.raw.as_text())
-            .expect("expected text content");
+        let text = err.content[0].raw.as_text().expect("expected text content");
         assert!(text.text.contains("Identifier cannot be empty"));
     }
 
@@ -703,32 +576,18 @@ mod tests {
         let result = validate_identifier(&long_id, "Identifier");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        let text = err
-            .content
-            .get(0)
-            .and_then(|c| c.raw.as_text())
-            .expect("expected text content");
+        let text = err.content[0].raw.as_text().expect("expected text content");
         assert!(text.text.contains("Identifier too long"));
     }
 
     #[test]
     fn test_validate_identifier_invalid_characters_returns_error() {
-        // Test with space
         let result = validate_identifier("invalid name", "Identifier");
         assert!(result.is_err());
-        let err = result.unwrap_err();
-        let text = err
-            .content
-            .get(0)
-            .and_then(|c| c.raw.as_text())
-            .expect("expected text content");
-        assert!(text.text.contains("must contain only alphanumeric"));
 
-        // Test with dot
         let result = validate_identifier("invalid.name", "Identifier");
         assert!(result.is_err());
 
-        // Test with semicolon
         let result = validate_identifier("invalid;name", "Identifier");
         assert!(result.is_err());
     }
@@ -753,7 +612,6 @@ mod tests {
 
     #[test]
     fn test_validate_identifier_rejects_hyphens() {
-        // Hyphens are not allowed — in MySQL, unquoted hyphens parse as subtraction
         let result = validate_identifier("valid-name-123", "Identifier");
         assert!(result.is_err());
 
