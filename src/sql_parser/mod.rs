@@ -1,62 +1,62 @@
 //! SQL parsing and statement classification.
-//!
+//
 //! This module parses SQL statements using the `sqlparser-rs` crate and classifies
 //! them by type (SELECT, INSERT, UPDATE, DELETE, DDL, etc.). It extracts metadata
 //! such as target schemas and tables, and detects potentially dangerous patterns
 //! like missing WHERE clauses or leading wildcard LIKE patterns.
-//!
-//! # Key Types
-//!
+//
+//! # Key Types!
+//! 
 //! - [`StatementType`] - Enum categorizing SQL statement types
 //! - [`ParsedStatement`] - Parsed result with type, target schema, and safety warnings
 //!
 //! # Key Functions
-//!
-//! - [`parse_sql`] - Parses a SQL string and returns a [`ParsedStatement`]
+//! 
+//! - [`parse_sql`] - Parses a SQL string and returns a[`ParsedStatement`]
 //! - [`parse_write_warnings`] - Generates safety warnings for write operations
 //!
 //! # Security: Safety Checks
-//!
+//! 
 //! The parser enforces strict security boundaries to prevent data exfiltration,
 //! privilege escalation, and injection attacks. These checks are security-critical
 //! and should be documented for security auditors.
-//!
+//! 
 //! ## 1. SELECT INTO OUTFILE/DUMPFILE
-//!
+//! 
 //! `SELECT ... INTO OUTFILE` and `SELECT ... INTO DUMPFILE` are blocked.
-//!
+//! 
 //! **Why**: These MySQL extensions write query results to files on the server
 //! filesystem. This could allow attackers to:
 //! - Exfiltrate sensitive data to files they can download
 //! - Overwrite server configuration files
 //! - Write malicious files to web-accessible directories
-//!
+//! 
 //! **Alternative**: Retrieve data with a standard `SELECT` and export client-side.
-//!
+//! 
 //! ## 2. SET GLOBAL/PERSIST
-//!
+//! 
 //! `SET GLOBAL`, `SET PERSIST`, `SET PERSIST_ONLY`, and `@@GLOBAL.*`/`@@PERSIST.*`
 //! variable assignments are blocked.
-//!
+//! 
 //! **Why**: These affect server-wide configuration and could:
 //! - Disable security settings (e.g., `sql_safe_updates`, authentication plugins)
 //! - Expose sensitive data via configuration changes
 //! - Persist malicious settings across server restarts
 //! - Allow privilege escalation by relaxing security controls
-//!
+//! 
 //! **Allowed**: Session-level `SET SESSION` and plain `SET` (session-scoped) are
 //! permitted as they only affect the current connection.
-//!
+//! 
 //! ## 3. Multi-Statement SQL
-//!
+//! 
 //! SQL strings containing multiple statements separated by semicolons are rejected.
-//!
+//! 
 //! **Why**: This prevents SQL injection attacks where an attacker might append
 //! malicious statements to a legitimate query:
 //! - `SELECT * FROM users WHERE id = 1; DROP TABLE users; --`
 //! - Even with prepared statements, multi-statement injection can occur in some
 //!   MySQL client configurations
-//!
+//! 
 //! **Alternative**: Send one statement per request. The connection stays open
 //! for subsequent queries.
 //!
@@ -69,7 +69,7 @@
 //! ```
 
 use anyhow::{bail, Result};
-use sqlparser::dialect::MySqlDialect;
+use sqlparser::dialect::{Dialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
 
 mod classify;
@@ -203,12 +203,17 @@ pub struct ParsedStatement {
 }
 
 /// Parse a SQL string and return the statement type and target schema.
+/// `dialect` selects the sqlparser dialect (e.g. `"MySQL"`, `"PostgreSQL"`, `"SQLite"`).
+/// Unrecognised values fall back to MySQL.
 /// Returns an error if the SQL is invalid or cannot be parsed.
-pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
-    let dialect = MySqlDialect {};
-    let statements = Parser::with_recursion_limit(256)
-        .parse_sql(&dialect, sql)
-        .map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
+pub fn parse_sql(sql: &str, dialect: &str) -> Result<ParsedStatement> {
+    let dialect: Box<dyn Dialect> = match dialect {
+        "PostgreSQL" | "postgres" | "postgresql" => Box::new(PostgreSqlDialect {}),
+        "SQLite" | "sqlite" => Box::new(SQLiteDialect {}),
+        _ => Box::new(MySqlDialect {}),
+    };
+    let statements =
+        Parser::parse_sql(&*dialect, sql).map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
 
     if statements.is_empty() {
         bail!("Empty SQL statement");
@@ -307,40 +312,4 @@ fn strip_single_quoted_literals(s: &str) -> String {
     }
 
     result
-}
-
-/// Inspect a parsed write statement and return safety warnings.
-/// Detects dangerous patterns: UPDATE/DELETE without WHERE, TRUNCATE.
-///
-/// Uses pre-parsed `has_where` from `ParsedStatement` to avoid re-invoking the SQL parser.
-pub fn parse_write_warnings(parsed: &ParsedStatement) -> Vec<String> {
-    let mut warnings = Vec::new();
-
-    match &parsed.statement_type {
-        StatementType::Truncate => {
-            warnings.push(
-                "TRUNCATE will delete ALL rows without transaction log — cannot be rolled back"
-                    .to_string(),
-            );
-        }
-        StatementType::Update => {
-            if !parsed.has_where {
-                warnings.push(
-                    "UPDATE has no WHERE clause — this will affect ALL rows in the table"
-                        .to_string(),
-                );
-            }
-        }
-        StatementType::Delete => {
-            if !parsed.has_where {
-                warnings.push(
-                    "DELETE has no WHERE clause — this will delete ALL rows in the table"
-                        .to_string(),
-                );
-            }
-        }
-        _ => {}
-    }
-
-    warnings
 }

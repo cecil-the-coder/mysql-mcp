@@ -192,6 +192,51 @@ impl Drop for TunnelHandle {
     }
 }
 
+/// Validate that the database host is safe for use in SSH port forwarding (-L argument).
+/// Unlike SSH hosts which support IPv6 notation, the database host in a forwarding
+/// spec should be a hostname, IPv4, or a bracketed IPv6 address. This prevents
+/// command injection attacks through the forwarding specification.
+fn validate_db_host_for_tunnel(host: &str) -> Result<()> {
+    if host.is_empty() {
+        return Err(anyhow::anyhow!("Database host cannot be empty"));
+    }
+    // Reject hosts that are excessively long to prevent potential buffer issues
+    if host.len() > 255 {
+        return Err(anyhow::anyhow!(
+            "Database host exceeds maximum length of 255 characters (got {})",
+            host.len()
+        ));
+    }
+    // Explicitly reject null bytes and ASCII control characters - these can cause
+    // issues with subprocess argument parsing and may lead to unexpected behavior.
+    if let Some(pos) = host.find('\0') {
+        return Err(anyhow::anyhow!(
+            "Database host contains a null byte at position {} — this is not a valid hostname",
+            pos
+        ));
+    }
+    if let Some(c) = host.chars().find(|c| c.is_ascii_control()) {
+        return Err(anyhow::anyhow!(
+            "Database host contains control character '{:#x}' — hostnames must not contain control characters",
+            c as u32
+        ));
+    }
+    // For the port forwarding spec, we need to be more restrictive than SSH hostnames.
+    // The -L argument format is: local_port:host:remote_port
+    // If host contains special characters like ':' (unbracketed IPv6) or spaces,
+    // it could break the argument parsing or be used for injection.
+    for c in host.chars() {
+        // Allow alphanumeric, hyphen, dot (hostname/IPv4), and bracketed IPv6 notation
+        if !c.is_ascii_alphanumeric() && c != '-' && c != '.' && c != ':' && c != '[' && c != ']' {
+            return Err(anyhow::anyhow!(
+                "Database host contains invalid character '{}' for SSH port forwarding. Host may only contain alphanumeric characters, hyphens, dots, and bracketed IPv6 notation",
+                c
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Validate that the SSH host contains only valid hostname characters.
 /// Valid characters are alphanumeric (a-z, A-Z, 0-9), hyphen (-), and dot (.).
 /// IPv6 addresses are allowed, including those enclosed in brackets (e.g., [::1]).
@@ -246,6 +291,9 @@ pub(crate) fn build_ssh_args(
 ) -> Result<Vec<String>> {
     // Validate the SSH host to prevent potential command injection
     validate_ssh_host(&ssh.host)?;
+    // Validate the database host for the port forwarding spec
+    // This prevents command injection through the -L argument
+    validate_db_host_for_tunnel(db_host)?;
     // Known hosts check: "strict" -> "yes", "accept-new" -> "accept-new", "insecure" -> "no"
     let shk = match ssh.known_hosts_check.as_str() {
         "accept-new" => "accept-new",
@@ -680,6 +728,86 @@ mod tests {
         assert!(validate_ssh_host(&host).is_ok());
     }
 
+    // -----------------------------------------------------------------------
+    // Tests for validate_db_host_for_tunnel (db_host validation)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_validate_db_host_rejects_empty() {
+        let result = validate_db_host_for_tunnel("");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("cannot be empty"),
+            "error should mention empty: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_db_host_rejects_null_byte() {
+        let host = "db\0host.internal";
+        let result = validate_db_host_for_tunnel(host);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("null byte"),
+            "error should mention null byte: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_db_host_rejects_control_chars() {
+        let host = "db\nhost.internal";
+        let result = validate_db_host_for_tunnel(host);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("control character"),
+            "error should mention control character: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_db_host_rejects_excessively_long() {
+        let long_host = "a".repeat(256);
+        let result = validate_db_host_for_tunnel(&long_host);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("maximum length of 255"),
+            "error should mention maximum length: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_db_host_accepts_valid_hostname() {
+        assert!(validate_db_host_for_tunnel("db.internal").is_ok());
+        assert!(validate_db_host_for_tunnel("mysql.example.com").is_ok());
+    }
+
+    #[test]
+    fn test_validate_db_host_accepts_ipv4() {
+        assert!(validate_db_host_for_tunnel("10.0.0.5").is_ok());
+        assert!(validate_db_host_for_tunnel("192.168.1.1").is_ok());
+        assert!(validate_db_host_for_tunnel("127.0.0.1").is_ok());
+    }
+
+    #[test]
+    fn test_validate_db_host_accepts_ipv6_bracketed() {
+        assert!(validate_db_host_for_tunnel("[::1]").is_ok());
+        assert!(validate_db_host_for_tunnel("[2001:db8::1]").is_ok());
+    }
+
+    #[test]
+    fn test_validate_db_host_accepts_255_char_host() {
+        let host = "a".repeat(255);
+        assert!(validate_db_host_for_tunnel(&host).is_ok());
+    }
+
     #[test]
     fn test_args_db_host_and_port_in_forwarding() {
         let ssh = base_ssh();
@@ -695,17 +823,17 @@ mod integration_tests {
     use crate::config::SshConfig;
 
     /// Build an SshConfig from environment variables.
-    /// Returns None (causing test to skip) if MYSQL_SSH_TEST_HOST is not set.
+    /// Returns None (causing test to skip) if DB_SSH_TEST_HOST is not set.
     fn get_test_ssh_config() -> Option<(SshConfig, String, u16)> {
-        let host = std::env::var("MYSQL_SSH_TEST_HOST").ok()?;
-        let user = std::env::var("MYSQL_SSH_TEST_USER").unwrap_or_else(|_| "root".to_string());
-        let private_key = std::env::var("MYSQL_SSH_TEST_KEY")
+        let host = std::env::var("DB_SSH_TEST_HOST").ok()?;
+        let user = std::env::var("DB_SSH_TEST_USER").unwrap_or_else(|_| "root".to_string());
+        let private_key = std::env::var("DB_SSH_TEST_KEY")
             .ok()
             .filter(|s| !s.is_empty());
         // Default: tunnel to the SSH server's own port 22 (always reachable if SSH works)
         let db_host =
-            std::env::var("MYSQL_SSH_TEST_DB_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-        let db_port: u16 = std::env::var("MYSQL_SSH_TEST_DB_PORT")
+            std::env::var("DB_SSH_TEST_DB_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let db_port: u16 = std::env::var("DB_SSH_TEST_DB_PORT")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(22);
@@ -725,7 +853,7 @@ mod integration_tests {
     #[tokio::test]
     async fn test_tunnel_establishes_and_port_connectable() {
         let Some((ssh, db_host, db_port)) = get_test_ssh_config() else {
-            eprintln!("[skip] MYSQL_SSH_TEST_HOST not set — skipping SSH integration test");
+            eprintln!("[skip] DB_SSH_TEST_HOST not set — skipping SSH integration test");
             return;
         };
         eprintln!(
@@ -818,7 +946,7 @@ mod integration_tests {
     /// Verify that a bad/unreachable SSH host fails within the timeout, not hanging forever.
     #[tokio::test]
     async fn test_tunnel_fails_on_unreachable_host() {
-        if std::env::var("MYSQL_SSH_TEST_HOST").is_err() {
+        if std::env::var("DB_SSH_TEST_HOST").is_err() {
             return; // only run this when SSH testing is active
         }
         let ssh = SshConfig {

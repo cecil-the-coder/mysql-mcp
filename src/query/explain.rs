@@ -1,24 +1,11 @@
-//! EXPLAIN plan execution and result types.
-//!
-//! Runs `EXPLAIN FORMAT=JSON` against a MySQL database and parses the
-//! returned JSON into a structured [`ExplainResult`] containing:
-//!
-//! - Whether a full table scan was detected
-//! - Which index (if any) was used
-//! - Estimated rows examined
-//! - Extra flags (filesort, temporary table, etc.)
-//! - A performance tier ([`ExplainTier`]) derived from the plan
-//!
-//! The actual JSON parsing logic lives in [`super::explain_parse`].
-
+#[cfg(feature = "mysql")]
 use anyhow::Result;
+
+#[cfg(feature = "mysql")]
 use sqlx::MySqlPool;
 
+#[cfg(feature = "mysql")]
 use super::with_timeout;
-
-/// Default timeout (30 s) used when no explicit timeout is available.
-#[cfg(test)]
-const DEFAULT_EXPLAIN_TIMEOUT_MS: u64 = 30_000;
 
 /// Query performance tier derived from EXPLAIN output.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -38,7 +25,7 @@ pub struct ExplainResult {
     pub tier: ExplainTier,
 }
 
-/// Execute EXPLAIN FORMAT=JSON for the given SQL query.
+/// Run EXPLAIN FORMAT=JSON on a SELECT query using a MySqlPool directly.
 ///
 /// # Arguments
 /// * `pool` - MySQL connection pool
@@ -94,7 +81,7 @@ pub async fn run_explain(
     super::explain_parse::parse(&v)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mysql"))]
 mod tests {
     use super::*;
     use crate::test_helpers::setup_test_db;
@@ -104,11 +91,9 @@ mod tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        // Use a query against information_schema which always exists.
         let result = run_explain(
             &test_db.pool,
             "SELECT table_name FROM information_schema.tables LIMIT 5",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -116,9 +101,7 @@ mod tests {
             "run_explain should succeed: {:?}",
             result.err()
         );
-        // rows_examined_estimate should be > 0 for any real query
         let er = result.unwrap();
-        // Either a full table scan or index access — just confirm the struct is populated.
         let _ = er.full_table_scan;
         let _ = er.rows_examined_estimate;
     }
@@ -128,7 +111,6 @@ mod tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        // Create a table without an index on the filter column, then EXPLAIN a query on it.
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS explain_test_fts (
                 id INT PRIMARY KEY AUTO_INCREMENT,
@@ -149,7 +131,6 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_fts WHERE val = 'hello'",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -158,7 +139,6 @@ mod tests {
             result.err()
         );
         let er = result.unwrap();
-        // val has no index, so we expect a full table scan
         assert!(
             er.full_table_scan,
             "should be a full table scan on unindexed column"
@@ -193,7 +173,6 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_idx WHERE val = 'hello'",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -202,7 +181,6 @@ mod tests {
             result.err()
         );
         let er = result.unwrap();
-        // val IS indexed; expect index usage
         assert!(!er.full_table_scan, "should NOT be a full table scan");
         assert!(er.index_used.is_some(), "an index should be used");
     }
@@ -244,7 +222,6 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT a.name, b.score FROM explain_join_a a JOIN explain_join_b b ON a.id = b.a_id",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -253,8 +230,6 @@ mod tests {
             result.err()
         );
         let er = result.unwrap();
-        // join_a is small and may be full-scanned; join_b uses idx_a_id.
-        // The key property: rows_examined_estimate should be > 0.
         assert!(
             er.rows_examined_estimate > 0,
             "should have row estimates for JOIN"
@@ -262,10 +237,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // MySQL 9.x container tests — explicitly exercise schema v2 (query_plan)
-    // format.  These run independently of MYSQL_HOST so that both the v1
-    // (MySQL 8.x) and v2 (MySQL 9.x) parser paths are covered in a plain
-    // `cargo test` run without any external database.
+    // MySQL 9.x container tests
     // -----------------------------------------------------------------------
 
     #[tokio::test]
@@ -291,7 +263,6 @@ mod tests {
         let er = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_fts WHERE val = 'hello'",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await
         .unwrap();
@@ -327,7 +298,6 @@ mod tests {
         let er = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_idx WHERE val = 'hello'",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await
         .unwrap();
@@ -371,7 +341,6 @@ mod tests {
         let er = run_explain(
             &test_db.pool,
             "SELECT a.name, b.score FROM explain_join_a a JOIN explain_join_b b ON a.id = b.a_id",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await
         .unwrap();

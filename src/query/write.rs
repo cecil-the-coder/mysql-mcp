@@ -1,19 +1,21 @@
 //! Write and DDL query execution (INSERT, UPDATE, DELETE, CREATE, ALTER, DROP).
-//!
+//
 //! This module handles execution of SQL statements that modify data or schema:
-//!
+//! 
 //! - **DML operations** ([`execute_write_query`]): INSERT, UPDATE, DELETE statements
 //!   executed within an explicit transaction that is committed on success. If the
 //!   operation fails or the connection drops, MySQL rolls back automatically.
-//!
+//! 
 //! - **DDL operations** ([`execute_ddl_query`]): CREATE, ALTER, DROP, TRUNCATE
 //!   statements executed without an explicit transaction wrapper, since MySQL
 //!   implicitly commits DDL statements.
 
 use super::retry::retry_on_transient_error;
 use super::with_timeout;
+use crate::backend::{ExecuteResult, PoolHandle};
 use crate::sql_parser::ParsedStatement;
 use anyhow::Result;
+#[cfg(feature = "mysql")]
 use sqlx::MySqlPool;
 use std::sync::Arc;
 use std::time::Instant;
@@ -27,6 +29,20 @@ pub struct WriteResult {
 }
 
 impl WriteResult {
+    pub fn from_execute_result(
+        result: ExecuteResult,
+        elapsed: u64,
+        parse_warnings: Vec<String>,
+    ) -> Self {
+        Self {
+            rows_affected: result.rows_affected,
+            last_insert_id: result.last_insert_id,
+            execution_time_ms: elapsed,
+            parse_warnings,
+        }
+    }
+
+    #[cfg(feature = "mysql")]
     fn from_query_result(
         result: sqlx::mysql::MySqlQueryResult,
         elapsed: u64,
@@ -40,117 +56,432 @@ impl WriteResult {
             parse_warnings,
         }
     }
+
+    // ---------------------------------------------------------------------
+    // High-level DML/DDS interface (used by server handlers)
+    // ---------------------------------------------------------------------
+
+    #[cfg(feature = "mysql")]
+    /// Execute a DML write statement (INSERT, UPDATE, DELETE) in a transaction.
+    ///
+    /// `parsed` is the already-parsed statement from the caller; warnings are
+    /// derived from it directly without re-invoking the SQL parser.
+    ///
+    /// Retries on transient network errors (connection reset, broken pipe, timeout) up to
+    /// `retry_attempts` times with exponential backoff.
+    ///
+    /// # Security
+    /// This function defensively checks for statement terminators as a defense-in-depth
+    /// measure, even though callers should have already validated the SQL.
+    pub async fn execute_write_query(
+        pool: &MySqlPool,
+        sql: &str,
+        parsed: &ParsedStatement,
+        query_timeout_ms: u64,
+        retry_attempts: u32,
+    ) -> Result<WriteResult> {
+        // Defensive check: reject SQL containing statement terminators to prevent
+        // potential multi-statement injection, even though callers should have
+        // already validated the SQL.
+        if sql.contains(';') {
+            anyhow::bail!(
+                "SQL contains statement terminator ';' — multi-statement SQL is not supported"
+            );
+        }
+
+        // Derive safety warnings from the already-parsed statement.
+        let parse_warnings = crate::sql_parser::parse_write_warnings(parsed);
+
+        let start = Instant::now();
+
+        let pool_clone = pool.clone();
+        let sql_arc = Arc::<str>::from(sql);
+
+        let write_fut = retry_on_transient_error(
+            move || {
+                let pool = pool_clone.clone();
+                let sql = sql_arc.clone();
+                async move {
+                    let mut tx = pool.begin().await?;
+                    let result = sqlx::query(&sql).execute(&mut *tx).await?;
+                    tx.commit().await?;
+                    Ok::<sqlx::mysql::MySqlQueryResult, anyhow::Error>(result)
+                }
+            },
+            retry_attempts,
+            "write_query",
+        );
+
+        let result = with_timeout(query_timeout_ms, "Query", write_fut).await?;
+
+        let elapsed = start.elapsed().as_millis() as u64;
+        Ok(WriteResult::from_query_result(
+            result,
+            elapsed,
+            parse_warnings,
+        ))
+    }
+
+    #[cfg(feature = "mysql")]
+    /// Execute a DDL statement (CREATE, ALTER, DROP, TRUNCATE) using MySqlPool.
+    pub async fn execute_ddl_query(
+        pool: &MySqlPool,
+        sql: &str,
+        query_timeout_ms: u64,
+        retry_attempts: u32,
+    ) -> Result<WriteResult> {
+        // Defensive check: reject SQL containing statement terminators to prevent
+        // potential multi-statement injection, even though callers should have
+        // already validated the SQL.
+        if sql.contains(';') {
+            anyhow::bail!(
+                "SQL contains statement terminator ';' — multi-statement SQL is not supported"
+            );
+        }
+
+        let start = Instant::now();
+
+        let pool_clone = pool.clone();
+        let sql_arc = Arc::<str>::from(sql);
+
+        let ddl_fut = retry_on_transient_error(
+            move || {
+                let pool = pool_clone.clone();
+                let sql = sql_arc.clone();
+                async move { sqlx::query(&sql).execute(&pool).await.map_err(Into::into) }
+            },
+            retry_attempts,
+            "ddl_query",
+        );
+
+        let result = with_timeout(query_timeout_ms, "Query", ddl_fut).await?;
+        let elapsed = start.elapsed().as_millis() as u64;
+        Ok(WriteResult::from_query_result(result, elapsed, vec![]))
+    }
+
+    // ---------------------------------------------------------------------
+    // PoolHandle interface (used by the server handlers)
+    // ---------------------------------------------------------------------
+
+    /// Execute a DML write statement (INSERT, UPDATE, DELETE) in a transaction using PoolHandle.
+    pub async fn execute_write_query_pool(
+        pool: &PoolHandle,
+        sql: &str,
+        parsed: &ParsedStatement,
+        query_timeout_ms: u64,
+        retry_attempts: u32,
+    ) -> Result<WriteResult> {
+        let parse_warnings = crate::sql_parser::parse_write_warnings(parsed);
+
+        let start = Instant::now();
+
+        let pool_clone = pool.clone();
+        let sql_owned = sql.to_string();
+
+        let write_fut = retry_on_transient_error(
+            move || {
+                let pool = pool_clone.clone();
+                let sql = sql_owned.clone();
+                async move { pool.execute_in_transaction(&sql).await }
+            },
+            retry_attempts,
+            "write_query",
+        );
+
+        let result = with_timeout(query_timeout_ms, "Query", write_fut).await?;
+
+        let elapsed = start.elapsed().as_millis() as u64;
+        Ok(WriteResult::from_execute_result(
+            result,
+            elapsed,
+            parse_warnings,
+        ))
+    }
+
+    // ---------------------------------------------------------------------
+    // DDL interface for PoolHandle
+    // ---------------------------------------------------------------------
+
+    /// Execute a DDL statement (CREATE, ALTER, DROP, TRUNCATE) using PoolHandle.
+    /// DDL auto-commits in MySQL, so we don't wrap in explicit transaction.
+    pub async fn execute_ddl_query_pool(
+        pool: &PoolHandle,
+        sql: &str,
+        query_timeout_ms: u64,
+        retry_attempts: u32,
+    ) -> Result<WriteResult> {
+        let start = Instant::now();
+
+        let pool_clone = pool.clone();
+        let sql_owned = sql.to_string();
+
+        let ddl_fut = retry_on_transient_error(
+            move || {
+                let pool = pool_clone.clone();
+                let sql = sql_owned.clone();
+                async move { pool.execute(&sql).await }
+            },
+            retry_attempts,
+            "ddl_query",
+        );
+
+        let result = with_timeout(query_timeout_ms, "Query", ddl_fut).await?;
+        let elapsed = start.elapsed().as_millis() as u64;
+        Ok(WriteResult::from_execute_result(result, elapsed, vec![]))
+    }
 }
 
-/// Execute a DML write statement (INSERT, UPDATE, DELETE) in a transaction.
-///
-/// `parsed` is the already-parsed statement from the caller; warnings are
-/// derived from it directly without re-invoking the SQL parser.
-///
-/// Retries on transient network errors (connection reset, broken pipe, timeout) up to
-/// `retry_attempts` times with exponential backoff.
-///
-/// # Security
-/// This function defensively checks for statement terminators as a defense-in-depth
-/// measure, even though callers should have already validated the SQL.
-pub async fn execute_write_query(
-    pool: &MySqlPool,
-    sql: &str,
-    parsed: &ParsedStatement,
-    query_timeout_ms: u64,
-    retry_attempts: u32,
-) -> Result<WriteResult> {
-    // Defensive check: reject SQL containing statement terminators to prevent
-    // potential multi-statement injection, even though callers should have
-    // already validated the SQL.
-    if sql.contains(';') {
-        anyhow::bail!(
-            "SQL contains statement terminator ';' — multi-statement SQL is not supported"
+// -----------------------------------------------------------------------
+// PostgreSQL interface
+// -----------------------------------------------------------------------
+
+#[cfg(feature = "postgres")]
+mod postgres {
+    use super::*;
+    use crate::backend::PoolHandle;
+
+    #[cfg(all(test, feature = "postgres"))]
+    pub(crate) async fn execute_write_query_pool(
+        pool: &PoolHandle,
+        sql: &str,
+        parsed: &ParsedStatement,
+        query_timeout_ms: u64,
+        retry_attempts: u32,
+    ) -> Result<WriteResult> {
+        let parse_warnings = crate::sql_parser::parse_write_warnings(parsed);
+
+        let start = Instant::now();
+
+        let pool_clone = pool.clone();
+        let sql_owned = sql.to_string();
+
+        let query_fut = async move {
+            let mut tx = pool_clone.connection_pool().begin().await?;
+            let result = sqlx::query(&sql_owned).execute(&mut *tx).await?;
+            tx.commit().await?;
+            Ok::<_, anyhow::Error>(result)
+        };
+
+        let result = with_timeout(query_timeout_ms, "Query", query_fut).await?;
+
+        let elapsed = start.elapsed().as_millis() as u64;
+        Ok(WriteResult::from_query_result(
+            result,
+            elapsed,
+            parse_warnings,
+        ))
+    }
+
+    #[cfg(all(test, feature = "postgres"))]
+    pub(crate) async fn execute_ddl_query_pool(
+        pool: &PoolHandle,
+        sql: &str,
+        query_timeout_ms: u64,
+        retry_attempts: u32,
+    ) -> Result<WriteResult> {
+        let parse_warnings = crate::sql_parser::parse_write_warnings(&crate::sql_parser::parse_sql(sql, "PostgreSQL")?);
+
+        let start = Instant::now();
+
+        let pool_clone = pool.clone();
+        let sql_owned = sql.to_string();
+
+        let ddl_fut = async move {
+            let result = sqlx::query(&sql_owned).execute(&pool_clone.connection_pool()).await?;
+            Ok::<_, anyhow::Error>(result)
+        };
+
+        let result = with_timeout(query_timeout_ms, "Query", ddl_fut).await?;
+        let elapsed = start.elapsed().as_millis() as u64;
+        Ok(WriteResult::from_execute_result(result, elapsed, parse_warnings))
+    }
+}
+
+// -----------------------------------------------------------------------
+// PostgreSQL integration tests
+// -----------------------------------------------------------------------
+
+#[cfg(all(test, feature = "postgres"))]
+mod pg_integration_tests {
+    use super::*;
+    use crate::test_helpers::setup_pg_test_db;
+
+    #[tokio::test]
+    async fn test_pg_insert_update_delete() {
+        let Some(test_db) = setup_pg_test_db().await else {
+            return;
+        };
+
+        // Create test table
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS pg_test_write_ops (id SERIAL PRIMARY KEY, val VARCHAR(50))",
+        )
+        .execute(&test_db.pool)
+        .await
+        .unwrap();
+
+        // Insert
+        let insert_sql = "INSERT INTO pg_test_write_ops (val) VALUES ('hello')";
+        let insert_parsed = crate::sql_parser::parse_sql(insert_sql, "PostgreSQL").unwrap();
+        let result =
+            execute_write_query_pool(&test_db.pool_handle, insert_sql, &insert_parsed, 0, 0).await;
+        assert!(result.is_ok(), "INSERT should succeed: {:?}", result.err());
+        let result = result.unwrap();
+        assert_eq!(result.rows_affected, 1);
+        // PostgreSQL does not have last_insert_id via PoolOps
+        assert!(
+            result.last_insert_id.is_none(),
+            "PG should not return last_insert_id"
+        );
+
+        // Update
+        let update_sql = "UPDATE pg_test_write_ops SET val='world' WHERE val='hello'";
+        let update_parsed = crate::sql_parser::parse_sql(update_sql, "PostgreSQL").unwrap();
+        let update_result = execute_write_query_pool(&test_db.pool_handle, update_sql, &update_parsed, 0, 0).await;
+        assert!(update_result.is_ok());
+        assert_eq!(update_result.unwrap().rows_affected, 1);
+
+        // Delete
+        let delete_sql = "DELETE FROM pg_test_write_ops WHERE val='world'";
+        let delete_parsed = crate::sql_parser::parse_sql(delete_sql, "PostgreSQL").unwrap();
+        let delete_result = execute_write_query_pool(&test_db.pool_handle, delete_sql, &delete_parsed, 0, 0).await;
+        assert!(delete_result.is_ok());
+
+        sqlx::query("DROP TABLE IF EXISTS pg_test_write_ops")
+            .execute(&test_db.pool)
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn test_pg_ddl_create_and_drop() {
+        let Some(test_db) = setup_pg_test_db().await else {
+            return;
+        };
+
+        let create_sql = "CREATE TABLE IF NOT EXISTS pg_test_ddl_temp (id SERIAL PRIMARY KEY)";
+        let result = execute_ddl_query_pool(&test_db.pool_handle, create_sql, 0, 0).await;
+        assert!(
+            result.is_ok(),
+            "CREATE TABLE should succeed: {:?}",
+            result.err()
+        );
+
+        let drop_sql = "DROP TABLE IF EXISTS pg_test_ddl_temp";
+        let drop_result = execute_ddl_query_pool(&test_db.pool_handle, drop_sql, 0, 0).await;
+        assert!(
+            drop_result.is_ok(),
+            "DROP TABLE should succeed: {:?}",
+            drop_result.err()
         );
     }
 
-    // Derive safety warnings from the already-parsed statement.
-    let parse_warnings = crate::sql_parser::parse_write_warnings(parsed);
-
-    let start = Instant::now();
-
-    let pool_clone = pool.clone();
-    let sql_arc = Arc::<str>::from(sql);
-
-    let write_fut = retry_on_transient_error(
-        move || {
-            let pool = pool_clone.clone();
-            let sql = sql_arc.clone();
-            async move {
-                let mut tx = pool.begin().await?;
-                let result = sqlx::query(&sql).execute(&mut *tx).await?;
-                tx.commit().await?;
-                Ok::<sqlx::mysql::MySqlQueryResult, anyhow::Error>(result)
-            }
-        },
-        retry_attempts,
-        "write_query",
-    );
-
-    let result = with_timeout(query_timeout_ms, "Query", write_fut).await?;
-
-    let elapsed = start.elapsed().as_millis() as u64;
-    Ok(WriteResult::from_query_result(
-        result,
-        elapsed,
-        parse_warnings,
-    ))
-}
-
-/// Execute a DDL statement (CREATE, ALTER, DROP, TRUNCATE).
-/// DDL auto-commits in MySQL, so we don't wrap in explicit transaction.
-///
-/// Note: TRUNCATE produces a safety warning; callers should call `parse_write_warnings`
-/// on the parsed statement and include the result in the response.
-///
-/// Retries on transient network errors (connection reset, broken pipe, timeout) up to
-/// `retry_attempts` times with exponential backoff.
-///
-/// # Security
-/// This function defensively checks for statement terminators as a defense-in-depth
-/// measure, even though callers should have already validated the SQL.
-pub async fn execute_ddl_query(
-    pool: &MySqlPool,
-    sql: &str,
-    query_timeout_ms: u64,
-    retry_attempts: u32,
-) -> Result<WriteResult> {
-    // Defensive check: reject SQL containing statement terminators to prevent
-    // potential multi-statement injection, even though callers should have
-    // already validated the SQL.
-    if sql.contains(';') {
-        anyhow::bail!(
-            "SQL contains statement terminator ';' — multi-statement SQL is not supported"
-        );
+    #[tokio::test]
+    async fn test_pg_invalid_sql_returns_error() {
+        let Some(test_db) = setup_pg_test_db().await else {
+            return;
+        };
+        let sql = "INSERT INTO nonexistent_table_xyz VALUES (1)";
+        let parsed = crate::sql_parser::parse_sql(sql, "PostgreSQL").unwrap();
+        let result = execute_write_query_pool(&test_db.pool_handle, sql, &parsed, 0, 0).await;
+        assert!(result.is_err(), "invalid SQL should fail");
     }
 
-    let start = Instant::now();
+    #[tokio::test]
+    async fn test_pg_insert_rows_affected() {
+        let Some(test_db) = setup_pg_test_db().await else {
+            return;
+        };
 
-    let pool_clone = pool.clone();
-    let sql_arc = Arc::<str>::from(sql);
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS pg_test_rows (id SERIAL PRIMARY KEY, val VARCHAR(50))",
+        )
+        .execute(&test_db.pool)
+        .await
+        .unwrap();
 
-    // DDL auto-commits; just execute directly
-    let ddl_fut = retry_on_transient_error(
-        move || {
-            let pool = pool_clone.clone();
-            let sql = sql_arc.clone();
-            async move { sqlx::query(&sql).execute(&pool).await.map_err(Into::into) }
-        },
-        retry_attempts,
-        "ddl_query",
-    );
+        // Multi-row insert
+        let sql = "INSERT INTO pg_test_rows (val) VALUES ('a'), ('b'), ('c')";
+        let parsed = crate::sql_parser::parse_sql(sql, "PostgreSQL").unwrap();
+        let result = execute_write_query_pool(&test_db.pool_handle, sql, &parsed, 0, 0).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().rows_affected, 3);
 
-    let result = with_timeout(query_timeout_ms, "Query", ddl_fut).await?;
-    let elapsed = start.elapsed().as_millis() as u64;
-    Ok(WriteResult::from_query_result(result, elapsed, vec![]))
+        sqlx::query("DROP TABLE IF EXISTS pg_test_rows")
+            .execute(&test_db.pool)
+            .await
+            .ok();
+    }
 }
 
-#[cfg(test)]
+// -----------------------------------------------------------------------
+// SQLite interface
+// -----------------------------------------------------------------------
+
+#[cfg(feature = "sqlite")]
+mod sqlite {
+    use super::*;
+    use crate::backend::PoolHandle;
+
+    #[cfg(all(test, feature = "sqlite"))]
+    pub(crate) async fn execute_write_query_pool(
+        pool: &PoolHandle,
+        sql: &str,
+        parsed: &ParsedStatement,
+        query_timeout_ms: u64,
+        retry_attempts: u32,
+    ) -> Result<WriteResult> {
+        let parse_warnings = crate::sql_parser::parse_write_warnings(parsed);
+
+        let start = Instant::now();
+
+        let pool_clone = pool.clone();
+        let sql_owned = sql.to_string();
+
+        let write_fut = async move { pool_clone.execute_in_transaction(&sql_owned).await };
+
+        let result = with_timeout(query_timeout_ms, "Query", write_fut).await?;
+
+        let elapsed = start.elapsed().as_millis() as u64;
+        Ok(WriteResult::from_execute_result(
+            result,
+            elapsed,
+            parse_warnings,
+        ))
+    }
+
+    #[cfg(all(test, feature = "sqlite"))]
+    pub(crate) async fn execute_ddl_query_pool(
+        pool: &PoolHandle,
+        sql: &str,
+        query_timeout_ms: u64,
+        retry_attempts: u32,
+    ) -> Result<WriteResult> {
+        use sqlparser::parser::Parser;
+
+        let dialect = sqlparser::dialect::SQLiteDialect {};
+        let parsed = Parser::parse_sql(&dialect, sql)
+            .map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
+        let parse_warnings = crate::sql_parser::parse_write_warnings(&parsed);
+
+        let start = Instant::now();
+
+        let pool_clone = pool.clone();
+        let sql_owned = sql.to_string();
+
+        let ddl_fut = async move { pool_clone.execute(&sql_owned).await };
+
+        let result = with_timeout(query_timeout_ms, "Query", ddl_fut).await?;
+        let elapsed = start.elapsed().as_millis() as u64;
+        Ok(WriteResult::from_execute_result(result, elapsed, parse_warnings))
+    }
+}
+
+// -----------------------------------------------------------------------
+// Integration tests
+// -----------------------------------------------------------------------
+
+#[cfg(all(test, feature = "mysql"))]
 mod integration_tests {
     use super::*;
     use crate::test_helpers::setup_test_db;
@@ -168,7 +499,7 @@ mod integration_tests {
             .unwrap();
 
         let insert_sql = "INSERT INTO test_write_ops (val) VALUES ('hello')";
-        let insert_parsed = crate::sql_parser::parse_sql(insert_sql).unwrap();
+        let insert_parsed = crate::sql_parser::parse_sql(insert_sql, "MySQL").unwrap();
         let result = execute_write_query(pool, insert_sql, &insert_parsed, 0, 0).await;
         assert!(result.is_ok());
         let result = result.unwrap();
@@ -176,13 +507,13 @@ mod integration_tests {
         assert!(result.last_insert_id.is_some());
 
         let update_sql = "UPDATE test_write_ops SET val='world' WHERE val='hello'";
-        let update_parsed = crate::sql_parser::parse_sql(update_sql).unwrap();
+        let update_parsed = crate::sql_parser::parse_sql(update_sql, "MySQL").unwrap();
         let update_result = execute_write_query(pool, update_sql, &update_parsed, 0, 0).await;
         assert!(update_result.is_ok());
         assert_eq!(update_result.unwrap().rows_affected, 1);
 
         let delete_sql = "DELETE FROM test_write_ops WHERE val='world'";
-        let delete_parsed = crate::sql_parser::parse_sql(delete_sql).unwrap();
+        let delete_parsed = crate::sql_parser::parse_sql(delete_sql, "MySQL").unwrap();
         let delete_result = execute_write_query(pool, delete_sql, &delete_parsed, 0, 0).await;
         assert!(delete_result.is_ok());
 

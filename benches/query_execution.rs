@@ -26,10 +26,10 @@
 //!   against the ~100 ms connection setup measured here.
 
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use mysql_mcp::config::PoolConfig;
-use mysql_mcp::query::read::execute_read_query;
-use mysql_mcp::schema::SchemaIntrospector;
-use mysql_mcp::sql_parser::parse_sql;
+use sql_mcp::config::PoolConfig;
+use sql_mcp::query::read::execute_read_query;
+use sql_mcp::schema::SchemaIntrospector;
+use sql_mcp::sql_parser::parse_sql;
 use std::sync::Arc;
 
 struct BenchDb {
@@ -70,7 +70,7 @@ fn try_connect() -> Option<BenchDb> {
 
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let pool = rt.block_on(async {
-        mysql_mcp::db::build_session_pool(
+        sql_mcp::db::build_session_pool(
             &host,
             port,
             &user,
@@ -126,7 +126,7 @@ fn bench_query_execution(c: &mut Criterion) {
     // 1. Constant SELECT — MySQL const-optimizes this; measures round-trip + minimal serialization
     {
         let sql = "SELECT 1 AS n";
-        let parsed = parse_sql(sql).unwrap();
+        let parsed = parse_sql(sql, "MySQL").unwrap();
         group.throughput(Throughput::Elements(1));
         group.bench_function("const_select_1row", |b| {
             b.iter(|| {
@@ -142,7 +142,7 @@ fn bench_query_execution(c: &mut Criterion) {
     // 2. Mixed types, 1 row — exercises multiple branches of column_to_json type dispatch
     {
         let sql = "SELECT 1 AS int_col, 3.14 AS float_col, 'hello' AS str_col, NOW() AS ts_col, NULL AS null_col, CAST(42 AS DECIMAL(10,2)) AS dec_col";
-        let parsed = parse_sql(sql).unwrap();
+        let parsed = parse_sql(sql, "MySQL").unwrap();
         group.throughput(Throughput::Elements(1));
         group.bench_function("mixed_types_1row", |b| {
             b.iter(|| {
@@ -161,7 +161,7 @@ fn bench_query_execution(c: &mut Criterion) {
                    FROM information_schema.COLUMNS \
                    WHERE TABLE_SCHEMA = 'information_schema' \
                    LIMIT 10";
-        let parsed = parse_sql(sql).unwrap();
+        let parsed = parse_sql(sql, "MySQL").unwrap();
         group.throughput(Throughput::Elements(10));
         group.bench_function("info_schema_10rows", |b| {
             b.iter(|| {
@@ -180,7 +180,7 @@ fn bench_query_execution(c: &mut Criterion) {
                    FROM information_schema.COLUMNS \
                    WHERE TABLE_SCHEMA = 'information_schema' \
                    LIMIT 100";
-        let parsed = parse_sql(sql).unwrap();
+        let parsed = parse_sql(sql, "MySQL").unwrap();
         group.throughput(Throughput::Elements(100));
         group.bench_function("info_schema_100rows", |b| {
             b.iter(|| {
@@ -204,7 +204,7 @@ fn bench_query_execution(c: &mut Criterion) {
                    FROM information_schema.COLUMNS \
                    WHERE TABLE_SCHEMA = 'information_schema' \
                    LIMIT 10";
-        let parsed = parse_sql(sql).unwrap();
+        let parsed = parse_sql(sql, "MySQL").unwrap();
         group.throughput(Throughput::Elements(10));
         group.bench_function("wide_20col_10rows", |b| {
             b.iter(|| {
@@ -325,7 +325,7 @@ fn bench_session_connect(c: &mut Criterion) {
     group.bench_function("build_session_pool", |b| {
         b.iter(|| {
             db.rt.block_on(async {
-                mysql_mcp::db::build_session_pool(
+                sql_mcp::db::build_session_pool(
                     &host,
                     port,
                     &user,
