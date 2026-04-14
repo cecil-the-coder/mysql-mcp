@@ -61,7 +61,6 @@ impl WriteResult {
 // Legacy MySqlPool interface (kept for backward compatibility with tests)
 // ---------------------------------------------------------------------------
 #[cfg(feature = "mysql")]
-
 /// Execute a DML write statement (INSERT, UPDATE, DELETE) in a transaction using MySqlPool.
 pub async fn execute_write_query(
     pool: &MySqlPool,

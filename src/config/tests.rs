@@ -561,9 +561,9 @@ private_key = "/tmp/key.pem"
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use crate::config::env_config::load_env_config;
 
-        std::env::set_var("MYSQL_SCHEMA_casedb_PERMISSIONS", "Insert,UPDATE,Delete");
+        std::env::set_var("DB_SCHEMA_casedb_PERMISSIONS", "Insert,UPDATE,Delete");
         let env = load_env_config();
-        std::env::remove_var("MYSQL_SCHEMA_casedb_PERMISSIONS");
+        std::env::remove_var("DB_SCHEMA_casedb_PERMISSIONS");
 
         let config = env.apply_to(Config::default());
         let perms = config

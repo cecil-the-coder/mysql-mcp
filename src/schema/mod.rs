@@ -63,12 +63,19 @@ pub struct IndexDef {
 /// selectivity and the optimizer may choose a full table scan instead.
 pub fn is_low_cardinality_type(data_type: &str) -> bool {
     let dt = data_type.to_lowercase();
-    dt == "bool"
-        || dt == "boolean"
-        || dt.starts_with("enum")
-        || dt.starts_with("set")
-        || dt.starts_with("bit")
-        || dt.starts_with("tinyint(1)")
+    if dt == "bool" || dt == "boolean" || dt.starts_with("enum") || dt.starts_with("set") {
+        return true;
+    }
+    // bit(1) through bit(4) have at most 16 distinct values — low cardinality.
+    // bit(5+) has 32+ values and is not considered low cardinality.
+    if let Some(rest) = dt.strip_prefix("bit(") {
+        if let Some(width) = rest.strip_suffix(')') {
+            if let Ok(n) = width.parse::<u8>() {
+                return n <= 4;
+            }
+        }
+    }
+    dt.starts_with("tinyint(1)")
 }
 
 // --------------------------------------------------------------------------

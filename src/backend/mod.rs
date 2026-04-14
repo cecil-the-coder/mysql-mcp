@@ -18,7 +18,6 @@ pub mod sqlite;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json;
 
 use crate::config::{Config, SecurityConfig};
 use crate::schema::{ColumnInfo, IndexDef, TableInfo};

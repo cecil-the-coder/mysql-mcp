@@ -375,11 +375,29 @@ impl Config {
         if pool.connect_timeout_ms == 0 {
             anyhow::bail!("pool.connect_timeout_ms must be > 0");
         }
+        const MAX_TIMEOUT_MS: u64 = 86_400_000; // 24 hours
+        if pool.query_timeout_ms > MAX_TIMEOUT_MS {
+            anyhow::bail!(
+                "pool.query_timeout_ms exceeds maximum of 24 hours (86,400,000 ms, got: {})",
+                pool.query_timeout_ms
+            );
+        }
+        if pool.connect_timeout_ms > MAX_TIMEOUT_MS {
+            anyhow::bail!(
+                "pool.connect_timeout_ms exceeds maximum of 24 hours (86,400,000 ms, got: {})",
+                pool.connect_timeout_ms
+            );
+        }
         if pool.size == 0 || pool.size > 1000 {
             anyhow::bail!("pool.size must be between 1 and 1000 (got: {})", pool.size);
         }
         if pool.max_rows == 0 {
-            anyhow::bail!("pool.max_rows must be >= 1");
+            // max_rows == 0 means unlimited (no row limit), which is valid
+        } else if pool.max_rows > 1_000_000 {
+            anyhow::bail!(
+                "pool.max_rows must be <= 1,000,000 (got: {})",
+                pool.max_rows
+            );
         }
         if pool.max_result_memory_mb == 0 {
             anyhow::bail!("pool.max_result_memory_mb must be >= 1");
@@ -400,6 +418,9 @@ impl Config {
         // -- Security bound checks --
         if sec.max_sessions == 0 {
             anyhow::bail!("security.max_sessions must be >= 1");
+        }
+        if sec.max_total_connections == 0 {
+            anyhow::bail!("security.max_total_connections must be >= 1");
         }
         if sec.max_total_connections < pool.size {
             anyhow::bail!(
@@ -495,8 +516,6 @@ pub(crate) fn check_known_hosts_permissions(path: &str) -> anyhow::Result<()> {
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = metadata.permissions().mode() & 0o777;
-        // In strict mode, the known_hosts file must not be writable by group or others
-        // to prevent tampering with host key mappings.
         if mode & 0o022 != 0 {
             anyhow::bail!(
                 "ssh.known_hosts_file {} has overly permissive permissions: {:o}. \
