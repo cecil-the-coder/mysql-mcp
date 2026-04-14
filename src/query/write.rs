@@ -1,11 +1,11 @@
 //! Write and DDL query execution (INSERT, UPDATE, DELETE, CREATE, ALTER, DROP).
 //
 //! This module handles execution of SQL statements that modify data or schema:
-//! 
+//!
 //! - **DML operations** ([`execute_write_query`]): INSERT, UPDATE, DELETE statements
 //!   executed within an explicit transaction that is committed on success. If the
 //!   operation fails or the connection drops, MySQL rolls back automatically.
-//! 
+//!
 //! - **DDL operations** ([`execute_ddl_query`]): CREATE, ALTER, DROP, TRUNCATE
 //!   statements executed without an explicit transaction wrapper, since MySQL
 //!   implicitly commits DDL statements.
@@ -231,16 +231,16 @@ impl WriteResult {
     }
 }
 
-// -----------------------------------------------------------------------
+// ---------------------------------------------------------------------
 // PostgreSQL interface
-// -----------------------------------------------------------------------
+// ---------------------------------------------------------------------
 
 #[cfg(feature = "postgres")]
 mod postgres {
     use super::*;
     use crate::backend::PoolHandle;
 
-    #[cfg(all(test, feature = "postgres"))]
+    /// PostgreSQL implementation of execute_write_query_pool
     pub(crate) async fn execute_write_query_pool(
         pool: &PoolHandle,
         sql: &str,
@@ -272,14 +272,19 @@ mod postgres {
         ))
     }
 
-    #[cfg(all(test, feature = "postgres"))]
+    /// PostgreSQL implementation of execute_ddl_query_pool
     pub(crate) async fn execute_ddl_query_pool(
         pool: &PoolHandle,
         sql: &str,
         query_timeout_ms: u64,
         retry_attempts: u32,
     ) -> Result<WriteResult> {
-        let parse_warnings = crate::sql_parser::parse_write_warnings(&crate::sql_parser::parse_sql(sql, "PostgreSQL")?);
+        use sqlparser::parser::Parser;
+
+        let dialect = sqlparser::dialect::PostgreSqlDialect {};
+        let parsed = Parser::parse_sql(&dialect, sql)
+            .map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
+        let parse_warnings = crate::sql_parser::parse_write_warnings(&parsed);
 
         let start = Instant::now();
 
@@ -297,126 +302,9 @@ mod postgres {
     }
 }
 
-// -----------------------------------------------------------------------
-// PostgreSQL integration tests
-// -----------------------------------------------------------------------
-
-#[cfg(all(test, feature = "postgres"))]
-mod pg_integration_tests {
-    use super::*;
-    use crate::test_helpers::setup_pg_test_db;
-
-    #[tokio::test]
-    async fn test_pg_insert_update_delete() {
-        let Some(test_db) = setup_pg_test_db().await else {
-            return;
-        };
-
-        // Create test table
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS pg_test_write_ops (id SERIAL PRIMARY KEY, val VARCHAR(50))",
-        )
-        .execute(&test_db.pool)
-        .await
-        .unwrap();
-
-        // Insert
-        let insert_sql = "INSERT INTO pg_test_write_ops (val) VALUES ('hello')";
-        let insert_parsed = crate::sql_parser::parse_sql(insert_sql, "PostgreSQL").unwrap();
-        let result =
-            execute_write_query_pool(&test_db.pool_handle, insert_sql, &insert_parsed, 0, 0).await;
-        assert!(result.is_ok(), "INSERT should succeed: {:?}", result.err());
-        let result = result.unwrap();
-        assert_eq!(result.rows_affected, 1);
-        // PostgreSQL does not have last_insert_id via PoolOps
-        assert!(
-            result.last_insert_id.is_none(),
-            "PG should not return last_insert_id"
-        );
-
-        // Update
-        let update_sql = "UPDATE pg_test_write_ops SET val='world' WHERE val='hello'";
-        let update_parsed = crate::sql_parser::parse_sql(update_sql, "PostgreSQL").unwrap();
-        let update_result = execute_write_query_pool(&test_db.pool_handle, update_sql, &update_parsed, 0, 0).await;
-        assert!(update_result.is_ok());
-        assert_eq!(update_result.unwrap().rows_affected, 1);
-
-        // Delete
-        let delete_sql = "DELETE FROM pg_test_write_ops WHERE val='world'";
-        let delete_parsed = crate::sql_parser::parse_sql(delete_sql, "PostgreSQL").unwrap();
-        let delete_result = execute_write_query_pool(&test_db.pool_handle, delete_sql, &delete_parsed, 0, 0).await;
-        assert!(delete_result.is_ok());
-
-        sqlx::query("DROP TABLE IF EXISTS pg_test_write_ops")
-            .execute(&test_db.pool)
-            .await
-            .ok();
-    }
-
-    #[tokio::test]
-    async fn test_pg_ddl_create_and_drop() {
-        let Some(test_db) = setup_pg_test_db().await else {
-            return;
-        };
-
-        let create_sql = "CREATE TABLE IF NOT EXISTS pg_test_ddl_temp (id SERIAL PRIMARY KEY)";
-        let result = execute_ddl_query_pool(&test_db.pool_handle, create_sql, 0, 0).await;
-        assert!(
-            result.is_ok(),
-            "CREATE TABLE should succeed: {:?}",
-            result.err()
-        );
-
-        let drop_sql = "DROP TABLE IF EXISTS pg_test_ddl_temp";
-        let drop_result = execute_ddl_query_pool(&test_db.pool_handle, drop_sql, 0, 0).await;
-        assert!(
-            drop_result.is_ok(),
-            "DROP TABLE should succeed: {:?}",
-            drop_result.err()
-        );
-    }
-
-    #[tokio::test]
-    async fn test_pg_invalid_sql_returns_error() {
-        let Some(test_db) = setup_pg_test_db().await else {
-            return;
-        };
-        let sql = "INSERT INTO nonexistent_table_xyz VALUES (1)";
-        let parsed = crate::sql_parser::parse_sql(sql, "PostgreSQL").unwrap();
-        let result = execute_write_query_pool(&test_db.pool_handle, sql, &parsed, 0, 0).await;
-        assert!(result.is_err(), "invalid SQL should fail");
-    }
-
-    #[tokio::test]
-    async fn test_pg_insert_rows_affected() {
-        let Some(test_db) = setup_pg_test_db().await else {
-            return;
-        };
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS pg_test_rows (id SERIAL PRIMARY KEY, val VARCHAR(50))",
-        )
-        .execute(&test_db.pool)
-        .await
-        .unwrap();
-
-        // Multi-row insert
-        let sql = "INSERT INTO pg_test_rows (val) VALUES ('a'), ('b'), ('c')";
-        let parsed = crate::sql_parser::parse_sql(sql, "PostgreSQL").unwrap();
-        let result = execute_write_query_pool(&test_db.pool_handle, sql, &parsed, 0, 0).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().rows_affected, 3);
-
-        sqlx::query("DROP TABLE IF EXISTS pg_test_rows")
-            .execute(&test_db.pool)
-            .await
-            .ok();
-    }
-}
-
-// -----------------------------------------------------------------------
+// ---------------------------------------------------------------------
 // SQLite interface
-// -----------------------------------------------------------------------
+// ---------------------------------------------------------------------
 
 #[cfg(feature = "sqlite")]
 mod sqlite {
@@ -477,9 +365,9 @@ mod sqlite {
     }
 }
 
-// -----------------------------------------------------------------------
+// ---------------------------------------------------------------------
 // Integration tests
-// -----------------------------------------------------------------------
+// ---------------------------------------------------------------------
 
 #[cfg(all(test, feature = "mysql"))]
 mod integration_tests {
@@ -578,5 +466,219 @@ mod integration_tests {
             "error should mention multi-statement rejection, got: {}",
             err
         );
+    }
+}
+
+#[cfg(all(test, feature = "postgres"))]
+mod pg_integration_tests {
+    use super::*;
+    use crate::test_helpers::setup_pg_test_db;
+
+    #[tokio::test]
+    async fn test_pg_insert_update_delete() {
+        let Some(test_db) = setup_pg_test_db().await else {
+            return;
+        };
+
+        // Create test table
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS pg_test_write_ops (id SERIAL PRIMARY KEY, val VARCHAR(50))",
+        )
+        .execute(&test_db.pool)
+        .await
+        .unwrap();
+
+        // Insert
+        let insert_sql = "INSERT INTO pg_test_write_ops (val) VALUES ('hello')";
+        let insert_parsed = crate::sql_parser::parse_sql(insert_sql, "PostgreSQL").unwrap();
+        let result = execute_write_query_pool(&test_db.pool_handle, insert_sql, &insert_parsed, 0, 0).await;
+        assert!(result.is_ok(), "INSERT should succeed: {:?}", result.err());
+        let result = result.unwrap();
+        assert_eq!(result.rows_affected, 1);
+        // PostgreSQL does not have last_insert_id via PoolOps
+        assert!(
+            result.last_insert_id.is_none(),
+            "PG should not return last_insert_id"
+        );
+
+        // Update
+        let update_sql = "UPDATE pg_test_write_ops SET val='world' WHERE val='hello'";
+        let update_parsed = crate::sql_parser::parse_sql(update_sql, "PostgreSQL").unwrap();
+        let update_result = execute_write_query_pool(&test_db.pool_handle, update_sql, &update_parsed, 0, 0).await;
+        assert!(update_result.is_ok());
+        assert_eq!(update_result.unwrap().rows_affected, 1);
+
+        // Delete
+        let delete_sql = "DELETE FROM pg_test_write_ops WHERE val='world'";
+        let delete_parsed = crate::sql_parser::parse_sql(delete_sql, "PostgreSQL").unwrap();
+        let delete_result = execute_write_query_pool(&test_db.pool_handle, delete_sql, &delete_parsed, 0, 0).await;
+        assert!(delete_result.is_ok());
+
+        sqlx::query("DROP TABLE IF EXISTS pg_test_write_ops")
+            .execute(&test_db.pool)
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn test_pg_ddl_create_and_drop() {
+        let Some(test_db) = setup_pg_test_db().await else {
+            return;
+        };
+
+        let create_sql = "CREATE TABLE IF NOT EXISTS pg_test_ddl_temp (id SERIAL PRIMARY KEY)";
+        let result = execute_ddl_query_pool(&test_db.pool_handle, create_sql, 0, 0).await;
+        assert!(
+            result.is_ok(),
+            "CREATE TABLE should succeed: {:?}",
+            result.err()
+        );
+
+        let drop_sql = "DROP TABLE IF EXISTS pg_test_ddl_temp";
+        let drop_result = execute_ddl_query_pool(&test_db.pool_handle, drop_sql, 0, 0).await;
+        assert!(
+            drop_result.is_ok(),
+            "DROP TABLE should succeed: {:?}",
+            drop_result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pg_invalid_sql_returns_error() {
+        let Some(test_db) = setup_pg_test_db().await else {
+            return;
+        };
+        let sql = "INSERT INTO nonexistent_table_xyz VALUES (1)";
+        let parsed = crate::sql_parser::parse_sql(sql, "PostgreSQL").unwrap();
+        let result = execute_write_query_pool(&test_db.pool_handle, sql, &parsed, 0, 0).await;
+        assert!(result.is_err(), "invalid SQL should fail");
+    }
+
+    #[tokio::test]
+    async fn test_pg_insert_rows_affected() {
+        let Some(test_db) = setup_pg_test_db().await else {
+            return;
+        };
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS pg_test_rows (id SERIAL PRIMARY KEY, val VARCHAR(50))",
+        )
+        .execute(&test_db.pool)
+        .await
+        .unwrap();
+
+        // Multi-row insert
+        let sql = "INSERT INTO pg_test_rows (val) VALUES ('a'), ('b'), ('c')";
+        let parsed = crate::sql_parser::parse_sql(sql, "PostgreSQL").unwrap();
+        let result = execute_write_query_pool(&test_db.pool_handle, sql, &parsed, 0, 0).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().rows_affected, 3);
+
+        sqlx::query("DROP TABLE IF EXISTS pg_test_rows")
+            .execute(&test_db.pool)
+            .await
+            .ok();
+    }
+}
+
+#[cfg(feature = "sqlite")]
+#[cfg(all(test, feature = "sqlite"))]
+mod sqlite_integration_tests {
+    use super::*;
+    use crate::test_helpers::setup_sqlite_test_db;
+
+    #[tokio::test]
+    async fn test_sqlite_insert_and_rollback() {
+        let Some(test_db) = setup_sqlite_test_db().await else {
+            return;
+        };
+        let pool = &test_db.pool;
+
+        sqlx::query("CREATE TABLE IF NOT EXISTS sqlite_test_write_ops (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        let insert_sql = "INSERT INTO sqlite_test_write_ops (val) VALUES ('hello')";
+        let parsed = crate::sql_parser::parse_sql(insert_sql, "SQLite").unwrap();
+        let result = execute_write_query_pool(&test_db.pool_handle, insert_sql, &parsed, 0, 0).await;
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert_eq!(result.rows_affected, 1);
+        assert!(result.last_insert_id.is_some());
+
+        let update_sql = "UPDATE sqlite_test_write_ops SET val='world' WHERE val='hello'";
+        let update_parsed = crate::sql_parser::parse_sql(update_sql, "SQLite").unwrap();
+        let update_result = execute_write_query_pool(&test_db.pool_handle, update_sql, &update_parsed, 0, 0).await;
+        assert!(update_result.is_ok());
+        assert_eq!(update_result.unwrap().rows_affected, 1);
+
+        let delete_sql = "DELETE FROM sqlite_test_write_ops WHERE val='world'";
+        let delete_parsed = crate::sql_parser::parse_sql(delete_sql, "SQLite").unwrap();
+        let delete_result = execute_write_query_pool(&test_db.pool_handle, delete_sql, &delete_parsed, 0, 0).await;
+        assert!(delete_result.is_ok());
+
+        sqlx::query("DROP TABLE IF EXISTS sqlite_test_write_ops")
+            .execute(pool)
+            .await
+            .ok();
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_ddl_create_and_drop() {
+        let Some(test_db) = setup_sqlite_test_db().await else {
+            return;
+        };
+
+        let create_sql = "CREATE TABLE IF NOT EXISTS sqlite_test_ddl_temp (id INTEGER PRIMARY KEY)";
+        let result = execute_ddl_query_pool(&test_db.pool_handle, create_sql, 0, 0).await;
+        assert!(
+            result.is_ok(),
+            "CREATE TABLE should succeed: {:?}",
+            result.err()
+        );
+
+        let drop_sql = "DROP TABLE IF EXISTS sqlite_test_ddl_temp";
+        let drop_result = execute_ddl_query_pool(&test_db.pool_handle, drop_sql, 0, 0).await;
+        assert!(
+            drop_result.is_ok(),
+            "DROP TABLE should succeed: {:?}",
+            drop_result.err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_invalid_sql_returns_error() {
+        let Some(test_db) = setup_sqlite_test_db().await else {
+            return;
+        };
+        let sql = "INSERT INTO nonexistent_table_xyz VALUES (1)";
+        let parsed = crate::sql_parser::parse_sql(sql, "SQLite").unwrap();
+        let result = execute_write_query_pool(&test_db.pool_handle, sql, &parsed, 0, 0).await;
+        assert!(result.is_err(), "invalid SQL should fail");
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_insert_rows_affected() {
+        let Some(test_db) = setup_sqlite_test_db().await else {
+            return;
+        };
+
+        sqlx::query("CREATE TABLE IF NOT EXISTS sqlite_test_rows (id INTEGER PRIMARY KEY AUTOINCREMENT, val TEXT)")
+            .execute(&test_db.pool)
+            .await
+            .unwrap();
+
+        // Multi-row insert
+        let sql = "INSERT INTO sqlite_test_rows (val) VALUES ('a'), ('b'), ('c')";
+        let parsed = crate::sql_parser::parse_sql(sql, "SQLite").unwrap();
+        let result = execute_write_query_pool(&test_db.pool_handle, sql, &parsed, 0, 0).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().rows_affected, 3);
+
+        sqlx::query("DROP TABLE IF EXISTS sqlite_test_rows")
+            .execute(&test_db.pool)
+            .await
+            .ok();
     }
 }
