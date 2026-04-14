@@ -12,12 +12,12 @@
 pub(crate) mod fetch;
 pub mod introspect;
 
-#[cfg(all(test, feature = "mysql"))]
-mod tests;
 #[cfg(all(test, feature = "postgres"))]
 mod pg_tests;
 #[cfg(all(test, feature = "sqlite"))]
 mod sqlite_tests;
+#[cfg(all(test, feature = "mysql"))]
+mod tests;
 
 // Re-export the public surface so `crate::schema::X` still works.
 pub use introspect::SchemaIntrospector;

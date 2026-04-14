@@ -419,7 +419,8 @@ mod write_tests {
         let result_1000 = crate::query::read::execute_read_query(
             pool,
             "SELECT * FROM perf_ser_test LIMIT 1000",
-            &crate::sql_parser::parse_sql("SELECT * FROM perf_ser_test LIMIT 1000", "MySQL").unwrap(),
+            &crate::sql_parser::parse_sql("SELECT * FROM perf_ser_test LIMIT 1000", "MySQL")
+                .unwrap(),
             &cfg,
         )
         .await
@@ -429,7 +430,8 @@ mod write_tests {
         let result_100 = crate::query::read::execute_read_query(
             pool,
             "SELECT * FROM perf_ser_test LIMIT 100",
-            &crate::sql_parser::parse_sql("SELECT * FROM perf_ser_test LIMIT 100", "MySQL").unwrap(),
+            &crate::sql_parser::parse_sql("SELECT * FROM perf_ser_test LIMIT 100", "MySQL")
+                .unwrap(),
             &cfg,
         )
         .await

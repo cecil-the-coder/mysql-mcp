@@ -78,8 +78,9 @@ async fn execute_read_query_inner(
         vec![]
     };
 
-    let added_limit =
-        max_rows > 0 && matches!(stmt_type, crate::sql_parser::StatementType::Select) && !parsed.has_limit;
+    let added_limit = max_rows > 0
+        && matches!(stmt_type, crate::sql_parser::StatementType::Select)
+        && !parsed.has_limit;
     let effective_sql;
     let effective_sql_ref = if added_limit {
         effective_sql = format!("{} LIMIT {}", sql, max_rows as u64 + 1);
@@ -162,9 +163,7 @@ async fn execute_read_query_inner(
 
     let (plan, explain_error): (Option<Value>, Option<String>) = if run_explain {
         match crate::query::explain::run_explain(pool, effective_sql_ref).await {
-            Ok(explain_result) => {
-                (serde_json::to_value(explain_result).ok(), None)
-            }
+            Ok(explain_result) => (serde_json::to_value(explain_result).ok(), None),
             Err(e) => {
                 let msg = e.to_string();
                 let mut preview_end = sql.len().min(200);
@@ -217,8 +216,9 @@ pub async fn execute_read_query_pool(
         vec![]
     };
 
-    let added_limit =
-        max_rows > 0 && matches!(stmt_type, crate::sql_parser::StatementType::Select) && !parsed.has_limit;
+    let added_limit = max_rows > 0
+        && matches!(stmt_type, crate::sql_parser::StatementType::Select)
+        && !parsed.has_limit;
     let effective_sql;
     let effective_sql_ref = if added_limit {
         effective_sql = format!("{} LIMIT {}", sql, max_rows as u64 + 1);
@@ -242,8 +242,7 @@ pub async fn execute_read_query_pool(
         "read_query",
     );
 
-    let rows: Vec<RowData> =
-        with_timeout(query_timeout_ms, "Query", db_result).await?;
+    let rows: Vec<RowData> = with_timeout(query_timeout_ms, "Query", db_result).await?;
     let db_elapsed = db_start.elapsed().as_millis() as u64;
 
     // Serialization phase with memory tracking
@@ -644,7 +643,9 @@ mod integration_tests {
             return;
         };
         let sql = "SELECT SLEEP(5)";
-        let parsed = parse_sql(sql, "MySQL").map_err(|e| anyhow::anyhow!(e)).unwrap();
+        let parsed = parse_sql(sql, "MySQL")
+            .map_err(|e| anyhow::anyhow!(e))
+            .unwrap();
         let config = crate::config::PoolConfig {
             query_timeout_ms: 1,
             retry_attempts: 0,
@@ -671,10 +672,7 @@ mod integration_tests {
         assert_eq!(result.row_count, 1);
         let row = &result.rows[0];
         assert!(row.contains_key("a"), "first 'a' column should be present");
-        assert!(
-            row.contains_key("a_2"),
-            "second a should be renamed to a_2"
-        );
+        assert!(row.contains_key("a_2"), "second a should be renamed to a_2");
         assert_eq!(row["a"], serde_json::json!(1), "first a should be 1");
         assert_eq!(row["a_2"], serde_json::json!(2), "second a should be 2");
     }
@@ -690,14 +688,8 @@ mod integration_tests {
         assert_eq!(result.row_count, 1);
         let row = &result.rows[0];
         assert!(row.contains_key("a"), "first 'a' column should be present");
-        assert!(
-            row.contains_key("a_2"),
-            "second a should be renamed to a_2"
-        );
-        assert!(
-            row.contains_key("a_3"),
-            "third a should be renamed to a_3"
-        );
+        assert!(row.contains_key("a_2"), "second a should be renamed to a_2");
+        assert!(row.contains_key("a_3"), "third a should be renamed to a_3");
         assert_eq!(row["a"], serde_json::json!(1), "first a should be 1");
         assert_eq!(row["a_2"], serde_json::json!(2), "second a should be 2");
         assert_eq!(row["a_3"], serde_json::json!(3), "third a should be 3");
@@ -748,10 +740,15 @@ mod pg_integration_tests {
         let Some(test_db) = setup_pg_test_db().await else {
             return;
         };
-        let result =
-            pg_read_query(&test_db.pool_handle, "SELECT NULL AS null_col ", 0, "none", 0)
-                .await
-                .unwrap();
+        let result = pg_read_query(
+            &test_db.pool_handle,
+            "SELECT NULL AS null_col ",
+            0,
+            "none",
+            0,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.rows[0]["null_col"], serde_json::Value::Null);
     }
 
@@ -760,10 +757,9 @@ mod pg_integration_tests {
         let Some(test_db) = setup_pg_test_db().await else {
             return;
         };
-        let result =
-            pg_read_query(&test_db.pool_handle, "SELECT 1 WHERE 1=0", 0, "none", 0)
-                .await
-                .unwrap();
+        let result = pg_read_query(&test_db.pool_handle, "SELECT 1 WHERE 1=0", 0, "none", 0)
+            .await
+            .unwrap();
         assert_eq!(result.row_count, 0);
     }
 
@@ -794,7 +790,12 @@ mod pg_integration_tests {
         .unwrap();
         assert_eq!(result.row_count, 1);
         let row = &result.rows[0];
-        eprintln!("DEBUG now={:?} today={:?} t={:?}", row.get("now"), row.get("today"), row.get("t"));
+        eprintln!(
+            "DEBUG now={:?} today={:?} t={:?}",
+            row.get("now"),
+            row.get("today"),
+            row.get("t")
+        );
         assert!(
             row["now"].is_string(),
             "NOW() must serialize as string, got {:?}",
@@ -817,17 +818,13 @@ mod pg_integration_tests {
         let Some(test_db) = setup_pg_test_db().await else {
             return;
         };
-        let result =
-            pg_read_query(&test_db.pool_handle, "SELECT 1 AS a, 2 AS a", 0, "none", 0)
-                .await
-                .unwrap();
+        let result = pg_read_query(&test_db.pool_handle, "SELECT 1 AS a, 2 AS a", 0, "none", 0)
+            .await
+            .unwrap();
         assert_eq!(result.row_count, 1);
         let row = &result.rows[0];
         assert!(row.contains_key("a"), "first 'a' column should be present");
-        assert!(
-            row.contains_key("a_2"),
-            "second a should be renamed to a_2"
-        );
+        assert!(row.contains_key("a_2"), "second a should be renamed to a_2");
         assert_eq!(row["a"], serde_json::json!(1), "first a should be 1");
         assert_eq!(row["a_2"], serde_json::json!(2), "second a should be 2");
     }
@@ -849,14 +846,8 @@ mod pg_integration_tests {
         assert_eq!(result.row_count, 1);
         let row = &result.rows[0];
         assert!(row.contains_key("a"), "first 'a' column should be present");
-        assert!(
-            row.contains_key("a_2"),
-            "second a should be renamed to a_2"
-        );
-        assert!(
-            row.contains_key("a_3"),
-            "third a should be renamed to a_3"
-        );
+        assert!(row.contains_key("a_2"), "second a should be renamed to a_2");
+        assert!(row.contains_key("a_3"), "third a should be renamed to a_3");
         assert_eq!(row["a"], serde_json::json!(1), "first a should be 1");
         assert_eq!(row["a_2"], serde_json::json!(2), "second a should be 2");
         assert_eq!(row["a_3"], serde_json::json!(3), "third a should be 3");
@@ -927,7 +918,6 @@ mod pg_integration_tests {
         let result = pg_read_query(
             &test_db.pool_handle,
             "SELECT ARRAY[1, 2, 3]::int4[] AS int_arr, ARRAY['a', 'b']::text[] AS txt_arr ",
-
             0,
             "none",
             0,
@@ -975,9 +965,10 @@ mod sqlite_integration_tests {
         // Use a typed column from the seeded table (SQLite type info works correctly
         // for columns with declared types; untyped literals like `SELECT 1` return
         // type_info name="" and the backend returns Null for them).
-        let result = sqlite_read_query(&db.pool, "SELECT id, name FROM users LIMIT 1", 0, "none", 0)
-            .await
-            .unwrap();
+        let result =
+            sqlite_read_query(&db.pool, "SELECT id, name FROM users LIMIT 1", 0, "none", 0)
+                .await
+                .unwrap();
         assert_eq!(result.row_count, 1);
         assert!(result.rows[0]["id"].is_number(), "id should be numeric ");
         assert!(result.rows[0]["name"].is_string(), "name should be text ");
@@ -1015,14 +1006,22 @@ mod sqlite_integration_tests {
     async fn test_sqlite_duplicate_column_names_deduped() {
         let db = setup_sqlite_test_db().await;
         // Use CAST to give columns declared types (untyped literals return Null in SQLite backend)
-        let result =
-            sqlite_read_query(&db.pool, "SELECT CAST(1 AS INTEGER) AS a, CAST(2 AS INTEGER) AS a ", 0, "none", 0)
-                .await
-                .unwrap();
+        let result = sqlite_read_query(
+            &db.pool,
+            "SELECT CAST(1 AS INTEGER) AS a, CAST(2 AS INTEGER) AS a ",
+            0,
+            "none",
+            0,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.row_count, 1);
         let row = &result.rows[0];
         assert!(row.contains_key("a"), "first a column should be present ");
-        assert!(row.contains_key("a_2"), "second a should be renamed to a_2 ");
+        assert!(
+            row.contains_key("a_2"),
+            "second a should be renamed to a_2 "
+        );
         assert_eq!(row["a"], serde_json::json!(1), "first a should be 1 ");
         assert_eq!(row["a_2"], serde_json::json!(2), "second a should be 2 ");
     }
@@ -1030,14 +1029,22 @@ mod sqlite_integration_tests {
     #[tokio::test]
     async fn test_sqlite_triple_duplicate_column_names_deduped() {
         let db = setup_sqlite_test_db().await;
-        let result =
-            sqlite_read_query(&db.pool, "SELECT CAST(1 AS INTEGER) AS a, CAST(2 AS INTEGER) AS a, CAST(3 AS INTEGER) AS a ", 0, "none", 0)
-                .await
-                .unwrap();
+        let result = sqlite_read_query(
+            &db.pool,
+            "SELECT CAST(1 AS INTEGER) AS a, CAST(2 AS INTEGER) AS a, CAST(3 AS INTEGER) AS a ",
+            0,
+            "none",
+            0,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.row_count, 1);
         let row = &result.rows[0];
         assert!(row.contains_key("a"), "first a column should be present ");
-        assert!(row.contains_key("a_2"), "second a should be renamed to a_2 ");
+        assert!(
+            row.contains_key("a_2"),
+            "second a should be renamed to a_2 "
+        );
         assert!(row.contains_key("a_3"), "third a should be renamed to a_3 ");
         assert_eq!(row["a"], serde_json::json!(1), "first a should be 1 ");
         assert_eq!(row["a_2"], serde_json::json!(2), "second a should be 2 ");
@@ -1056,10 +1063,9 @@ mod sqlite_integration_tests {
             .await
             .unwrap();
 
-        let result =
-            sqlite_read_query(&db.pool, "SELECT val FROM dynamic_test ", 0, "none", 0)
-                .await
-                .unwrap();
+        let result = sqlite_read_query(&db.pool, "SELECT val FROM dynamic_test ", 0, "none", 0)
+            .await
+            .unwrap();
         assert_eq!(result.row_count, 1);
         let val = &result.rows[0]["val"];
         // SQLite stored "hello" in an INTEGER column — should come back as string
@@ -1076,32 +1082,53 @@ mod sqlite_integration_tests {
     async fn test_sqlite_blob_columns() {
         let db = setup_sqlite_test_db().await;
         // Products table already has BLOB data seeded
-        let result =
-            sqlite_read_query(&db.pool, r"SELECT name, data FROM products WHERE name = 'Widget'", 0, "none", 0)
-                .await
-                .unwrap();
+        let result = sqlite_read_query(
+            &db.pool,
+            r"SELECT name, data FROM products WHERE name = 'Widget'",
+            0,
+            "none",
+            0,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.row_count, 1);
         let data = &result.rows[0]["data"];
         // The BLOB X'48454C4C4F' = "HELLO" in UTF-8, so it should come back as a string
-        assert!(data.is_string(), "valid UTF-8 BLOB should be returned as string ");
+        assert!(
+            data.is_string(),
+            "valid UTF-8 BLOB should be returned as string "
+        );
         assert_eq!(data.as_str().unwrap(), "HELLO");
 
         // Test non-UTF-8 BLOB: X'DEADBEEF' is not valid UTF-8
-        let result =
-            sqlite_read_query(&db.pool, "SELECT name, data FROM products WHERE name = 'Doohickey'", 0, "none", 0)
-                .await
-                .unwrap();
+        let result = sqlite_read_query(
+            &db.pool,
+            "SELECT name, data FROM products WHERE name = 'Doohickey'",
+            0,
+            "none",
+            0,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.row_count, 1);
         let data = &result.rows[0]["data"];
         // Should be hex-encoded since 0xDEADBEEF is not valid UTF-8
-        assert!(data.is_string(), "non-UTF-8 BLOB should be hex-encoded as string ");
+        assert!(
+            data.is_string(),
+            "non-UTF-8 BLOB should be hex-encoded as string "
+        );
         assert_eq!(data.as_str().unwrap(), "deadbeef");
 
         // NULL BLOB
-        let result =
-            sqlite_read_query(&db.pool, "SELECT name, data FROM products WHERE name = 'Gadget'", 0, "none", 0)
-                .await
-                .unwrap();
+        let result = sqlite_read_query(
+            &db.pool,
+            "SELECT name, data FROM products WHERE name = 'Gadget'",
+            0,
+            "none",
+            0,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.row_count, 1);
         assert_eq!(result.rows[0]["data"], serde_json::Value::Null);
     }
@@ -1121,9 +1148,21 @@ mod sqlite_integration_tests {
         .unwrap();
         assert_eq!(result.row_count, 1);
         let row = &result.rows[0];
-        assert!(row["dt"].is_string(), "datetime should be string, got {:?}", row["dt"]);
-        assert!(row["d"].is_string(), "date should be string, got {:?}", row["d"]);
-        assert!(row["t"].is_string(), "time should be string, got {:?}", row["t"]);
+        assert!(
+            row["dt"].is_string(),
+            "datetime should be string, got {:?}",
+            row["dt"]
+        );
+        assert!(
+            row["d"].is_string(),
+            "date should be string, got {:?}",
+            row["d"]
+        );
+        assert!(
+            row["t"].is_string(),
+            "time should be string, got {:?}",
+            row["t"]
+        );
     }
 
     #[tokio::test]
@@ -1136,10 +1175,15 @@ mod sqlite_integration_tests {
             .await
             .unwrap();
 
-        let result =
-            sqlite_read_query(&db.pool, "SELECT flag FROM bool_test ORDER BY flag DESC ", 0, "none", 0)
-                .await
-                .unwrap();
+        let result = sqlite_read_query(
+            &db.pool,
+            "SELECT flag FROM bool_test ORDER BY flag DESC ",
+            0,
+            "none",
+            0,
+        )
+        .await
+        .unwrap();
         assert_eq!(result.row_count, 2);
         // SQLite stores booleans as 0/1 — should come back as bool
         assert_eq!(result.rows[0]["flag"], serde_json::json!(true));

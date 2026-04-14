@@ -221,11 +221,7 @@ pub trait Backend: Send + Sync {
     ) -> Result<crate::query::explain::ExplainResult>;
 
     /// Run a raw SQL query and return rows for the list_tables handler.
-    async fn fetch_list_tables(
-        &self,
-        pool: &PoolHandle,
-        database: &str,
-    ) -> Result<Vec<String>>;
+    async fn fetch_list_tables(&self, pool: &PoolHandle, database: &str) -> Result<Vec<String>>;
 }
 
 // ---------------------------------------------------------------------------

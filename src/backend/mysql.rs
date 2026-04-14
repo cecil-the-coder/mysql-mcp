@@ -71,9 +71,7 @@ impl PoolOps for MySqlPoolWrapper {
     }
 
     async fn execute(&self, sql: &str) -> Result<ExecuteResult> {
-        let result: sqlx::mysql::MySqlQueryResult = sqlx::query(sql)
-            .execute(&self.pool)
-            .await?;
+        let result: sqlx::mysql::MySqlQueryResult = sqlx::query(sql).execute(&self.pool).await?;
         let last_insert_id = result.last_insert_id();
         Ok(ExecuteResult {
             rows_affected: result.rows_affected(),
@@ -83,9 +81,7 @@ impl PoolOps for MySqlPoolWrapper {
 
     async fn execute_in_transaction(&self, sql: &str) -> Result<ExecuteResult> {
         let mut tx = self.pool.begin().await?;
-        let result: sqlx::mysql::MySqlQueryResult = sqlx::query(sql)
-            .execute(&mut *tx)
-            .await?;
+        let result: sqlx::mysql::MySqlQueryResult = sqlx::query(sql).execute(&mut *tx).await?;
         tx.commit().await?;
         let last_insert_id = result.last_insert_id();
         Ok(ExecuteResult {
@@ -108,10 +104,7 @@ impl PoolOps for MySqlPoolWrapper {
 // ---------------------------------------------------------------------------
 
 /// Convert a MySQL row to `RowData`, performing type-aware serialization.
-fn mysql_row_to_row_data(
-    row: &sqlx::mysql::MySqlRow,
-    warnings: &mut Vec<String>,
-) -> RowData {
+fn mysql_row_to_row_data(row: &sqlx::mysql::MySqlRow, warnings: &mut Vec<String>) -> RowData {
     let mut columns = Vec::with_capacity(row.columns().len());
     for (i, col) in row.columns().iter().enumerate() {
         let value = mysql_column_to_json(row, i, col, warnings);
@@ -336,7 +329,11 @@ pub(crate) fn escape_mysql_identifier(name: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Map the three SSL flags to a `MySqlSslMode`.
-pub(crate) fn determine_ssl_mode(ssl: bool, accept_invalid: bool, has_ca: bool) -> sqlx::mysql::MySqlSslMode {
+pub(crate) fn determine_ssl_mode(
+    ssl: bool,
+    accept_invalid: bool,
+    has_ca: bool,
+) -> sqlx::mysql::MySqlSslMode {
     match (ssl, accept_invalid, has_ca) {
         (false, _, _) => sqlx::mysql::MySqlSslMode::Disabled,
         (true, true, _) => sqlx::mysql::MySqlSslMode::Required,
@@ -421,7 +418,12 @@ pub(crate) fn build_connect_options(config: &Config) -> Result<sqlx::mysql::MySq
 pub(crate) async fn build_pool(config: &Config) -> Result<sqlx::MySqlPool> {
     let connect_options =
         build_connect_options(config)?.statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
-    create_pool(connect_options, config.pool.size, config.pool.connect_timeout_ms).await
+    create_pool(
+        connect_options,
+        config.pool.size,
+        config.pool.connect_timeout_ms,
+    )
+    .await
 }
 
 /// Build a pool through an SSH tunnel.
@@ -451,7 +453,9 @@ pub(crate) async fn build_pool_tunneled(
 }
 
 /// Build a small session pool from raw connection fields.
-pub(crate) async fn build_session_pool_internal(params: &SessionConnectParams) -> Result<sqlx::MySqlPool> {
+pub(crate) async fn build_session_pool_internal(
+    params: &SessionConnectParams,
+) -> Result<sqlx::MySqlPool> {
     let mut opts = sqlx::mysql::MySqlConnectOptions::new()
         .host(&params.host)
         .port(params.port)
@@ -1021,8 +1025,7 @@ impl Backend for MySqlBackend {
         pool: &PoolHandle,
         security: &SecurityConfig,
     ) -> Result<serde_json::Value> {
-        let sql =
-            "SELECT VERSION() AS mysql_version, \
+        let sql = "SELECT VERSION() AS mysql_version, \
                     CURRENT_USER() AS `current_user`, \
                     DATABASE() AS current_database, \
                     @@sql_mode AS sql_mode, \
@@ -1156,11 +1159,7 @@ impl Backend for MySqlBackend {
         parse_mysql_explain(&v)
     }
 
-    async fn fetch_list_tables(
-        &self,
-        pool: &PoolHandle,
-        database: &str,
-    ) -> Result<Vec<String>> {
+    async fn fetch_list_tables(&self, pool: &PoolHandle, database: &str) -> Result<Vec<String>> {
         let sql = format!(
             "SELECT CAST(TABLE_NAME AS CHAR) AS TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '{}' ORDER BY TABLE_NAME",
             database.replace('\'', "''")
@@ -1205,26 +1204,50 @@ mod tests {
 
     #[test]
     fn test_determine_ssl_mode_disabled() {
-        assert!(ssl_mode_is(determine_ssl_mode(false, false, false), "Disabled"));
-        assert!(ssl_mode_is(determine_ssl_mode(false, true, false), "Disabled"));
-        assert!(ssl_mode_is(determine_ssl_mode(false, false, true), "Disabled"));
-        assert!(ssl_mode_is(determine_ssl_mode(false, true, true), "Disabled"));
+        assert!(ssl_mode_is(
+            determine_ssl_mode(false, false, false),
+            "Disabled"
+        ));
+        assert!(ssl_mode_is(
+            determine_ssl_mode(false, true, false),
+            "Disabled"
+        ));
+        assert!(ssl_mode_is(
+            determine_ssl_mode(false, false, true),
+            "Disabled"
+        ));
+        assert!(ssl_mode_is(
+            determine_ssl_mode(false, true, true),
+            "Disabled"
+        ));
     }
 
     #[test]
     fn test_determine_ssl_mode_required() {
-        assert!(ssl_mode_is(determine_ssl_mode(true, true, false), "Required"));
-        assert!(ssl_mode_is(determine_ssl_mode(true, true, true), "Required"));
+        assert!(ssl_mode_is(
+            determine_ssl_mode(true, true, false),
+            "Required"
+        ));
+        assert!(ssl_mode_is(
+            determine_ssl_mode(true, true, true),
+            "Required"
+        ));
     }
 
     #[test]
     fn test_determine_ssl_mode_verify_ca() {
-        assert!(ssl_mode_is(determine_ssl_mode(true, false, true), "VerifyCa"));
+        assert!(ssl_mode_is(
+            determine_ssl_mode(true, false, true),
+            "VerifyCa"
+        ));
     }
 
     #[test]
     fn test_determine_ssl_mode_verify_identity() {
-        assert!(ssl_mode_is(determine_ssl_mode(true, false, false), "VerifyIdentity"));
+        assert!(ssl_mode_is(
+            determine_ssl_mode(true, false, false),
+            "VerifyIdentity"
+        ));
     }
 
     #[test]

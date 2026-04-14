@@ -268,9 +268,7 @@ impl Config {
         // -- SSL checks (skip for backends that don't support SSL) --
         if !is_sqlite || sec.ssl || sec.ssl_ca.is_some() || sec.ssl_accept_invalid_certs {
             if sec.ssl_ca.is_some() && !sec.ssl {
-                eprintln!(
-                    "Warning: DB_SSL_CA is set but DB_SSL is false; CA cert will be ignored"
-                );
+                eprintln!("Warning: DB_SSL_CA is set but DB_SSL is false; CA cert will be ignored");
             }
             if sec.ssl_accept_invalid_certs {
                 eprintln!("Warning: ssl_accept_invalid_certs is enabled — TLS validation disabled");
@@ -397,9 +395,7 @@ pub fn load_config() -> anyhow::Result<Config> {
             if new_name.exists() {
                 new_name
             } else if old_name.exists() {
-                eprintln!(
-                    "Warning: 'mysql-mcp.toml' is deprecated; rename to 'sql-mcp.toml'"
-                );
+                eprintln!("Warning: 'mysql-mcp.toml' is deprecated; rename to 'sql-mcp.toml'");
                 old_name
             } else {
                 // Neither exists — use the new default so create-if-needed uses the right name

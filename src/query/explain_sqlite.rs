@@ -144,8 +144,8 @@ fn estimate_rows(stats: &PlanStats) -> u64 {
     match stats.table_scan_count {
         0 => 1,
         1 => 100,
-        2 => 2_000,   // > SLOW_ROW_THRESHOLD (1_000) -> Slow
-        3 => 20_000,  // > VERY_SLOW_ROW_THRESHOLD (10_000) -> VerySlow
+        2 => 2_000,  // > SLOW_ROW_THRESHOLD (1_000) -> Slow
+        3 => 20_000, // > VERY_SLOW_ROW_THRESHOLD (10_000) -> VerySlow
         _ => 100_000,
     }
 }
@@ -194,9 +194,7 @@ pub fn parse_sqlite_explain(lines: &[String]) -> Result<ExplainResult> {
 }
 
 /// Parse SQLite EXPLAIN QUERY PLAN from RowData (extracts "detail" column).
-pub fn parse_sqlite_explain_from_rows(
-    rows: &[crate::backend::RowData],
-) -> Result<ExplainResult> {
+pub fn parse_sqlite_explain_from_rows(rows: &[crate::backend::RowData]) -> Result<ExplainResult> {
     let lines: Vec<String> = rows
         .iter()
         .filter_map(|row| {
@@ -253,14 +251,10 @@ mod tests {
 
     #[test]
     fn test_automatic_covering_index() {
-        let lines =
-            vec!["SEARCH TABLE t USING AUTOMATIC COVERING INDEX (name=?)".to_string()];
+        let lines = vec!["SEARCH TABLE t USING AUTOMATIC COVERING INDEX (name=?)".to_string()];
         let result = parse_sqlite_explain(&lines).unwrap();
         assert!(!result.full_table_scan);
-        assert_eq!(
-            result.index_used.as_deref(),
-            Some("__automatic_index__")
-        );
+        assert_eq!(result.index_used.as_deref(), Some("__automatic_index__"));
     }
 
     #[test]
@@ -301,10 +295,7 @@ mod tests {
         let result = parse_sqlite_explain(&lines).unwrap();
         assert!(!result.full_table_scan);
         // First index found wins
-        assert_eq!(
-            result.index_used.as_deref(),
-            Some("IDX_ORDERS_USER_ID")
-        );
+        assert_eq!(result.index_used.as_deref(), Some("IDX_ORDERS_USER_ID"));
     }
 
     #[test]
@@ -317,10 +308,7 @@ mod tests {
     #[test]
     fn test_tier_slow() {
         // Two table scans -> estimate 1000 rows -> Slow
-        let lines = vec![
-            "SCAN TABLE a".to_string(),
-            "SCAN TABLE b".to_string(),
-        ];
+        let lines = vec!["SCAN TABLE a".to_string(), "SCAN TABLE b".to_string()];
         let result = parse_sqlite_explain(&lines).unwrap();
         assert_eq!(result.tier, ExplainTier::Slow);
     }

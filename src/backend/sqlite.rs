@@ -164,9 +164,7 @@ fn sqlite_column_to_json(
             }
             // Fallback: read as integer and convert
             if let Ok(v) = row.try_get::<Option<i64>, _>(idx) {
-                return v
-                    .map(|n| Value::Bool(n != 0))
-                    .unwrap_or(Value::Null);
+                return v.map(|n| Value::Bool(n != 0)).unwrap_or(Value::Null);
             }
         }
 
@@ -390,10 +388,7 @@ pub(crate) async fn build_pool(config: &Config) -> Result<sqlx::SqlitePool> {
 
     let db_path = resolve_sqlite_path(conn)?;
 
-    let mut opts = sqlx::sqlite::SqliteConnectOptions::from_str(&format!(
-        "sqlite:{}",
-        db_path
-    ))?;
+    let mut opts = sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite:{}", db_path))?;
 
     // Enable WAL mode for better concurrent read performance
     opts = opts.pragma("journal_mode", "WAL");
@@ -573,8 +568,8 @@ impl Backend for SqliteBackend {
                 schema: String::new(), // SQLite has no schema concept
                 row_count,
                 data_size_bytes,
-                create_time: None,  // SQLite doesn't track creation time
-                update_time: None,  // SQLite doesn't track modification time
+                create_time: None, // SQLite doesn't track creation time
+                update_time: None, // SQLite doesn't track modification time
             });
         }
 
@@ -649,7 +644,10 @@ impl Backend for SqliteBackend {
             let is_unique = unique_str == "1";
 
             // Get columns in this index
-            let info_sql = format!("PRAGMA index_info(\"{}\")", escape_sqlite_identifier(&idx_name));
+            let info_sql = format!(
+                "PRAGMA index_info(\"{}\")",
+                escape_sqlite_identifier(&idx_name)
+            );
             let info_rows = pool.fetch_all(&info_sql).await?;
 
             let cols: Vec<String> = info_rows
@@ -678,10 +676,7 @@ impl Backend for SqliteBackend {
     ) -> Result<Vec<String>> {
         let indexes = self.fetch_composite_indexes(pool, table_name, None).await?;
 
-        let mut cols: Vec<String> = indexes
-            .iter()
-            .flat_map(|idx| idx.columns.clone())
-            .collect();
+        let mut cols: Vec<String> = indexes.iter().flat_map(|idx| idx.columns.clone()).collect();
 
         // Deduplicate while preserving order
         let mut seen = std::collections::HashSet::new();
@@ -811,8 +806,9 @@ impl Backend for SqliteBackend {
         security: &SecurityConfig,
     ) -> Result<serde_json::Value> {
         // SQLite version
-        let version_rows =
-            pool.fetch_all("SELECT sqlite_version() AS sqlite_version").await?;
+        let version_rows = pool
+            .fetch_all("SELECT sqlite_version() AS sqlite_version")
+            .await?;
         let sqlite_version = version_rows
             .first()
             .map(|r| get_str(r, "sqlite_version"))
@@ -820,9 +816,7 @@ impl Backend for SqliteBackend {
 
         // Compile options (key ones)
         let compile_rows = pool
-            .fetch_all(
-                "SELECT compile_option AS opt FROM pragma_compile_options() LIMIT 20",
-            )
+            .fetch_all("SELECT compile_option AS opt FROM pragma_compile_options() LIMIT 20")
             .await?;
         let compile_options: Vec<String> = compile_rows
             .iter()
@@ -840,8 +834,7 @@ impl Backend for SqliteBackend {
             .unwrap_or_else(|| ":memory:".to_string());
 
         // Journal mode
-        let journal_rows =
-            pool.fetch_all("PRAGMA journal_mode").await?;
+        let journal_rows = pool.fetch_all("PRAGMA journal_mode").await?;
         let journal_mode = journal_rows
             .first()
             .map(|r| get_str(r, "journal_mode"))
@@ -890,11 +883,7 @@ impl Backend for SqliteBackend {
         parse_sqlite_explain_from_rows(&rows)
     }
 
-    async fn fetch_list_tables(
-        &self,
-        pool: &PoolHandle,
-        _database: &str,
-    ) -> Result<Vec<String>> {
+    async fn fetch_list_tables(&self, pool: &PoolHandle, _database: &str) -> Result<Vec<String>> {
         let sql = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name";
         let rows = pool.fetch_all(sql).await?;
         let tables: Vec<String> = rows
@@ -918,7 +907,10 @@ async fn get_table_row_count(pool: &PoolHandle, table_name: &str) -> Result<i64>
     let escaped = escape_sqlite_identifier(table_name);
     let sql = format!("SELECT COUNT(*) AS cnt FROM \"{}\"", escaped);
     let rows = pool.fetch_all(&sql).await?;
-    Ok(rows.first().and_then(|r| get_opt_i64(r, "cnt")).unwrap_or(0))
+    Ok(rows
+        .first()
+        .and_then(|r| get_opt_i64(r, "cnt"))
+        .unwrap_or(0))
 }
 
 /// Get approximate data size for a SQLite table in bytes.

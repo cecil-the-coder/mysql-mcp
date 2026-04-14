@@ -234,8 +234,7 @@ impl ServerHandler for McpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Use query to execute SQL queries against the connected database."
-                    .to_string(),
+                "Use query to execute SQL queries against the connected database.".to_string(),
             ),
         }
     }
@@ -384,19 +383,28 @@ mod tests {
 
     #[test]
     fn ipv4_multicast_is_blocked() {
-        assert!(is_private_host("224.0.0.1"), "224.0.0.1 (IPv4 multicast) must be blocked");
+        assert!(
+            is_private_host("224.0.0.1"),
+            "224.0.0.1 (IPv4 multicast) must be blocked"
+        );
     }
 
     #[test]
     fn ipv6_multicast_is_blocked() {
-        assert!(is_private_host("ff02::1"), "ff02::1 (IPv6 multicast) must be blocked");
+        assert!(
+            is_private_host("ff02::1"),
+            "ff02::1 (IPv6 multicast) must be blocked"
+        );
     }
 
     #[test]
     fn ipv4_private_rfc1918_is_allowed() {
         assert!(!is_private_host("10.0.0.1"), "10.0.0.1 must be allowed");
         assert!(!is_private_host("172.16.0.1"), "172.16.0.1 must be allowed");
-        assert!(!is_private_host("192.168.1.1"), "192.168.1.1 must be allowed");
+        assert!(
+            !is_private_host("192.168.1.1"),
+            "192.168.1.1 must be allowed"
+        );
     }
 
     #[test]

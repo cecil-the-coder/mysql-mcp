@@ -603,8 +603,8 @@ fn test_delete_single_table_no_schema() {
 #[test]
 fn test_delete_multi_table_collects_all_schemas() {
     // Multi-table DELETE with two different schemas in FROM clause.
-    let p = parse("DELETE db1.t1, db2.t2 FROM db1.t1 JOIN db2.t2 ON db1.t1.id = db2.t2.id")
-        .unwrap();
+    let p =
+        parse("DELETE db1.t1, db2.t2 FROM db1.t1 JOIN db2.t2 ON db1.t1.id = db2.t2.id").unwrap();
     assert_eq!(p.statement_type, StatementType::Delete);
     // target_schema is the first table's schema (backward compat)
     assert_eq!(p.target_schema, Some("db1".to_string()));
@@ -617,8 +617,8 @@ fn test_delete_multi_table_collects_all_schemas() {
 #[test]
 fn test_delete_multi_table_deduplicates_schemas() {
     // Both tables are in the same schema — should only appear once.
-    let p = parse("DELETE db1.t1, db1.t2 FROM db1.t1 JOIN db1.t2 ON db1.t1.id = db1.t2.id")
-        .unwrap();
+    let p =
+        parse("DELETE db1.t1, db1.t2 FROM db1.t1 JOIN db1.t2 ON db1.t1.id = db1.t2.id").unwrap();
     assert_eq!(p.statement_type, StatementType::Delete);
     assert_eq!(p.all_target_schemas, vec!["db1".to_string()]);
 }
@@ -626,8 +626,8 @@ fn test_delete_multi_table_deduplicates_schemas() {
 #[test]
 fn test_delete_multi_table_case_insensitive_dedup() {
     // Schema names differing only in case should be deduplicated.
-    let p = parse("DELETE DB1.t1, db1.t2 FROM DB1.t1 JOIN db1.t2 ON DB1.t1.id = db1.t2.id")
-        .unwrap();
+    let p =
+        parse("DELETE DB1.t1, db1.t2 FROM DB1.t1 JOIN db1.t2 ON DB1.t1.id = db1.t2.id").unwrap();
     assert_eq!(p.statement_type, StatementType::Delete);
     // Should have only one entry (the first occurrence's casing is preserved)
     assert_eq!(p.all_target_schemas.len(), 1);

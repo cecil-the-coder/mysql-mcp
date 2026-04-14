@@ -296,13 +296,7 @@ impl SessionStore {
                 Ok(result) => {
                     // Run EXPLAIN via the backend for performance hints
                     let (plan, explain_error) = self
-                        .maybe_run_explain(
-                            &query_pool,
-                            &sql,
-                            &parsed,
-                            &self.config.pool,
-                            &result,
-                        )
+                        .maybe_run_explain(&query_pool, &sql, &parsed, &self.config.pool, &result)
                         .await;
 
                     // Generate schema-aware index suggestions
@@ -414,13 +408,14 @@ impl SessionStore {
         pool_config: &crate::config::PoolConfig,
         result: &crate::query::read::QueryResult,
     ) -> (Option<serde_json::Value>, Option<String>) {
-        let run_explain =
-            matches!(parsed.statement_type, crate::sql_parser::StatementType::Select)
-                && match pool_config.performance_hints.as_str() {
-                    "always" => true,
-                    "auto" => result.execution_time_ms >= pool_config.slow_query_threshold_ms,
-                    _ => false,
-                };
+        let run_explain = matches!(
+            parsed.statement_type,
+            crate::sql_parser::StatementType::Select
+        ) && match pool_config.performance_hints.as_str() {
+            "always" => true,
+            "auto" => result.execution_time_ms >= pool_config.slow_query_threshold_ms,
+            _ => false,
+        };
 
         if !run_explain {
             return (None, None);

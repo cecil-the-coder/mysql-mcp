@@ -26,24 +26,26 @@ pub async fn build_session_pool(
     ssl_ca: Option<&str>,
     connect_timeout_ms: u64,
 ) -> Result<sqlx::MySqlPool> {
-    crate::backend::mysql::build_session_pool_internal(
-        &crate::backend::SessionConnectParams {
-            host: host.to_string(),
-            port,
-            user: user.to_string(),
-            password: password.to_string(),
-            database: database.map(String::from),
-            ssl,
-            ssl_accept_invalid_certs,
-            ssl_ca: ssl_ca.map(String::from),
-            connect_timeout_ms,
-        },
-    )
+    crate::backend::mysql::build_session_pool_internal(&crate::backend::SessionConnectParams {
+        host: host.to_string(),
+        port,
+        user: user.to_string(),
+        password: password.to_string(),
+        database: database.map(String::from),
+        ssl,
+        ssl_accept_invalid_certs,
+        ssl_ca: ssl_ca.map(String::from),
+        connect_timeout_ms,
+    })
     .await
 }
 
 /// Map the three SSL flags to a `MySqlSslMode`.
-pub fn determine_ssl_mode(ssl: bool, accept_invalid: bool, has_ca: bool) -> sqlx::mysql::MySqlSslMode {
+pub fn determine_ssl_mode(
+    ssl: bool,
+    accept_invalid: bool,
+    has_ca: bool,
+) -> sqlx::mysql::MySqlSslMode {
     crate::backend::mysql::determine_ssl_mode(ssl, accept_invalid, has_ca)
 }
 
@@ -60,9 +62,12 @@ pub async fn build_pool_and_tunnel(
     config: &Config,
     ssh: &crate::config::SshConfig,
 ) -> Result<(sqlx::MySqlPool, crate::tunnel::TunnelHandle)> {
-    let tunnel =
-        crate::tunnel::spawn_ssh_tunnel(ssh, &config.connection.host, config.connection.port.unwrap_or(3306))
-            .await?;
+    let tunnel = crate::tunnel::spawn_ssh_tunnel(
+        ssh,
+        &config.connection.host,
+        config.connection.port.unwrap_or(3306),
+    )
+    .await?;
     let pool = build_pool_tunneled(config, &tunnel).await?;
     Ok((pool, tunnel))
 }

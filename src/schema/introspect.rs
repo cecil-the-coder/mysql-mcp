@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-use crate::backend::{Backend, PoolHandle};
 use super::{is_low_cardinality_type, ColumnInfo, IndexDef, TableInfo};
+use crate::backend::{Backend, PoolHandle};
 
 // ---------------------------------------------------------------------------
 // Cache internals
@@ -84,7 +84,11 @@ fn key_matches_table(key: &str, table: &str) -> bool {
 
 impl SchemaIntrospector {
     /// Create a new SchemaIntrospector with a PoolHandle and backend reference.
-    pub fn new_with_backend(pool: PoolHandle, backend: Arc<dyn Backend>, cache_ttl_secs: u64) -> Self {
+    pub fn new_with_backend(
+        pool: PoolHandle,
+        backend: Arc<dyn Backend>,
+        cache_ttl_secs: u64,
+    ) -> Self {
         Self {
             inner: Arc::new(SchemaCache {
                 pool,
@@ -101,9 +105,9 @@ impl SchemaIntrospector {
     /// Create a new SchemaIntrospector from an Arc<MySqlPool> (backward compatible).
     #[cfg(feature = "mysql")]
     pub fn new(pool: Arc<sqlx::MySqlPool>, cache_ttl_secs: u64) -> Self {
-        let handle = PoolHandle::new(Box::new(
-            crate::backend::mysql::MySqlPoolWrapper::new((*pool).clone()),
-        ));
+        let handle = PoolHandle::new(Box::new(crate::backend::mysql::MySqlPoolWrapper::new(
+            (*pool).clone(),
+        )));
         let backend: Arc<dyn Backend> = Arc::new(crate::backend::mysql::MySqlBackend::new());
         Self::new_with_backend(handle, backend, cache_ttl_secs)
     }

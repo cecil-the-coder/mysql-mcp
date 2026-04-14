@@ -70,9 +70,7 @@ impl PoolOps for PgPoolWrapper {
     }
 
     async fn execute(&self, sql: &str) -> Result<ExecuteResult> {
-        let result: sqlx::postgres::PgQueryResult = sqlx::query(sql)
-            .execute(&self.pool)
-            .await?;
+        let result: sqlx::postgres::PgQueryResult = sqlx::query(sql).execute(&self.pool).await?;
         Ok(ExecuteResult {
             rows_affected: result.rows_affected(),
             // PostgreSQL does not have last_insert_id; use RETURNING instead.
@@ -82,9 +80,7 @@ impl PoolOps for PgPoolWrapper {
 
     async fn execute_in_transaction(&self, sql: &str) -> Result<ExecuteResult> {
         let mut tx = self.pool.begin().await?;
-        let result: sqlx::postgres::PgQueryResult = sqlx::query(sql)
-            .execute(&mut *tx)
-            .await?;
+        let result: sqlx::postgres::PgQueryResult = sqlx::query(sql).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(ExecuteResult {
             rows_affected: result.rows_affected(),
@@ -265,14 +261,18 @@ fn pg_column_to_json(
         // Small integers
         "int2" | "smallint" | "int2vector" => {
             if let Ok(v) = row.try_get::<Option<i16>, _>(idx) {
-                return v.map(|n| Value::Number((n as i64).into())).unwrap_or(Value::Null);
+                return v
+                    .map(|n| Value::Number((n as i64).into()))
+                    .unwrap_or(Value::Null);
             }
         }
 
         // Regular integers
         "int4" | "integer" | "serial" => {
             if let Ok(v) = row.try_get::<Option<i32>, _>(idx) {
-                return v.map(|n| Value::Number((n as i64).into())).unwrap_or(Value::Null);
+                return v
+                    .map(|n| Value::Number((n as i64).into()))
+                    .unwrap_or(Value::Null);
             }
         }
 
@@ -331,15 +331,15 @@ fn pg_column_to_json(
             }
             // Try f64 (sqlx can decode binary numeric to f64 in some configs)
             if let Ok(v) = row.try_get::<Option<f64>, _>(idx) {
-                return v.map(|n| {
-                    Value::String(
-                        if n.fract() == 0.0 && n.abs() < 1e15 {
+                return v
+                    .map(|n| {
+                        Value::String(if n.fract() == 0.0 && n.abs() < 1e15 {
                             format!("{:.1}", n)
                         } else {
                             n.to_string()
-                        },
-                    )
-                }).unwrap_or(Value::Null);
+                        })
+                    })
+                    .unwrap_or(Value::Null);
             }
             // Binary format fallback: use try_get_raw to access raw bytes.
             if let Ok(raw) = row.try_get_raw(idx) {
@@ -495,15 +495,18 @@ fn pg_column_to_json(
                 if let Ok(bytes) = raw.as_bytes() {
                     if bytes.len() >= 8 {
                         let micros = i64::from_be_bytes([
-                            bytes[0], bytes[1], bytes[2], bytes[3],
-                            bytes[4], bytes[5], bytes[6], bytes[7],
+                            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                            bytes[7],
                         ]);
                         let total_secs = micros / 1_000_000;
                         let secs = total_secs % 86400;
                         let hours = (secs / 3600) as u32;
                         let minutes = ((secs % 3600) / 60) as u32;
                         let seconds = (secs % 60) as u32;
-                        return Value::String(format!("{:02}:{:02}:{:02}", hours, minutes, seconds));
+                        return Value::String(format!(
+                            "{:02}:{:02}:{:02}",
+                            hours, minutes, seconds
+                        ));
                     }
                 }
             }
@@ -572,7 +575,11 @@ fn pg_column_to_json(
                     .map(|arr| {
                         Value::Array(
                             arr.into_iter()
-                                .map(|n| serde_json::Number::from_f64(n as f64).map(Value::Number).unwrap_or(Value::String(n.to_string())))
+                                .map(|n| {
+                                    serde_json::Number::from_f64(n as f64)
+                                        .map(Value::Number)
+                                        .unwrap_or(Value::String(n.to_string()))
+                                })
                                 .collect(),
                         )
                     })
@@ -585,16 +592,31 @@ fn pg_column_to_json(
                     .map(|arr| {
                         Value::Array(
                             arr.into_iter()
-                                .map(|n| serde_json::Number::from_f64(n).map(Value::Number).unwrap_or(Value::Null))
+                                .map(|n| {
+                                    serde_json::Number::from_f64(n)
+                                        .map(Value::Number)
+                                        .unwrap_or(Value::Null)
+                                })
                                 .collect(),
                         )
                     })
                     .unwrap_or(Value::Null);
             }
         }
-        "_text" | "_varchar" | "_bpchar" | "_char" | "_name" | "_citext"
-        | "text[]" | "varchar[]" | "character varying[]" | "bpchar[]"
-        | "char[]" | "character[]" | "name[]" | "citext[]" => {
+        "_text"
+        | "_varchar"
+        | "_bpchar"
+        | "_char"
+        | "_name"
+        | "_citext"
+        | "text[]"
+        | "varchar[]"
+        | "character varying[]"
+        | "bpchar[]"
+        | "char[]"
+        | "character[]"
+        | "name[]"
+        | "citext[]" => {
             if let Ok(v) = row.try_get::<Option<Vec<String>>, _>(idx) {
                 return v
                     .map(|arr| Value::Array(arr.into_iter().map(Value::String).collect()))
@@ -829,7 +851,12 @@ pub(crate) fn build_connect_options(config: &Config) -> Result<sqlx::postgres::P
 pub(crate) async fn build_pool(config: &Config) -> Result<sqlx::PgPool> {
     let connect_options =
         build_connect_options(config)?.statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
-    create_pool(connect_options, config.pool.size, config.pool.connect_timeout_ms).await
+    create_pool(
+        connect_options,
+        config.pool.size,
+        config.pool.connect_timeout_ms,
+    )
+    .await
 }
 
 /// Build a pool through an SSH tunnel.
@@ -1289,9 +1316,7 @@ impl Backend for PgBackend {
                 std::collections::BTreeMap::new();
             for row in &rows {
                 let name: String = get_str(row, "index_name");
-                let non_unique: i64 = get_str(row, "non_unique")
-                    .parse()
-                    .unwrap_or(0);
+                let non_unique: i64 = get_str(row, "non_unique").parse().unwrap_or(0);
                 let idx_type: String = get_str(row, "index_type");
                 let col: String = get_str(row, "column_name");
                 let nullable: String = get_str(row, "nullable");
@@ -1515,11 +1540,7 @@ impl Backend for PgBackend {
         parse_postgres_explain(&v)
     }
 
-    async fn fetch_list_tables(
-        &self,
-        pool: &PoolHandle,
-        database: &str,
-    ) -> Result<Vec<String>> {
+    async fn fetch_list_tables(&self, pool: &PoolHandle, database: &str) -> Result<Vec<String>> {
         let sql = format!(
             "SELECT table_name AS table_name FROM information_schema.tables \
              WHERE table_schema = '{}' AND table_type = 'BASE TABLE' \
@@ -1603,6 +1624,9 @@ mod tests {
         let backend = PgBackend::new();
         assert_eq!(backend.quote_identifier("id"), "\"id\"");
         assert_eq!(backend.quote_identifier("my table"), "\"my table\"");
-        assert_eq!(backend.quote_identifier("col\"with\"quotes"), "\"col\"\"with\"\"quotes\"");
+        assert_eq!(
+            backend.quote_identifier("col\"with\"quotes"),
+            "\"col\"\"with\"\"quotes\""
+        );
     }
 }

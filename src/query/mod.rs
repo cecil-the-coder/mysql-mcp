@@ -13,11 +13,11 @@
 pub mod explain;
 #[cfg(feature = "mysql")]
 pub mod explain_mysql;
+pub mod explain_parse;
 #[cfg(feature = "postgres")]
 pub mod explain_postgres;
 #[cfg(feature = "sqlite")]
 pub mod explain_sqlite;
-pub mod explain_parse;
 pub mod read;
 pub mod retry;
 pub mod write;

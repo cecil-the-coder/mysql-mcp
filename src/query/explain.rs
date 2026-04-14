@@ -399,15 +399,17 @@ mod sqlite_explain_tests {
         );
         let er = result.unwrap();
         // PK lookup should use index, not full scan
-        assert!(!er.full_table_scan, "PK lookup should not be a full table scan");
+        assert!(
+            !er.full_table_scan,
+            "PK lookup should not be a full table scan"
+        );
         assert!(er.index_used.is_some(), "PK lookup should use an index");
     }
 
     #[tokio::test]
     async fn test_sqlite_explain_full_table_scan() {
         let db = setup_sqlite_test_db().await;
-        let result = run_sqlite_explain(&db.pool, "SELECT * FROM users WHERE name = 'Alice'")
-            .await;
+        let result = run_sqlite_explain(&db.pool, "SELECT * FROM users WHERE name = 'Alice'").await;
         assert!(result.is_ok(), "EXPLAIN should succeed: {:?}", result.err());
         let er = result.unwrap();
         assert!(
@@ -424,9 +426,11 @@ mod sqlite_explain_tests {
     async fn test_sqlite_explain_index_scan() {
         let db = setup_sqlite_test_db().await;
         // users table already has UNIQUE index on email
-        let result =
-            run_sqlite_explain(&db.pool, "SELECT * FROM users WHERE email = 'alice@example.com'")
-                .await;
+        let result = run_sqlite_explain(
+            &db.pool,
+            "SELECT * FROM users WHERE email = 'alice@example.com'",
+        )
+        .await;
         assert!(result.is_ok(), "EXPLAIN should succeed: {:?}", result.err());
         let er = result.unwrap();
         assert!(
@@ -443,8 +447,7 @@ mod sqlite_explain_tests {
     async fn test_sqlite_explain_with_sort() {
         let db = setup_sqlite_test_db().await;
         // ORDER BY on unindexed column should use temp B-tree
-        let result =
-            run_sqlite_explain(&db.pool, "SELECT * FROM users ORDER BY name").await;
+        let result = run_sqlite_explain(&db.pool, "SELECT * FROM users ORDER BY name").await;
         assert!(result.is_ok(), "EXPLAIN should succeed: {:?}", result.err());
         let er = result.unwrap();
         // ORDER BY without index triggers temp B-tree (sort flag)
@@ -466,7 +469,11 @@ mod sqlite_explain_tests {
             "SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id",
         )
         .await;
-        assert!(result.is_ok(), "EXPLAIN JOIN should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "EXPLAIN JOIN should succeed: {:?}",
+            result.err()
+        );
         let er = result.unwrap();
         assert!(
             er.rows_examined_estimate > 0,

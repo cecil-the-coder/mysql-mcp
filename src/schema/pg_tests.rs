@@ -14,7 +14,11 @@ async fn test_pg_list_tables_returns_results() {
     );
     let schema = Some(test_db.schema.as_str());
     let tables = introspector.list_tables(schema).await;
-    assert!(tables.is_ok(), "list_tables should succeed: {:?}", tables.err());
+    assert!(
+        tables.is_ok(),
+        "list_tables should succeed: {:?}",
+        tables.err()
+    );
 }
 
 // pg-schema-t2: get columns for a known table
@@ -39,7 +43,11 @@ async fn test_pg_get_columns_for_table() {
     let columns = introspector
         .get_columns("pg_test_schema_cols", Some(&test_db.schema))
         .await;
-    assert!(columns.is_ok(), "get_columns should succeed: {:?}", columns.err());
+    assert!(
+        columns.is_ok(),
+        "get_columns should succeed: {:?}",
+        columns.err()
+    );
     let cols = columns.unwrap();
     assert!(
         cols.iter().any(|c| c.name == "id"),
@@ -113,12 +121,10 @@ async fn test_pg_indexed_columns_cache_invalidated_on_ddl() {
         0,
     );
 
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS pg_idx_inval (id SERIAL PRIMARY KEY, val VARCHAR(50))",
-    )
-    .execute(&test_db.pool)
-    .await
-    .unwrap();
+    sqlx::query("CREATE TABLE IF NOT EXISTS pg_idx_inval (id SERIAL PRIMARY KEY, val VARCHAR(50))")
+        .execute(&test_db.pool)
+        .await
+        .unwrap();
 
     let before = introspector
         .list_indexed_columns("pg_idx_inval", Some(&test_db.schema))
@@ -170,12 +176,10 @@ async fn test_pg_list_composite_indexes() {
     .execute(&test_db.pool)
     .await
     .unwrap();
-    sqlx::query(
-        "CREATE INDEX idx_pg_name ON pg_test_composite_idx (last_name, first_name)",
-    )
-    .execute(&test_db.pool)
-    .await
-    .unwrap();
+    sqlx::query("CREATE INDEX idx_pg_name ON pg_test_composite_idx (last_name, first_name)")
+        .execute(&test_db.pool)
+        .await
+        .unwrap();
 
     let introspector = SchemaIntrospector::new_with_backend(
         test_db.pool_handle.clone(),
@@ -209,11 +213,12 @@ async fn test_pg_list_composite_indexes() {
     let email_idx = indexes
         .iter()
         .find(|i| i.name.contains("email") || i.name.contains("pg_test_composite_idx_email"))
-        .or_else(|| indexes.iter().find(|i| i.unique && i.columns.len() == 1 && i.columns[0].eq_ignore_ascii_case("email")));
-    assert!(
-        email_idx.is_some(),
-        "unique index on email should be found"
-    );
+        .or_else(|| {
+            indexes.iter().find(|i| {
+                i.unique && i.columns.len() == 1 && i.columns[0].eq_ignore_ascii_case("email")
+            })
+        });
+    assert!(email_idx.is_some(), "unique index on email should be found");
 
     sqlx::query("DROP TABLE IF EXISTS pg_test_composite_idx")
         .execute(&test_db.pool)
@@ -399,7 +404,11 @@ async fn test_pg_get_schema_info_with_indexes() {
         )
         .await;
 
-    assert!(info.is_ok(), "get_schema_info should succeed: {:?}", info.err());
+    assert!(
+        info.is_ok(),
+        "get_schema_info should succeed: {:?}",
+        info.err()
+    );
     let info = info.unwrap();
     assert!(info.get("columns").is_some(), "should have columns");
     assert!(info.get("indexes").is_some(), "should have indexes");

@@ -4,9 +4,7 @@ use crate::test_helpers::setup_sqlite_test_db;
 use std::sync::Arc;
 
 /// Helper: create a SchemaIntrospector from the test DB.
-async fn make_introspector(
-    pool: &crate::backend::PoolHandle,
-) -> SchemaIntrospector {
+async fn make_introspector(pool: &crate::backend::PoolHandle) -> SchemaIntrospector {
     let backend: Arc<dyn Backend> = Arc::new(crate::backend::sqlite::SqliteBackend::new());
     SchemaIntrospector::new_with_backend(pool.clone(), backend, 0)
 }
@@ -18,9 +16,21 @@ async fn test_sqlite_list_tables_returns_results() {
     let tables = introspector.list_tables(None).await.unwrap();
 
     let names: Vec<&str> = tables.iter().map(|t| t.name.as_str()).collect();
-    assert!(names.contains(&"users"), "tables should include 'users', got: {:?}", names);
-    assert!(names.contains(&"products"), "tables should include 'products', got: {:?}", names);
-    assert!(names.contains(&"orders"), "tables should include 'orders', got: {:?}", names);
+    assert!(
+        names.contains(&"users"),
+        "tables should include 'users', got: {:?}",
+        names
+    );
+    assert!(
+        names.contains(&"products"),
+        "tables should include 'products', got: {:?}",
+        names
+    );
+    assert!(
+        names.contains(&"orders"),
+        "tables should include 'orders', got: {:?}",
+        names
+    );
 }
 
 #[tokio::test]
@@ -48,12 +58,22 @@ async fn test_sqlite_get_columns_for_table() {
     let col_names: Vec<&str> = columns.iter().map(|c| c.name.as_str()).collect();
 
     assert!(col_names.contains(&"id"), "users should have 'id' column");
-    assert!(col_names.contains(&"name"), "users should have 'name' column");
-    assert!(col_names.contains(&"email"), "users should have 'email' column");
+    assert!(
+        col_names.contains(&"name"),
+        "users should have 'name' column"
+    );
+    assert!(
+        col_names.contains(&"email"),
+        "users should have 'email' column"
+    );
 
     // Check primary key detection
     let id_col = columns.iter().find(|c| c.name == "id").unwrap();
-    assert_eq!(id_col.column_key.as_deref(), Some("PRI"), "id should be PRI key");
+    assert_eq!(
+        id_col.column_key.as_deref(),
+        Some("PRI"),
+        "id should be PRI key"
+    );
 }
 
 #[tokio::test]
@@ -64,7 +84,10 @@ async fn test_sqlite_column_nullable() {
     let columns = introspector.get_columns("users", None).await.unwrap();
 
     let name_col = columns.iter().find(|c| c.name == "name").unwrap();
-    assert!(!name_col.is_nullable, "name should NOT be nullable (NOT NULL)");
+    assert!(
+        !name_col.is_nullable,
+        "name should NOT be nullable (NOT NULL)"
+    );
 
     let email_col = columns.iter().find(|c| c.name == "email").unwrap();
     assert!(email_col.is_nullable, "email should be nullable");

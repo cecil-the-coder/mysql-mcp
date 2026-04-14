@@ -36,8 +36,7 @@ fn walk_pg_node(node: &Value, stats: &mut PlanStats) {
         // Index-based scans — capture the index name
         "Index Scan" | "Index Only Scan" | "Bitmap Heap Scan" => {
             if stats.index_name.is_none() {
-                stats.index_name =
-                    node["Index Name"].as_str().map(str::to_string);
+                stats.index_name = node["Index Name"].as_str().map(str::to_string);
             }
             stats.total_estimated_rows += node["Plan Rows"].as_f64().unwrap_or(0.0);
         }
@@ -45,8 +44,7 @@ fn walk_pg_node(node: &Value, stats: &mut PlanStats) {
         // Bitmap index scan (feeds into Bitmap Heap Scan)
         "Bitmap Index Scan" => {
             if stats.index_name.is_none() {
-                stats.index_name =
-                    node["Index Name"].as_str().map(str::to_string);
+                stats.index_name = node["Index Name"].as_str().map(str::to_string);
             }
         }
 
@@ -70,8 +68,13 @@ fn walk_pg_node(node: &Value, stats: &mut PlanStats) {
         }
 
         // Materialize / Subquery Scan
-        "Materialize" | "Subquery Scan" | "CTE Scan" | "Function Scan"
-        | "Values Scan" | "Table Function Scan" | "Foreign Scan" => {
+        "Materialize"
+        | "Subquery Scan"
+        | "CTE Scan"
+        | "Function Scan"
+        | "Values Scan"
+        | "Table Function Scan"
+        | "Foreign Scan" => {
             stats.total_estimated_rows += node["Plan Rows"].as_f64().unwrap_or(0.0);
         }
 
@@ -192,7 +195,10 @@ mod tests {
             "Plan Width": 40
         }]);
         let result = parse_postgres_explain(&arr).unwrap();
-        assert!(result.full_table_scan, "Seq Scan should be flagged as full table scan");
+        assert!(
+            result.full_table_scan,
+            "Seq Scan should be flagged as full table scan"
+        );
         assert!(result.index_used.is_none());
         assert_eq!(result.rows_examined_estimate, 1000);
     }
@@ -210,7 +216,10 @@ mod tests {
             "Plan Width": 40
         }]);
         let result = parse_postgres_explain(&arr).unwrap();
-        assert!(!result.full_table_scan, "Index Scan should not be full table scan");
+        assert!(
+            !result.full_table_scan,
+            "Index Scan should not be full table scan"
+        );
         assert_eq!(result.index_used.as_deref(), Some("idx_users_email"));
         assert_eq!(result.rows_examined_estimate, 1);
         assert_eq!(result.tier, ExplainTier::Fast);
@@ -472,10 +481,12 @@ mod pg_integration_tests {
             .unwrap();
         }
         // Insert the target value
-        sqlx::query("INSERT INTO pg_explain_test_idx (val) VALUES ('hello') ON CONFLICT DO NOTHING")
-            .execute(&test_db.pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO pg_explain_test_idx (val) VALUES ('hello') ON CONFLICT DO NOTHING",
+        )
+        .execute(&test_db.pool)
+        .await
+        .unwrap();
 
         sqlx::query("ANALYZE pg_explain_test_idx")
             .execute(&test_db.pool)
@@ -537,10 +548,12 @@ mod pg_integration_tests {
             .execute(&test_db.pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO pg_explain_join_b (a_id, score) VALUES (1, 100), (1, 200), (2, 50)")
-            .execute(&test_db.pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO pg_explain_join_b (a_id, score) VALUES (1, 100), (1, 200), (2, 50)",
+        )
+        .execute(&test_db.pool)
+        .await
+        .unwrap();
         sqlx::query("ANALYZE pg_explain_join_a, pg_explain_join_b")
             .execute(&test_db.pool)
             .await

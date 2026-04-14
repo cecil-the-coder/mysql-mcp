@@ -48,9 +48,12 @@ async fn main() -> Result<()> {
     // Connect to the database (with optional SSH tunnel for the default session)
     let (db, _default_tunnel) = if let Some(ref ssh) = config.ssh {
         info!("SSH tunnel configured, establishing tunnel to {}", ssh.host);
-        let tunnel =
-            tunnel::spawn_ssh_tunnel(ssh, &config.connection.host, config.connection.port.unwrap_or(backend.default_port()))
-                .await?;
+        let tunnel = tunnel::spawn_ssh_tunnel(
+            ssh,
+            &config.connection.host,
+            config.connection.port.unwrap_or(backend.default_port()),
+        )
+        .await?;
         info!("SSH tunnel established, connecting through tunnel");
         let params = backend::SessionConnectParams {
             host: "127.0.0.1".to_string(),

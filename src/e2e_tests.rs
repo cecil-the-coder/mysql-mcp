@@ -512,8 +512,7 @@ mod tests {
             return;
         };
         let table = format!("_e2e_si{}", std::process::id());
-        let Some(mut child) = spawn_server(&binary, &test_db, &[("DB_ALLOW_DDL", "true")])
-        else {
+        let Some(mut child) = spawn_server(&binary, &test_db, &[("DB_ALLOW_DDL", "true")]) else {
             return;
         };
         let (mut stdin, mut reader) = setup_io(&mut child);
@@ -556,11 +555,7 @@ mod tests {
         let r = read_response(&mut reader)
             .await
             .expect("no schema_info response");
-        assert_ne!(
-            r["result"]["isError"], true,
-            "schema_info failed: {}",
-            r
-        );
+        assert_ne!(r["result"]["isError"], true, "schema_info failed: {}", r);
         let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
         assert!(
             text.contains("id") && text.contains("name"),
@@ -615,11 +610,7 @@ mod tests {
             .expect("no server_info response");
         child.kill().await.ok();
 
-        assert_ne!(
-            r["result"]["isError"], true,
-            "server_info failed: {}",
-            r
-        );
+        assert_ne!(r["result"]["isError"], true, "server_info failed: {}", r);
         let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
         assert!(
             text.contains("version"),
@@ -662,11 +653,7 @@ mod tests {
             .expect("no explain_plan response");
         child.kill().await.ok();
 
-        assert_ne!(
-            r["result"]["isError"], true,
-            "explain_plan failed: {}",
-            r
-        );
+        assert_ne!(r["result"]["isError"], true, "explain_plan failed: {}", r);
         let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
         // Should return some JSON plan structure
         assert!(
@@ -1100,8 +1087,7 @@ mod tests {
             return;
         };
         let table = format!("_e2e_lt{}", std::process::id());
-        let Some(mut child) = spawn_server(&binary, &test_db, &[("DB_ALLOW_DDL", "true")])
-        else {
+        let Some(mut child) = spawn_server(&binary, &test_db, &[("DB_ALLOW_DDL", "true")]) else {
             return;
         };
         let (mut stdin, mut reader) = setup_io(&mut child);
@@ -1155,11 +1141,7 @@ mod tests {
         let r = read_response(&mut reader)
             .await
             .expect("no list_tables response");
-        assert_ne!(
-            r["result"]["isError"], true,
-            "list_tables failed: {}",
-            r
-        );
+        assert_ne!(r["result"]["isError"], true, "list_tables failed: {}", r);
         let text = r["result"]["content"][0]["text"].as_str().unwrap_or("");
         // Parse the JSON response and verify structure
         let parsed: serde_json::Value =

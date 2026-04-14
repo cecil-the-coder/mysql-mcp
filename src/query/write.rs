@@ -293,14 +293,8 @@ mod pg_integration_tests {
         // Insert
         let insert_sql = "INSERT INTO pg_test_write_ops (val) VALUES ('hello')";
         let insert_parsed = crate::sql_parser::parse_sql(insert_sql, "PostgreSQL").unwrap();
-        let result = execute_write_query_pool(
-            &test_db.pool_handle,
-            insert_sql,
-            &insert_parsed,
-            0,
-            0,
-        )
-        .await;
+        let result =
+            execute_write_query_pool(&test_db.pool_handle, insert_sql, &insert_parsed, 0, 0).await;
         assert!(result.is_ok(), "INSERT should succeed: {:?}", result.err());
         let result = result.unwrap();
         assert_eq!(result.rows_affected, 1);
@@ -313,28 +307,16 @@ mod pg_integration_tests {
         // Update
         let update_sql = "UPDATE pg_test_write_ops SET val='world' WHERE val='hello'";
         let update_parsed = crate::sql_parser::parse_sql(update_sql, "PostgreSQL").unwrap();
-        let update_result = execute_write_query_pool(
-            &test_db.pool_handle,
-            update_sql,
-            &update_parsed,
-            0,
-            0,
-        )
-        .await;
+        let update_result =
+            execute_write_query_pool(&test_db.pool_handle, update_sql, &update_parsed, 0, 0).await;
         assert!(update_result.is_ok());
         assert_eq!(update_result.unwrap().rows_affected, 1);
 
         // Delete
         let delete_sql = "DELETE FROM pg_test_write_ops WHERE val='world'";
         let delete_parsed = crate::sql_parser::parse_sql(delete_sql, "PostgreSQL").unwrap();
-        let delete_result = execute_write_query_pool(
-            &test_db.pool_handle,
-            delete_sql,
-            &delete_parsed,
-            0,
-            0,
-        )
-        .await;
+        let delete_result =
+            execute_write_query_pool(&test_db.pool_handle, delete_sql, &delete_parsed, 0, 0).await;
         assert!(delete_result.is_ok());
 
         sqlx::query("DROP TABLE IF EXISTS pg_test_write_ops")
@@ -351,7 +333,11 @@ mod pg_integration_tests {
 
         let create_sql = "CREATE TABLE IF NOT EXISTS pg_test_ddl_temp (id SERIAL PRIMARY KEY)";
         let result = execute_ddl_query_pool(&test_db.pool_handle, create_sql, 0, 0).await;
-        assert!(result.is_ok(), "CREATE TABLE should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "CREATE TABLE should succeed: {:?}",
+            result.err()
+        );
 
         let drop_sql = "DROP TABLE IF EXISTS pg_test_ddl_temp";
         let drop_result = execute_ddl_query_pool(&test_db.pool_handle, drop_sql, 0, 0).await;
@@ -369,8 +355,7 @@ mod pg_integration_tests {
         };
         let sql = "INSERT INTO nonexistent_table_xyz VALUES (1)";
         let parsed = crate::sql_parser::parse_sql(sql, "PostgreSQL").unwrap();
-        let result =
-            execute_write_query_pool(&test_db.pool_handle, sql, &parsed, 0, 0).await;
+        let result = execute_write_query_pool(&test_db.pool_handle, sql, &parsed, 0, 0).await;
         assert!(result.is_err(), "invalid SQL should fail");
     }
 
@@ -434,8 +419,9 @@ mod sqlite_integration_tests {
         // Second insert should get id 2
         let insert_sql2 = "INSERT INTO test_write_ops (val) VALUES ('world')";
         let insert_parsed2 = crate::sql_parser::parse_sql(insert_sql2, "sqlite").unwrap();
-        let result2 =
-            execute_write_query_pool(&db.pool, insert_sql2, &insert_parsed2, 0, 0).await.unwrap();
+        let result2 = execute_write_query_pool(&db.pool, insert_sql2, &insert_parsed2, 0, 0)
+            .await
+            .unwrap();
         assert_eq!(result2.rows_affected, 1);
         assert_eq!(result2.last_insert_id.unwrap(), 2);
 
@@ -455,9 +441,7 @@ mod sqlite_integration_tests {
         assert!(delete_result.is_ok());
 
         // Cleanup
-        db.execute("DROP TABLE IF EXISTS test_write_ops")
-            .await
-            .ok();
+        db.execute("DROP TABLE IF EXISTS test_write_ops").await.ok();
     }
 
     #[tokio::test]
@@ -467,7 +451,11 @@ mod sqlite_integration_tests {
         // CREATE TABLE
         let create_sql = "CREATE TABLE test_ddl_temp (id INTEGER PRIMARY KEY, val TEXT)";
         let result = execute_ddl_query_pool(&db.pool, create_sql, 0, 0).await;
-        assert!(result.is_ok(), "CREATE TABLE should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "CREATE TABLE should succeed: {:?}",
+            result.err()
+        );
 
         // ALTER TABLE ADD COLUMN (SQLite supports this)
         let alter_sql = "ALTER TABLE test_ddl_temp ADD COLUMN extra INTEGER DEFAULT 0";
@@ -492,7 +480,10 @@ mod sqlite_integration_tests {
                     .and_then(|(_, v)| v.as_str())
             })
             .collect();
-        assert!(col_names.contains(&"extra"), "ALTER should have added 'extra' column");
+        assert!(
+            col_names.contains(&"extra"),
+            "ALTER should have added 'extra' column"
+        );
 
         // DROP TABLE
         let drop_sql = "DROP TABLE IF EXISTS test_ddl_temp";
@@ -533,13 +524,12 @@ mod sqlite_integration_tests {
         // Insert another row and verify it gets the next rowid
         let sql2 = "INSERT INTO test_rowid (val) VALUES ('auto_id')";
         let parsed2 = crate::sql_parser::parse_sql(sql2, "sqlite").unwrap();
-        let result2 =
-            execute_write_query_pool(&db.pool, sql2, &parsed2, 0, 0).await.unwrap();
+        let result2 = execute_write_query_pool(&db.pool, sql2, &parsed2, 0, 0)
+            .await
+            .unwrap();
         assert_eq!(result2.last_insert_id.unwrap(), 43);
 
-        db.execute("DROP TABLE IF EXISTS test_rowid")
-            .await
-            .ok();
+        db.execute("DROP TABLE IF EXISTS test_rowid").await.ok();
     }
 
     #[tokio::test]
@@ -559,9 +549,7 @@ mod sqlite_integration_tests {
         // last_insert_id returns the id of the last inserted row
         assert_eq!(result.last_insert_id.unwrap(), 3);
 
-        db.execute("DROP TABLE IF EXISTS test_multi")
-            .await
-            .ok();
+        db.execute("DROP TABLE IF EXISTS test_multi").await.ok();
     }
 
     #[tokio::test]

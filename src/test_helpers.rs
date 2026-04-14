@@ -1,11 +1,11 @@
 use crate::backend::PoolHandle;
 use crate::config::Config;
 use std::sync::{Arc, OnceLock};
-use testcontainers_modules::testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt};
 #[cfg(feature = "mysql")]
 use testcontainers_modules::mysql::Mysql;
 #[cfg(feature = "postgres")]
 use testcontainers_modules::postgres::Postgres;
+use testcontainers_modules::testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt};
 
 /// Global semaphore that limits how many tests may CREATE a new MySQL connection
 /// simultaneously. MySQL's server-side `connect_timeout` (default 10 s) drops
@@ -103,7 +103,8 @@ pub async fn setup_test_db() -> Option<TestDb> {
             .connect_with({
                 let mut opts = crate::db::build_connect_options(&config)
                     .expect("build_connect_options failed in test helper");
-                opts = opts.statement_cache_capacity(crate::backend::mysql::STATEMENT_CACHE_CAPACITY);
+                opts =
+                    opts.statement_cache_capacity(crate::backend::mysql::STATEMENT_CACHE_CAPACITY);
                 opts
             })
             .await
@@ -363,7 +364,8 @@ pub async fn setup_sqlite_test_db() -> SqliteTestDb {
     use crate::backend::Backend;
 
     // Create a named temp file; the file is automatically cleaned up when dropped.
-    let tmp = tempfile::NamedTempFile::new().expect("failed to create temp file for SQLite test DB");
+    let tmp =
+        tempfile::NamedTempFile::new().expect("failed to create temp file for SQLite test DB");
     let db_path = tmp.path().to_string_lossy().to_string();
 
     let mut config = Config::default();
