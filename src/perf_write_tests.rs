@@ -1,7 +1,7 @@
 /// Write, schema-cache, pool-saturation, read-isolation (transaction vs bare), and serialization perf tests.
 ///
 /// Run with: cargo test perf_ -- --nocapture
-/// (or against real DB): MYSQL_HOST=... cargo test perf_ -- --nocapture
+/// (or against real DB): DB_HOST=... cargo test perf_ -- --nocapture
 #[cfg(test)]
 mod write_tests {
     use crate::config::PoolConfig;
@@ -60,7 +60,7 @@ mod write_tests {
             let val = format!("val_{i}");
 
             let insert_sql = format!("INSERT INTO perf_write_test (v) VALUES ('{val}')");
-            let insert_parsed = crate::sql_parser::parse_sql(&insert_sql).unwrap();
+            let insert_parsed = crate::sql_parser::parse_sql(&insert_sql, "MySQL").unwrap();
             let t = Instant::now();
             let r =
                 crate::query::write::execute_write_query(pool, &insert_sql, &insert_parsed, 0, 0)
@@ -70,7 +70,7 @@ mod write_tests {
             let id = r.last_insert_id.unwrap();
 
             let update_sql = format!("UPDATE perf_write_test SET v='updated_{i}' WHERE id={id}");
-            let update_parsed = crate::sql_parser::parse_sql(&update_sql).unwrap();
+            let update_parsed = crate::sql_parser::parse_sql(&update_sql, "MySQL").unwrap();
             let t = Instant::now();
             crate::query::write::execute_write_query(pool, &update_sql, &update_parsed, 0, 0)
                 .await
@@ -78,7 +78,7 @@ mod write_tests {
             update_ms.push(t.elapsed().as_secs_f64() * 1000.0);
 
             let delete_sql = format!("DELETE FROM perf_write_test WHERE id={id}");
-            let delete_parsed = crate::sql_parser::parse_sql(&delete_sql).unwrap();
+            let delete_parsed = crate::sql_parser::parse_sql(&delete_sql, "MySQL").unwrap();
             let t = Instant::now();
             crate::query::write::execute_write_query(pool, &delete_sql, &delete_parsed, 0, 0)
                 .await
@@ -194,7 +194,7 @@ mod write_tests {
         const PER_TASK: usize = 5;
 
         // Pre-warm all 3 pool connections before spawning the concurrent tasks.
-        // Connection creation (TCP+TLS+MySQL auth) is sensitive to concurrent server
+        // Connection creation (TCP+TLS+database auth) is sensitive to concurrent server
         // load; establishing connections upfront lets the timed phase focus purely on
         // queue-wait latency rather than connection-creation time.
         // Each acquire goes through the shared semaphore to cap total simultaneous
@@ -229,7 +229,7 @@ mod write_tests {
                     crate::query::read::execute_read_query(
                         &pool,
                         "SELECT 1",
-                        &crate::sql_parser::parse_sql("SELECT 1").unwrap(),
+                        &crate::sql_parser::parse_sql("SELECT 1", "MySQL").unwrap(),
                         &cfg,
                     )
                     .await
@@ -285,7 +285,7 @@ mod write_tests {
                 crate::query::read::execute_read_query(
                     pool,
                     "SELECT 1",
-                    &crate::sql_parser::parse_sql("SELECT 1").unwrap(),
+                    &crate::sql_parser::parse_sql("SELECT 1", "MySQL").unwrap(),
                     &cfg,
                 )
                 .await
@@ -301,7 +301,7 @@ mod write_tests {
             crate::query::read::execute_read_query(
                 pool,
                 "SELECT 1",
-                &crate::sql_parser::parse_sql("SELECT 1").unwrap(),
+                &crate::sql_parser::parse_sql("SELECT 1", "MySQL").unwrap(),
                 &cfg,
             )
             .await
@@ -318,7 +318,7 @@ mod write_tests {
             crate::query::read::execute_read_query(
                 pool,
                 "SELECT 1",
-                &crate::sql_parser::parse_sql("SELECT 1").unwrap(),
+                &crate::sql_parser::parse_sql("SELECT 1", "MySQL").unwrap(),
                 &cfg,
             )
             .await
@@ -419,7 +419,8 @@ mod write_tests {
         let result_1000 = crate::query::read::execute_read_query(
             pool,
             "SELECT * FROM perf_ser_test LIMIT 1000",
-            &crate::sql_parser::parse_sql("SELECT * FROM perf_ser_test LIMIT 1000").unwrap(),
+            &crate::sql_parser::parse_sql("SELECT * FROM perf_ser_test LIMIT 1000", "MySQL")
+                .unwrap(),
             &cfg,
         )
         .await
@@ -429,7 +430,8 @@ mod write_tests {
         let result_100 = crate::query::read::execute_read_query(
             pool,
             "SELECT * FROM perf_ser_test LIMIT 100",
-            &crate::sql_parser::parse_sql("SELECT * FROM perf_ser_test LIMIT 100").unwrap(),
+            &crate::sql_parser::parse_sql("SELECT * FROM perf_ser_test LIMIT 100", "MySQL")
+                .unwrap(),
             &cfg,
         )
         .await

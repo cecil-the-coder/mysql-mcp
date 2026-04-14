@@ -1,24 +1,11 @@
-//! EXPLAIN plan execution and result types.
-//!
-//! Runs `EXPLAIN FORMAT=JSON` against a MySQL database and parses the
-//! returned JSON into a structured [`ExplainResult`] containing:
-//!
-//! - Whether a full table scan was detected
-//! - Which index (if any) was used
-//! - Estimated rows examined
-//! - Extra flags (filesort, temporary table, etc.)
-//! - A performance tier ([`ExplainTier`]) derived from the plan
-//!
-//! The actual JSON parsing logic lives in [`super::explain_parse`].
-
+#[cfg(feature = "mysql")]
 use anyhow::Result;
+
+#[cfg(feature = "mysql")]
 use sqlx::MySqlPool;
 
+#[cfg(feature = "mysql")]
 use super::with_timeout;
-
-/// Default timeout (30 s) used when no explicit timeout is available.
-#[cfg(test)]
-const DEFAULT_EXPLAIN_TIMEOUT_MS: u64 = 30_000;
 
 /// Query performance tier derived from EXPLAIN output.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -38,19 +25,14 @@ pub struct ExplainResult {
     pub tier: ExplainTier,
 }
 
-/// Execute EXPLAIN FORMAT=JSON for the given SQL query.
+/// Run EXPLAIN FORMAT=JSON on a SELECT query using a MySqlPool directly.
 ///
-/// # Arguments
-/// * `pool` - MySQL connection pool
-/// * `sql` - The SQL query to explain
-/// * `query_timeout_ms` - Timeout in milliseconds for the EXPLAIN query.
-///   Use [`DEFAULT_EXPLAIN_TIMEOUT_MS`] when no config value is available.
-pub async fn run_explain(
-    pool: &MySqlPool,
-    sql: &str,
-    query_timeout_ms: u64,
-) -> Result<ExplainResult> {
-    let timeout_ms = query_timeout_ms;
+/// This is the legacy interface used by integration tests and the explain
+/// test helpers. It delegates to the MySQL explain parser.
+#[cfg(feature = "mysql")]
+pub async fn run_explain(pool: &MySqlPool, sql: &str) -> Result<ExplainResult> {
+    use crate::backend::mysql::query_timeout_from_env;
+    let timeout_ms = query_timeout_from_env();
     let explain_sql = format!("EXPLAIN FORMAT=JSON {}", sql);
     let explain_fut = async {
         sqlx::query(&explain_sql)
@@ -85,7 +67,7 @@ pub async fn run_explain(
     super::explain_parse::parse(&v)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mysql"))]
 mod tests {
     use super::*;
     use crate::test_helpers::setup_test_db;
@@ -95,11 +77,9 @@ mod tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        // Use a query against information_schema which always exists.
         let result = run_explain(
             &test_db.pool,
             "SELECT table_name FROM information_schema.tables LIMIT 5",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -107,9 +87,7 @@ mod tests {
             "run_explain should succeed: {:?}",
             result.err()
         );
-        // rows_examined_estimate should be > 0 for any real query
         let er = result.unwrap();
-        // Either a full table scan or index access — just confirm the struct is populated.
         let _ = er.full_table_scan;
         let _ = er.rows_examined_estimate;
     }
@@ -119,7 +97,6 @@ mod tests {
         let Some(test_db) = setup_test_db().await else {
             return;
         };
-        // Create a table without an index on the filter column, then EXPLAIN a query on it.
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS explain_test_fts (
                 id INT PRIMARY KEY AUTO_INCREMENT,
@@ -140,7 +117,6 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_fts WHERE val = 'hello'",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -149,7 +125,6 @@ mod tests {
             result.err()
         );
         let er = result.unwrap();
-        // val has no index, so we expect a full table scan
         assert!(
             er.full_table_scan,
             "should be a full table scan on unindexed column"
@@ -184,7 +159,6 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_idx WHERE val = 'hello'",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -193,7 +167,6 @@ mod tests {
             result.err()
         );
         let er = result.unwrap();
-        // val IS indexed; expect index usage
         assert!(!er.full_table_scan, "should NOT be a full table scan");
         assert!(er.index_used.is_some(), "an index should be used");
     }
@@ -235,7 +208,6 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT a.name, b.score FROM explain_join_a a JOIN explain_join_b b ON a.id = b.a_id",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -244,8 +216,6 @@ mod tests {
             result.err()
         );
         let er = result.unwrap();
-        // join_a is small and may be full-scanned; join_b uses idx_a_id.
-        // The key property: rows_examined_estimate should be > 0.
         assert!(
             er.rows_examined_estimate > 0,
             "should have row estimates for JOIN"
@@ -253,10 +223,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // MySQL 9.x container tests — explicitly exercise schema v2 (query_plan)
-    // format.  These run independently of MYSQL_HOST so that both the v1
-    // (MySQL 8.x) and v2 (MySQL 9.x) parser paths are covered in a plain
-    // `cargo test` run without any external database.
+    // MySQL 9.x container tests
     // -----------------------------------------------------------------------
 
     #[tokio::test]
@@ -282,7 +249,6 @@ mod tests {
         let er = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_fts WHERE val = 'hello'",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await
         .unwrap();
@@ -318,7 +284,6 @@ mod tests {
         let er = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_idx WHERE val = 'hello'",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await
         .unwrap();
@@ -362,7 +327,6 @@ mod tests {
         let er = run_explain(
             &test_db.pool,
             "SELECT a.name, b.score FROM explain_join_a a JOIN explain_join_b b ON a.id = b.a_id",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await
         .unwrap();
@@ -394,7 +358,6 @@ mod tests {
         let result = run_explain(
             &test_db.pool,
             "SELECT * FROM explain_test_sort ORDER BY name",
-            DEFAULT_EXPLAIN_TIMEOUT_MS,
         )
         .await;
         assert!(
@@ -402,16 +365,119 @@ mod tests {
             "run_explain should succeed: {:?}",
             result.err()
         );
+        let _ = result.unwrap();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SQLite EXPLAIN integration tests
+// ---------------------------------------------------------------------------
+
+#[cfg(all(test, feature = "sqlite"))]
+mod sqlite_explain_tests {
+    use super::*;
+    use crate::backend::Backend;
+    use crate::test_helpers::setup_sqlite_test_db;
+
+    async fn run_sqlite_explain(
+        pool: &crate::backend::PoolHandle,
+        sql: &str,
+    ) -> Result<ExplainResult> {
+        let backend = crate::backend::sqlite::SqliteBackend::new();
+        backend.run_explain(pool, sql, 5000).await
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_explain_basic_select() {
+        let db = setup_sqlite_test_db().await;
+
+        let result = run_sqlite_explain(&db.pool, "SELECT * FROM users WHERE id = 1").await;
+        assert!(
+            result.is_ok(),
+            "EXPLAIN QUERY PLAN should succeed: {:?}",
+            result.err()
+        );
         let er = result.unwrap();
-        // ORDER BY on a non-indexed column should trigger a sort in most cases.
-        // However, MySQL's optimizer may choose to skip the sort for very small
-        // tables (< ~10 rows) where it's cheaper to just return rows unsorted and
-        // sort them in-memory without a separate sort node.  We therefore only
-        // assert the absence of a crash — the flag may or may not be present
-        // depending on the optimizer's row-count estimate.
-        //
-        // The real validation is that run_explain() successfully parses the EXPLAIN
-        // output and returns a valid ExplainResult, which the assert above checks.
-        let _ = er.extra_flags; // consumed above; just confirm parsing succeeded
+        // PK lookup should use index, not full scan
+        assert!(
+            !er.full_table_scan,
+            "PK lookup should not be a full table scan"
+        );
+        assert!(er.index_used.is_some(), "PK lookup should use an index");
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_explain_full_table_scan() {
+        let db = setup_sqlite_test_db().await;
+        let result = run_sqlite_explain(&db.pool, "SELECT * FROM users WHERE name = 'Alice'").await;
+        assert!(result.is_ok(), "EXPLAIN should succeed: {:?}", result.err());
+        let er = result.unwrap();
+        assert!(
+            er.full_table_scan,
+            "query on unindexed column should be a full table scan"
+        );
+        assert!(
+            er.index_used.is_none(),
+            "no index should be used for unindexed column"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_explain_index_scan() {
+        let db = setup_sqlite_test_db().await;
+        // users table already has UNIQUE index on email
+        let result = run_sqlite_explain(
+            &db.pool,
+            "SELECT * FROM users WHERE email = 'alice@example.com'",
+        )
+        .await;
+        assert!(result.is_ok(), "EXPLAIN should succeed: {:?}", result.err());
+        let er = result.unwrap();
+        assert!(
+            !er.full_table_scan,
+            "query on UNIQUE indexed column should not be a full table scan"
+        );
+        assert!(
+            er.index_used.is_some(),
+            "an index should be used for the email lookup"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_explain_with_sort() {
+        let db = setup_sqlite_test_db().await;
+        // ORDER BY on unindexed column should use temp B-tree
+        let result = run_sqlite_explain(&db.pool, "SELECT * FROM users ORDER BY name").await;
+        assert!(result.is_ok(), "EXPLAIN should succeed: {:?}", result.err());
+        let er = result.unwrap();
+        // ORDER BY without index triggers temp B-tree (sort flag)
+        assert!(
+            er.extra_flags.contains(&"Using filesort"),
+            "ORDER BY on unindexed column should flag filesort"
+        );
+        assert!(
+            er.extra_flags.contains(&"Using temporary"),
+            "ORDER BY on unindexed column should flag temporary"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_explain_join() {
+        let db = setup_sqlite_test_db().await;
+        let result = run_sqlite_explain(
+            &db.pool,
+            "SELECT u.name, o.total FROM users u JOIN orders o ON u.id = o.user_id",
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "EXPLAIN JOIN should succeed: {:?}",
+            result.err()
+        );
+        let er = result.unwrap();
+        assert!(
+            er.rows_examined_estimate > 0,
+            "JOIN should have row estimate"
+        );
     }
 }

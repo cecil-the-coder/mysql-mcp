@@ -58,7 +58,7 @@ allow_insert = true
         assert_eq!(perms.allow_insert, Some(true));
     }
 
-    // Test: empty MYSQL_DB means no database set (multi-DB mode)
+    // Test: empty DB_DATABASE means no database set (multi-DB mode)
     #[test]
     fn test_empty_database_is_none() {
         let base = Config::default();
@@ -148,8 +148,8 @@ host = "myhost"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.connection.host, "myhost");
-        // Defaults for everything else
-        assert_eq!(config.connection.port, 3306);
+        // port defaults to None (backend provides default)
+        assert_eq!(config.connection.port, None);
         assert_eq!(config.pool.size, 20);
         assert!(!config.security.allow_insert);
     }
@@ -221,16 +221,16 @@ host = "myhost"
         assert!(config.validate().is_err());
     }
 
-    // Test: MYSQL_MAX_SESSIONS env var overrides max_sessions
+    // Test: DB_MAX_SESSIONS env var overrides max_sessions
     #[test]
     fn test_env_max_sessions_override() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use crate::config::env_config::load_env_config;
 
-        std::env::set_var("MYSQL_MAX_SESSIONS", "5");
+        std::env::set_var("DB_MAX_SESSIONS", "5");
         let env = load_env_config();
         let config = env.apply_to(Config::default());
-        std::env::remove_var("MYSQL_MAX_SESSIONS");
+        std::env::remove_var("DB_MAX_SESSIONS");
 
         assert_eq!(config.security.max_sessions, 5);
     }
@@ -263,7 +263,7 @@ allow_update = true
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.connection.host, "db.example.com");
-        assert_eq!(config.connection.port, 5432);
+        assert_eq!(config.connection.port, Some(5432));
         assert_eq!(config.pool.size, 20);
         assert!(config.security.allow_insert);
         assert!(config.security.allow_update);
@@ -276,7 +276,7 @@ allow_update = true
         use std::path::Path;
         let config = load_toml_config(Path::new("/nonexistent/path/mysql-mcp.toml")).unwrap();
         assert_eq!(config.connection.host, "localhost");
-        assert_eq!(config.connection.port, 3306);
+        assert_eq!(config.connection.port, None);
     }
 
     // Test: EnvConfig overrides base config fields when set
@@ -291,7 +291,7 @@ allow_update = true
         };
         let merged = env.apply_to(base);
         assert_eq!(merged.connection.host, "envhost");
-        assert_eq!(merged.connection.port, 9999);
+        assert_eq!(merged.connection.port, Some(9999));
         assert!(merged.security.allow_insert);
     }
 
@@ -300,7 +300,7 @@ allow_update = true
     fn test_env_apply_to_does_not_override_unset_fields() {
         let mut base = Config::default();
         base.connection.host = "basehost".to_string();
-        base.connection.port = 1234;
+        base.connection.port = Some(1234);
         let env = EnvConfig {
             host: None,
             port: None,
@@ -308,7 +308,7 @@ allow_update = true
         };
         let merged = env.apply_to(base);
         assert_eq!(merged.connection.host, "basehost");
-        assert_eq!(merged.connection.port, 1234);
+        assert_eq!(merged.connection.port, Some(1234));
     }
 
     // Test: single-database schema_permissions parses allow_insert and allow_update
@@ -361,11 +361,12 @@ allow_update = false
     fn test_connection_config_default() {
         let conn = ConnectionConfig::default();
         assert_eq!(conn.host, "localhost");
-        assert_eq!(conn.port, 3306);
-        assert_eq!(conn.user, "root");
+        assert_eq!(conn.port, None);
+        assert_eq!(conn.user, "");
         assert!(conn.database.is_none());
         assert!(conn.socket.is_none());
         assert!(conn.connection_string.is_none());
+        assert!(conn.path.is_none());
     }
 
     // SSH config tests
@@ -475,16 +476,16 @@ private_key = "/tmp/key.pem"
     fn test_ssh_env_vars_override() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         use crate::config::env_config::load_env_config;
-        std::env::set_var("MYSQL_SSH_HOST", "mybastion");
-        std::env::set_var("MYSQL_SSH_USER", "ubuntu");
-        std::env::set_var("MYSQL_SSH_PORT", "2222");
-        std::env::set_var("MYSQL_SSH_KNOWN_HOSTS_CHECK", "accept-new");
+        std::env::set_var("DB_SSH_HOST", "mybastion");
+        std::env::set_var("DB_SSH_USER", "ubuntu");
+        std::env::set_var("DB_SSH_PORT", "2222");
+        std::env::set_var("DB_SSH_KNOWN_HOSTS_CHECK", "accept-new");
         let env = load_env_config();
         let config = env.apply_to(Config::default());
-        std::env::remove_var("MYSQL_SSH_HOST");
-        std::env::remove_var("MYSQL_SSH_USER");
-        std::env::remove_var("MYSQL_SSH_PORT");
-        std::env::remove_var("MYSQL_SSH_KNOWN_HOSTS_CHECK");
+        std::env::remove_var("DB_SSH_HOST");
+        std::env::remove_var("DB_SSH_USER");
+        std::env::remove_var("DB_SSH_PORT");
+        std::env::remove_var("DB_SSH_KNOWN_HOSTS_CHECK");
 
         let ssh = config
             .ssh
@@ -537,12 +538,12 @@ private_key = "/tmp/key.pem"
         use crate::config::env_config::load_env_config;
         // Ensure none of the SSH vars are set
         for key in &[
-            "MYSQL_SSH_HOST",
-            "MYSQL_SSH_USER",
-            "MYSQL_SSH_PORT",
-            "MYSQL_SSH_PRIVATE_KEY",
-            "MYSQL_SSH_KNOWN_HOSTS_CHECK",
-            "MYSQL_SSH_KNOWN_HOSTS_FILE",
+            "DB_SSH_HOST",
+            "DB_SSH_USER",
+            "DB_SSH_PORT",
+            "DB_SSH_PRIVATE_KEY",
+            "DB_SSH_KNOWN_HOSTS_CHECK",
+            "DB_SSH_KNOWN_HOSTS_FILE",
         ] {
             std::env::remove_var(key);
         }
@@ -550,7 +551,7 @@ private_key = "/tmp/key.pem"
         let config = env.apply_to(Config::default());
         assert!(
             config.ssh.is_none(),
-            "ssh should remain None when no MYSQL_SSH_* vars set"
+            "ssh should remain None when no DB_SSH_* vars set"
         );
     }
 
@@ -686,6 +687,24 @@ private_key = "/tmp/key.pem"
         assert!(
             check_private_key_permissions(path).is_err(),
             "0o620 (group writable) permissions should be rejected"
+        );
+    }
+
+    // Test: max_total_connections=0 fails validation
+    #[test]
+    fn test_max_total_connections_zero_fails_validation() {
+        let mut config = Config::default();
+        config.security.max_total_connections = 0;
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("max_total_connections"),
+            "error should mention max_total_connections, got: {}",
+            err
+        );
+        assert!(
+            err.to_string().contains("must be >= 1"),
+            "error should say 'must be >= 1', got: {}",
+            err
         );
     }
 

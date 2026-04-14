@@ -1,6 +1,6 @@
 //! Query execution module.
 //!
-//! This module handles all aspects of executing SQL queries against MySQL databases:
+//! This module handles all aspects of executing SQL queries against databases:
 //!
 //! - `read`  — SELECT query execution, including automatic EXPLAIN analysis
 //! - `write` — INSERT, UPDATE, DELETE, and DDL statement execution
@@ -11,7 +11,13 @@
 //! optional query timeouts to async operations.
 
 pub mod explain;
+#[cfg(feature = "mysql")]
+pub mod explain_mysql;
 pub mod explain_parse;
+#[cfg(feature = "postgres")]
+pub mod explain_postgres;
+#[cfg(feature = "sqlite")]
+pub mod explain_sqlite;
 pub mod read;
 pub mod retry;
 pub mod write;
@@ -22,7 +28,7 @@ use std::future::Future;
 ///
 /// If `timeout_ms > 0`, wraps the future in `tokio::time::timeout`.
 /// If the timeout elapses, returns an error message that mentions the operation name
-/// and suggests adjusting `MYSQL_QUERY_TIMEOUT`.
+/// and suggests adjusting `DB_QUERY_TIMEOUT`.
 ///
 /// If `timeout_ms == 0`, runs the future without a timeout.
 pub async fn with_timeout<T, F>(timeout_ms: u64, operation_name: &str, fut: F) -> anyhow::Result<T>
@@ -34,7 +40,7 @@ where
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
-                    "{} timed out after {}ms. Set MYSQL_QUERY_TIMEOUT to adjust.",
+                    "{} timed out after {}ms. Set DB_QUERY_TIMEOUT to adjust.",
                     operation_name,
                     timeout_ms
                 )

@@ -1,21 +1,21 @@
 [package]
-name = "mysql-mcp"
+name = "sql-mcp"
 version = "0.1.0"
 edition = "2021"
-description = "MySQL MCP server - expose MySQL databases via the Model Context Protocol"
+description = "Multi-backend SQL MCP server - expose databases via the Model Context Protocol"
 license = "MIT"
 
 [[bin]]
-name = "mysql-mcp"
+name = "sql-mcp"
 path = "src/main.rs"
 
 [lib]
-name = "mysql_mcp"
+name = "sql_mcp"
 path = "src/lib.rs"
 
 [dependencies]
 rmcp = { version = "0.16", features = ["server", "transport-io"] }
-sqlx = { version = "0.8", features = ["mysql", "runtime-tokio", "tls-rustls", "chrono"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "chrono"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -27,11 +27,18 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 sqlparser = { version = "0.53", features = [] }
 clap = { version = "4", features = ["derive"] }
+async-trait = "0.1"
+
+[features]
+default = ["mysql", "postgres", "sqlite"]
+mysql = ["sqlx/mysql", "sqlx/tls-rustls"]
+postgres = ["sqlx/postgres"]
+sqlite = ["sqlx/sqlite"]
 
 [dev-dependencies]
-testcontainers-modules = { version = "0.14.0", features = ["mysql"] }
-criterion = { version = "0.5", features = ["html_reports"] }
+testcontainers-modules = { version = "0.14.0", features = ["mysql", "postgres"] }
 tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
 name = "sql_parsing"

@@ -8,8 +8,8 @@
 //! produced by MySQL 8.0 EXPLAIN FORMAT=JSON schema v2.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use mysql_mcp::query::explain_parse::parse_v2;
 use serde_json::json;
+use sql_mcp::query::explain_parse::parse_v2;
 
 fn make_v2(query_plan: serde_json::Value) -> serde_json::Value {
     json!({

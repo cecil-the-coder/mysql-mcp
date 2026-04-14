@@ -8,7 +8,7 @@
 //! That is the only significant Rust-level CPU work that happens on every MCP query call.
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use mysql_mcp::sql_parser::parse_sql;
+use sql_mcp::sql_parser::parse_sql;
 
 /// Representative SELECT queries exercising different branches of classify_statement.
 fn bench_reads(c: &mut Criterion) {
@@ -55,7 +55,7 @@ fn bench_reads(c: &mut Criterion) {
 
     for (name, sql) in cases {
         group.bench_with_input(BenchmarkId::from_parameter(name), sql, |b, sql| {
-            b.iter(|| parse_sql(black_box(sql)))
+            b.iter(|| parse_sql(black_box(sql), "MySQL"))
         });
     }
 
@@ -109,7 +109,7 @@ fn bench_writes(c: &mut Criterion) {
 
     for (name, sql) in cases {
         group.bench_with_input(BenchmarkId::from_parameter(name), sql, |b, sql| {
-            b.iter(|| parse_sql(black_box(sql)))
+            b.iter(|| parse_sql(black_box(sql), "MySQL"))
         });
     }
 
