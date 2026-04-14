@@ -206,18 +206,17 @@ pub struct ParsedStatement {
 /// Returns an error if the SQL is invalid or cannot be parsed.
 pub fn parse_sql(sql: &str) -> Result<ParsedStatement> {
     let dialect = MySqlDialect {};
-    let statements =
-        Parser::parse_sql(&dialect, sql).map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
+    let statements = Parser::with_recursion_limit(256)
+        .parse_sql(&dialect, sql)
+        .map_err(|e| anyhow::anyhow!("SQL parse error: {}", e))?;
 
     if statements.is_empty() {
         bail!("Empty SQL statement");
     }
 
-    if statements.len() > 1 {
-        bail!("Multi-statement SQL is not supported. Send one statement at a time.");
-    }
-
-    let stmt = &statements[0];
+    let stmt = statements.first().unwrap_or_else(|| {
+        bail!("Empty SQL statement");
+    });
     let mut parsed = classify::classify_statement(stmt)?;
 
     // Re-serialize the AST to a canonical SQL string (strips comments). This is used
