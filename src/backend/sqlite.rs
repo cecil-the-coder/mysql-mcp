@@ -420,13 +420,11 @@ fn resolve_sqlite_path(conn: &crate::config::ConnectionConfig) -> Result<String>
     }
 
     if let Some(ref cs) = conn.connection_string {
-        if cs.starts_with("sqlite://") {
-            // sqlite:///absolute/path or sqlite://relative/path
-            // "sqlite://" is 9 chars; the rest is the file path
-            return Ok(cs[9..].to_string());
+        if let Some(rest) = cs.strip_prefix("sqlite://") {
+            return Ok(rest.to_string());
         }
-        if cs.starts_with("sqlite:") {
-            return Ok(cs[7..].to_string());
+        if let Some(rest) = cs.strip_prefix("sqlite:") {
+            return Ok(rest.to_string());
         }
         anyhow::bail!(
             "connection.connection_string must start with 'sqlite://' or 'sqlite:', got: '{}'",

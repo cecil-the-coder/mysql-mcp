@@ -72,12 +72,10 @@ fn parse_line(line: &str, stats: &mut PlanStats) {
     }
 
     // Detect SCAN ... USING COVERING INDEX — uses index, not a full scan
-    if is_scan && upper.contains("USING COVERING INDEX") {
-        if stats.index_name.is_none() {
-            // Extract index name from "SCAN TABLE t USING COVERING INDEX idx_name ..."
-            if let Some(idx) = extract_index_name(&upper, "COVERING INDEX") {
-                stats.index_name = Some(idx);
-            }
+    if is_scan && upper.contains("USING COVERING INDEX") && stats.index_name.is_none() {
+        // Extract index name from "SCAN TABLE t USING COVERING INDEX idx_name ..."
+        if let Some(idx) = extract_index_name(&upper, "COVERING INDEX") {
+            stats.index_name = Some(idx);
         }
     }
 
@@ -85,26 +83,24 @@ fn parse_line(line: &str, stats: &mut PlanStats) {
     // SQLite >= 3.52 uses "SEARCH t USING ..." (without TABLE), older versions use "SEARCH TABLE t".
     let is_search = upper.contains("SEARCH TABLE")
         || (upper.starts_with("SEARCH ") && !upper.contains("SEARCH TABLE"));
-    if is_search {
+    if is_search && stats.index_name.is_none() {
+        // "SEARCH TABLE t USING INDEX idx_name (col=?)"
+        if let Some(idx) = extract_index_name(&upper, "INDEX") {
+            stats.index_name = Some(idx);
+        }
+        // "SEARCH t USING COVERING INDEX idx_name (col=?)" (SQLite 3.52+)
         if stats.index_name.is_none() {
-            // "SEARCH TABLE t USING INDEX idx_name (col=?)"
-            if let Some(idx) = extract_index_name(&upper, "INDEX") {
+            if let Some(idx) = extract_index_name(&upper, "COVERING INDEX") {
                 stats.index_name = Some(idx);
             }
-            // "SEARCH t USING COVERING INDEX idx_name (col=?)" (SQLite 3.52+)
-            if stats.index_name.is_none() {
-                if let Some(idx) = extract_index_name(&upper, "COVERING INDEX") {
-                    stats.index_name = Some(idx);
-                }
-            }
-            // "SEARCH TABLE t USING INTEGER PRIMARY KEY (rowid=?)" — rowid lookup
-            if stats.index_name.is_none() && upper.contains("INTEGER PRIMARY KEY") {
-                stats.index_name = Some("__primary_key__".to_string());
-            }
-            // "SEARCH TABLE t USING AUTOMATIC COVERING INDEX"
-            if stats.index_name.is_none() && upper.contains("AUTOMATIC COVERING INDEX") {
-                stats.index_name = Some("__automatic_index__".to_string());
-            }
+        }
+        // "SEARCH TABLE t USING INTEGER PRIMARY KEY (rowid=?)" — rowid lookup
+        if stats.index_name.is_none() && upper.contains("INTEGER PRIMARY KEY") {
+            stats.index_name = Some("__primary_key__".to_string());
+        }
+        // "SEARCH TABLE t USING AUTOMATIC COVERING INDEX"
+        if stats.index_name.is_none() && upper.contains("AUTOMATIC COVERING INDEX") {
+            stats.index_name = Some("__automatic_index__".to_string());
         }
     }
 
@@ -122,9 +118,7 @@ fn extract_index_name(upper: &str, keyword: &str) -> Option<String> {
     let rest = &upper[start + pattern.len()..];
 
     // Index name ends at whitespace or '('
-    let end = rest
-        .find(|c: char| c == ' ' || c == '(')
-        .unwrap_or(rest.len());
+    let end = rest.find([' ', '(']).unwrap_or(rest.len());
     let name = rest[..end].to_string();
     if name.is_empty() {
         None
